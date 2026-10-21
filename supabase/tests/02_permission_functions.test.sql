@@ -169,6 +169,7 @@ set local role authenticated;
 select is(has_company_access('00000000-0000-4000-8000-0000000000d2'), false, 'has_company_access: não membro');
 reset role;
 
+select set_config('request.jwt.claims', '', true);
 update profiles set is_super_admin = true where id = '00000000-0000-4000-8000-0000000000c5';
 
 select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c5'::text, 'role', 'authenticated')::text, true);

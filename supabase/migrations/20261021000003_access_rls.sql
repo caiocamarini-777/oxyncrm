@@ -14,6 +14,9 @@ grant execute on function public.shares_company(uuid) to authenticated;
 -- Defesa em profundidade: anon nunca toca nestas tabelas.
 revoke all on public.companies, public.profiles, public.roles, public.teams,
   public.team_members, public.memberships, public.audit_log from anon;
+-- TRUNCATE ignora RLS e triggers de linha: authenticated nao pode.
+revoke truncate, references, trigger on public.companies, public.profiles, public.roles,
+  public.teams, public.team_members, public.memberships, public.audit_log from authenticated;
 
 -- companies
 create policy companies_select on public.companies for select to authenticated
@@ -109,6 +112,21 @@ end $$;
 create trigger guard_profile_changes before update on public.profiles
   for each row execute function public.guard_profile_changes();
 
+create function public.guard_profile_delete() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if old.is_super_admin and old.active
+     and not exists (
+       select 1 from public.profiles p
+       where p.id <> old.id and p.is_super_admin and p.active) then
+    raise exception 'OXYN_LAST_SUPER_ADMIN';
+  end if;
+  return old;
+end $$;
+
+create trigger guard_profile_delete before delete on public.profiles
+  for each row execute function public.guard_profile_delete();
+
 -- Guarda do papel de sistema
 create function public.guard_system_role() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -144,7 +162,7 @@ begin
   return null;
 end $$;
 
-revoke execute on function public.guard_profile_changes(), public.guard_system_role(),
+revoke execute on function public.guard_profile_changes(), public.guard_profile_delete(), public.guard_system_role(),
   public.audit_row() from public, anon, authenticated;
 
 create trigger audit_row after insert or update or delete on public.companies

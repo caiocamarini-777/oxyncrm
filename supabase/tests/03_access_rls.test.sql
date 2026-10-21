@@ -1,5 +1,5 @@
 begin;
-select plan(27);
+select plan(36);
 
 insert into companies (id, name, slug) values
   ('00000000-0000-4000-8000-0000000000d1', 'Volt Teste', 'tst-volt'),
@@ -99,6 +99,8 @@ select set_config('request.jwt.claims', '', true);
 update profiles set is_super_admin = false where is_super_admin and id <> '00000000-0000-4000-8000-0000000000c1';
 select throws_ok($$ update profiles set active = false where id = '00000000-0000-4000-8000-0000000000c1' $$, 'P0001', 'OXYN_LAST_SUPER_ADMIN', 'ninguém desativa o último super admin (sem auth.uid)');
 select set_config('request.jwt.claims', '', true);
+select throws_ok($$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c1' $$, 'P0001', 'OXYN_LAST_SUPER_ADMIN', 'não exclui o último super admin (cascade)');
+select set_config('request.jwt.claims', '', true);
 select lives_ok($$ update profiles set is_super_admin = true where id = '00000000-0000-4000-8000-0000000000c2' $$, 'service/postgres pode promover (R9)');
 select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c1'::text, 'role', 'authenticated')::text, true);
 set local role authenticated;
@@ -136,6 +138,16 @@ select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-
 set local role authenticated;
 select is((select count(*) from companies where slug like 'tst-%'), 0::bigint, 'inativo lê 0 companies');
 reset role;
+
+select set_config('request.jwt.claims', '', true);
+select lives_ok($$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$, 'exclui usuário comum');
+select ok(not has_table_privilege('authenticated', 'public.companies', 'TRUNCATE'), 'authenticated sem TRUNCATE em companies');
+select ok(not has_table_privilege('authenticated', 'public.profiles', 'TRUNCATE'), 'authenticated sem TRUNCATE em profiles');
+select ok(not has_table_privilege('authenticated', 'public.roles', 'TRUNCATE'), 'authenticated sem TRUNCATE em roles');
+select ok(not has_table_privilege('authenticated', 'public.teams', 'TRUNCATE'), 'authenticated sem TRUNCATE em teams');
+select ok(not has_table_privilege('authenticated', 'public.team_members', 'TRUNCATE'), 'authenticated sem TRUNCATE em team_members');
+select ok(not has_table_privilege('authenticated', 'public.memberships', 'TRUNCATE'), 'authenticated sem TRUNCATE em memberships');
+select ok(not has_table_privilege('authenticated', 'public.audit_log', 'TRUNCATE'), 'authenticated sem TRUNCATE em audit_log');
 
 select * from finish();
 rollback;

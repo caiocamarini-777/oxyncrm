@@ -17,7 +17,7 @@ function loadEnv() {
   }
 }
 
-function admin() {
+export function admin() {
   loadEnv();
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

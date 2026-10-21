@@ -1,29 +1,28 @@
 import { Suspense } from "react";
-import { Button } from "@/components/ui/button";
-import { signOut } from "@/lib/auth/actions";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
+import {
+  LAST_COMPANY_COOKIE,
+  getAccessibleCompanies,
+  pickDefaultCompany,
+} from "@/lib/companies/scope";
 
-async function Content() {
+async function Redirector(): Promise<never> {
   const profile = await requireUser();
-  return (
-    <div className="grid gap-4">
-      <h1 className="font-heading text-2xl font-semibold">Olá, {profile.fullName || profile.email}</h1>
-      <form action={signOut}>
-        <Button type="submit" variant="outline">
-          Sair
-        </Button>
-      </form>
-    </div>
-  );
+  const companies = await getAccessibleCompanies();
+  const last = (await cookies()).get(LAST_COMPANY_COOKIE)?.value;
+  const company = pickDefaultCompany(companies, last);
+  if (!company) {
+    redirect(profile.isSuperAdmin ? "/configuracoes/empresas" : "/sem-acesso");
+  }
+  redirect(`/${company.slug}/inicio`);
 }
 
-// Provisória: a Task 6 troca esta página pelo shell do app.
 export default function Home() {
   return (
-    <main className="flex flex-1 items-center justify-center p-6">
-      <Suspense>
-        <Content />
-      </Suspense>
-    </main>
+    <Suspense>
+      <Redirector />
+    </Suspense>
   );
 }

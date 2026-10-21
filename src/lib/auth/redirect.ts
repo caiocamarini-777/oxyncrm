@@ -5,7 +5,9 @@ export function safeNext(next: string | null | undefined): string {
   try {
     const u = new URL(next, "http://x");
     if (u.origin !== "http://x") return "/";
-    return u.pathname + u.search + u.hash;
+    const out = u.pathname + u.search + u.hash;
+    if (out.startsWith("//") || out.startsWith("/\\")) return "/";
+    return out;
   } catch {
     return "/";
   }

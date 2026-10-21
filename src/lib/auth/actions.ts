@@ -25,12 +25,17 @@ export async function requestPasswordReset(email: string): Promise<void> {
   const clean = email.trim().toLowerCase();
   if (!clean) return;
   const h = await headers();
-  const ip = h.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const ip =
+    h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
+    h.get("x-real-ip")?.trim() ||
+    h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    null;
 
   after(async () => {
     try {
       if (!(await allow(`recovery:email:${clean}`, 3))) return;
-      if (!(await allow(`recovery:ip:${ip}`, 10))) return;
+      // Sem cabeçalho de IP (ex.: dev local) só vale o limite por e-mail.
+      if (ip && !(await allow(`recovery:ip:${ip}`, 10))) return;
       const { link } = await createAuthLink("recovery", clean);
       await sendEmail({ to: clean, ...recoveryEmail({ link }) });
     } catch (err) {

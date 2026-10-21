@@ -22,4 +22,9 @@ describe("safeNext", () => {
   it("preserva query e hash", () => {
     expect(safeNext("/a?b=1#c")).toBe("/a?b=1#c");
   });
+  it("rejeita segmentos de ponto que colapsam em //", () => {
+    for (const n of ["/.//evil.com", "/..//evil.com", "/a/..//evil.com", "/%2e//evil.com"]) {
+      expect(safeNext(n)).toBe("/");
+    }
+  });
 });

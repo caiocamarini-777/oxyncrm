@@ -1,5 +1,5 @@
 begin;
-select plan(24);
+select plan(61);
 
 select has_table('public', t, t || ' existe')
 from unnest(array['organizations','persons','lead_sources','disqualification_reasons','leads',
@@ -60,6 +60,41 @@ select lives_ok($$ insert into organizations (company_id, owner_id, name, cnpj) 
 insert into companies (id, name, slug) values ('00000000-0000-4000-8000-0000000000d3', 'Nova Teste', 'tst-nova');
 select is((select count(*) from lead_sources where company_id = '00000000-0000-4000-8000-0000000000d3'), 6::bigint, 'empresa nova recebe 6 origens');
 select is((select count(*) from disqualification_reasons where company_id = '00000000-0000-4000-8000-0000000000d3'), 6::bigint, 'empresa nova recebe 6 motivos');
+
+select throws_ok($$ insert into persons (company_id, owner_id, full_name, emails) values
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','X','[{"label":"x"}]') $$,
+  '23514', null, 'e-mail sem value é rejeitado');
+select throws_ok($$ insert into persons (company_id, owner_id, full_name, emails) values
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','X','["a@b.c"]') $$,
+  '23514', null, 'e-mail escalar é rejeitado');
+select throws_ok($$ insert into persons (company_id, owner_id, full_name, phones) values
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','X','{}'::jsonb) $$,
+  '23514', null, 'phones não array é rejeitado');
+select throws_ok($$ insert into persons (company_id, owner_id, full_name, emails) values
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','X',null) $$,
+  '23502', null, 'emails NULL viola NOT NULL');
+
+insert into labels (id, company_id, name, color) values
+  ('00000000-0000-4000-8000-000000000b01','00000000-0000-4000-8000-0000000000d1','Quente','red');
+select throws_ok($$ insert into notes (company_id, entity, record_id, body, created_by) values
+  ('00000000-0000-4000-8000-0000000000d1','persons','00000000-0000-4000-8000-000000000a02','oi','00000000-0000-4000-8000-0000000000c1') $$,
+  null, 'OXYN_CROSS_COMPANY', 'nota não aponta para registro de outra empresa');
+select throws_ok($$ insert into record_labels (label_id, entity, record_id) values
+  ('00000000-0000-4000-8000-000000000b01','persons','00000000-0000-4000-8000-000000000a02') $$,
+  null, 'OXYN_CROSS_COMPANY', 'label não é aplicada a registro de outra empresa');
+select lives_ok($$ insert into record_labels (label_id, entity, record_id) values
+  ('00000000-0000-4000-8000-000000000b01','persons','00000000-0000-4000-8000-000000000a01') $$,
+  'label na mesma empresa funciona');
+
+select ok(not has_table_privilege('authenticated', 'public.' || t, 'TRUNCATE'), 'authenticated sem TRUNCATE em ' || t)
+from unnest(array['organizations','persons','lead_sources','disqualification_reasons','leads',
+  'labels','record_labels','custom_field_defs','notes','timeline_events']) t;
+select ok(not has_table_privilege('authenticated', 'public.' || t, 'REFERENCES'), 'authenticated sem REFERENCES em ' || t)
+from unnest(array['organizations','persons','lead_sources','disqualification_reasons','leads',
+  'labels','record_labels','custom_field_defs','notes','timeline_events']) t;
+select ok(not has_table_privilege('authenticated', 'public.' || t, 'TRIGGER'), 'authenticated sem TRIGGER em ' || t)
+from unnest(array['organizations','persons','lead_sources','disqualification_reasons','leads',
+  'labels','record_labels','custom_field_defs','notes','timeline_events']) t;
 
 select * from finish();
 rollback;

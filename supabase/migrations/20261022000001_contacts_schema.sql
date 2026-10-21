@@ -2,6 +2,18 @@
 
 create extension if not exists pg_trgm with schema extensions;
 
+create function public.is_contact_list(p jsonb) returns boolean
+language plpgsql immutable set search_path = public as $$
+begin
+  if p is null or jsonb_typeof(p) <> 'array' then return false; end if;
+  return not exists (
+    select 1 from jsonb_array_elements(p) e
+    where jsonb_typeof(e) <> 'object'
+       or jsonb_typeof(e->'value') is distinct from 'string'
+       or e->>'value' = ''
+       or (e ? 'label' and jsonb_typeof(e->'label') <> 'string'));
+end $$;
+
 create table public.organizations (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references public.companies on delete cascade,
@@ -31,8 +43,8 @@ create table public.persons (
   full_name text not null check (char_length(full_name) between 1 and 200),
   job_title text,
   organization_id uuid references public.organizations on delete set null,
-  emails jsonb not null default '[]' check (jsonb_typeof(emails) = 'array'),
-  phones jsonb not null default '[]' check (jsonb_typeof(phones) = 'array'),
+  emails jsonb not null default '[]' check (public.is_contact_list(emails)),
+  phones jsonb not null default '[]' check (public.is_contact_list(phones)),
   linkedin_url text
 );
 
@@ -165,14 +177,18 @@ create trigger set_updated_at before update on public.notes
 create function public.normalize_person_contacts() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  new.emails = coalesce((
-    select jsonb_agg(jsonb_set(e, '{value}', to_jsonb(lower(regexp_replace(e->>'value', '\s', '', 'g')))) order by o)
-    from jsonb_array_elements(new.emails) with ordinality as t(e, o)
-  ), '[]'::jsonb);
-  new.phones = coalesce((
-    select jsonb_agg(jsonb_set(e, '{value}', to_jsonb(regexp_replace(e->>'value', '\D', '', 'g'))) order by o)
-    from jsonb_array_elements(new.phones) with ordinality as t(e, o)
-  ), '[]'::jsonb);
+  if public.is_contact_list(new.emails) then
+    new.emails = coalesce((
+      select jsonb_agg(jsonb_set(e, '{value}', to_jsonb(lower(regexp_replace(e->>'value', '\s', '', 'g')))) order by o)
+      from jsonb_array_elements(new.emails) with ordinality as t(e, o)
+    ), '[]'::jsonb);
+  end if;
+  if public.is_contact_list(new.phones) then
+    new.phones = coalesce((
+      select jsonb_agg(jsonb_set(e, '{value}', to_jsonb(regexp_replace(e->>'value', '\D', '', 'g'))) order by o)
+      from jsonb_array_elements(new.phones) with ordinality as t(e, o)
+    ), '[]'::jsonb);
+  end if;
   return new;
 end $$;
 
@@ -181,7 +197,7 @@ create trigger normalize_person_contacts before insert or update on public.perso
 
 -- Referências precisam ser da mesma empresa
 create function public.guard_same_company() returns trigger
-language plpgsql set search_path = public as $$
+language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   j jsonb := to_jsonb(new);
   rec_company uuid;
@@ -210,6 +226,9 @@ begin
          is distinct from new.company_id then
       raise exception 'OXYN_CROSS_COMPANY';
     end if;
+  elsif tg_table_name in ('notes','record_labels') and
+        coalesce(j->>'entity', '') not in ('leads','persons','organizations') then
+    return new; -- o CHECK de entity rejeita
   elsif tg_table_name = 'notes' then
     execute format('select company_id from public.%I where id = $1', j->>'entity')
       into rec_company using (j->>'record_id')::uuid;
@@ -280,3 +299,6 @@ alter table public.timeline_events enable row level security;
 revoke all on public.organizations, public.persons, public.lead_sources, public.disqualification_reasons,
   public.leads, public.labels, public.record_labels, public.custom_field_defs, public.notes,
   public.timeline_events from anon;
+revoke truncate, references, trigger on public.organizations, public.persons, public.lead_sources,
+  public.disqualification_reasons, public.leads, public.labels, public.record_labels,
+  public.custom_field_defs, public.notes, public.timeline_events from authenticated;

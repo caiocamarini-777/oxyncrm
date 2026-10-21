@@ -3,6 +3,7 @@
 import { after } from "next/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { validatePassword } from "@/lib/auth/password";
 import { createAuthLink } from "@/lib/auth/links";
 import { recoveryEmail } from "@/lib/email/templates";
 import { sendEmail } from "@/lib/email/send";
@@ -59,8 +60,8 @@ export async function setPassword(
 ): Promise<SetPasswordState> {
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
-  if (password.length < 8) return { error: "A senha precisa ter pelo menos 8 caracteres." };
-  if (password !== confirm) return { error: "As senhas não conferem." };
+  const invalid = validatePassword(password, confirm);
+  if (invalid) return { error: invalid };
   const supabase = await createServerClient();
   const { error } = await supabase.auth.updateUser({ password });
   if (error) return { error: "Não foi possível salvar a senha. Tente novamente." };

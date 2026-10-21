@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RESERVED_SLUGS } from "./constants";
 import { isValidCnpj, onlyDigits } from "./cnpj";
 
 export const SLUG_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -13,7 +14,7 @@ export const companySchema = z.object({
     .string()
     .trim()
     .regex(SLUG_REGEX, "Use apenas letras minúsculas, números e hífen.")
-    .refine((s) => s !== "todas", "Este endereço é reservado."),
+    .refine((s) => !(RESERVED_SLUGS as readonly string[]).includes(s), "Este endereço é reservado."),
   legalName: z
     .string()
     .trim()

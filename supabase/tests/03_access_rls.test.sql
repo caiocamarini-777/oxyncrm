@@ -1,5 +1,5 @@
 begin;
-select plan(36);
+select plan(37);
 
 insert into companies (id, name, slug) values
   ('00000000-0000-4000-8000-0000000000d1', 'Volt Teste', 'tst-volt'),
@@ -102,6 +102,8 @@ select set_config('request.jwt.claims', '', true);
 select throws_ok($$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c1' $$, 'P0001', 'OXYN_LAST_SUPER_ADMIN', 'não exclui o último super admin (cascade)');
 select set_config('request.jwt.claims', '', true);
 select lives_ok($$ update profiles set is_super_admin = true where id = '00000000-0000-4000-8000-0000000000c2' $$, 'service/postgres pode promover (R9)');
+select set_config('request.jwt.claims', '', true);
+select throws_ok($$ update profiles set active = false where is_super_admin and active $$, 'P0001', 'OXYN_LAST_SUPER_ADMIN', 'desativar todos os super admins em um único comando é recusado');
 select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c1'::text, 'role', 'authenticated')::text, true);
 set local role authenticated;
 select throws_ok($$ delete from roles where name = 'Usuário padrão' $$, 'P0001', 'OXYN_SYSTEM_ROLE', 'admin não exclui papel de sistema');

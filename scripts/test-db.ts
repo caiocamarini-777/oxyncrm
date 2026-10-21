@@ -69,6 +69,9 @@ async function main() {
       } catch (err) {
         failed = true;
         console.error(`ERRO em ${file}: ${(err as Error).message}`);
+      } finally {
+        // Um arquivo que falha no meio deixa a transação aberta; limpa antes do próximo.
+        await sql.unsafe("rollback").catch(() => {});
       }
     }
   } finally {

@@ -8,7 +8,7 @@ begin
 end $$;
 
 create or replace function public.is_valid_permissions(p jsonb) returns boolean
-language plpgsql immutable as $$
+language plpgsql immutable set search_path = public as $$
 declare
   k text;
 begin
@@ -45,7 +45,9 @@ create table public.companies (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   slug text unique not null
-    check (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' and slug <> 'todas'),
+    check (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+      and slug not in ('todas','perfil','configuracoes','sem-acesso','entrar',
+                       'recuperar-senha','definir-senha','auth','api')),
   legal_name text,
   cnpj text check (cnpj is null or cnpj ~ '^\d{14}$'),
   logo_url text,
@@ -58,9 +60,12 @@ create table public.companies (
 
 create table public.profiles (
   id uuid primary key references auth.users on delete cascade,
-  full_name text not null default '',
+  full_name text not null default '' check (char_length(full_name) <= 120),
   email text unique not null,
-  avatar_url text,
+  avatar_url text check (
+    avatar_url is null
+    or avatar_url like '%/storage/v1/object/public/avatars/' || id::text || '/%'
+  ),
   is_super_admin boolean not null default false,
   active boolean not null default true,
   created_at timestamptz not null default now(),
@@ -76,6 +81,8 @@ create table public.roles (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create unique index roles_single_system on public.roles (is_system) where is_system;
 
 create table public.teams (
   id uuid primary key default gen_random_uuid(),
@@ -127,6 +134,8 @@ begin
   values (new.id, new.email, coalesce(new.raw_user_meta_data->>'full_name', ''));
   return new;
 end $$;
+
+revoke all on function public.handle_new_user() from public, anon, authenticated;
 
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();

@@ -27,6 +27,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Cadastro aberto desligado no Supabase
+        if: env.NEXT_PUBLIC_SUPABASE_URL != ''
+        run: pnpm check:auth
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

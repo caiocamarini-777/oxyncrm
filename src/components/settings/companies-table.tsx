@@ -130,7 +130,7 @@ export function CompaniesTable({
               Arquivar {archiving?.name}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Ninguém além dos administradores gerais vai conseguir acessar.
+              A empresa some do seletor e ninguém consegue abrir suas páginas. Você pode reativá-la aqui depois.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

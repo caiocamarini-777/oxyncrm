@@ -2,6 +2,7 @@
 // Uso: pnpm bootstrap:admin <email> "<Nome>"
 // Os módulos do app importam "server-only"; o script roda com
 // --conditions=react-server para que esse import resolva para um no-op.
+import { assertSignupDisabled } from "@/lib/auth/settings-check";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAuthLink } from "@/lib/auth/links";
 import { sendEmail } from "@/lib/email/send";
@@ -12,6 +13,7 @@ loadEnv();
 
 const REQUIRED = [
   "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
   "NEXT_PUBLIC_SITE_URL",
 ] as const;
@@ -28,6 +30,10 @@ async function main() {
       process.exit(1);
     }
   }
+  await assertSignupDisabled(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
   const email = rawEmail.trim().toLowerCase();
   const admin = createAdminClient();
 

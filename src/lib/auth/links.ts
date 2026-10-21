@@ -6,6 +6,8 @@ export async function createAuthLink(
   email: string,
   opts?: { fullName?: string },
 ): Promise<{ link: string; userId: string }> {
+  const site = process.env.NEXT_PUBLIC_SITE_URL;
+  if (!site) throw new Error("NEXT_PUBLIC_SITE_URL não configurado");
   const admin = createAdminClient();
   const { data, error } = await admin.auth.admin.generateLink({
     type,
@@ -15,7 +17,6 @@ export async function createAuthLink(
     },
   } as Parameters<typeof admin.auth.admin.generateLink>[0]);
   if (error || !data) throw error ?? new Error("Não foi possível gerar o link.");
-  const site = process.env.NEXT_PUBLIC_SITE_URL!;
   const link = `${site}/auth/confirm?token_hash=${data.properties.hashed_token}&type=${type}&next=/definir-senha`;
   return { link, userId: data.user.id };
 }

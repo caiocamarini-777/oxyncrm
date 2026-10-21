@@ -14,10 +14,17 @@ export async function GET(request: NextRequest) {
     const supabase = await createServerClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error && data.user) {
-      if (isUninvitedGoogleSignup(data.user, new Date())) {
+      if (isUninvitedGoogleSignup(data.user)) {
         // Cadastro aberto não existe: remove a conta criada por este login.
         await supabase.auth.signOut();
-        await createAdminClient().auth.admin.deleteUser(data.user.id);
+        const { error: deleteError } = await createAdminClient().auth.admin.deleteUser(
+          data.user.id,
+        );
+        if (deleteError) {
+          console.error(
+            `Falha ao remover conta Google sem convite (usuário ${data.user.id}): ${deleteError.message}`,
+          );
+        }
         redirect("/entrar?erro=google");
       }
       redirect(next);

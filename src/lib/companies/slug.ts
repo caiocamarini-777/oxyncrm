@@ -1,3 +1,5 @@
+import { RESERVED_SLUGS } from "./constants";
+
 export function slugify(name: string): string {
   const slug = name
     .normalize("NFD")
@@ -5,5 +7,5 @@ export function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return slug === "todas" ? "todas-1" : slug;
+  return (RESERVED_SLUGS as readonly string[]).includes(slug) ? `${slug}-1` : slug;
 }

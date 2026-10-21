@@ -64,6 +64,9 @@ test("arquivar esconde a empresa do seletor", async ({ page }) => {
 
   await page.getByTestId(`company-${archSlug}`).getByRole("button", { name: "Arquivar" }).click();
   await expect(page.getByText(`Arquivar ${name}?`)).toBeVisible();
+  await expect(
+    page.getByText("A empresa some do seletor e ninguém consegue abrir suas páginas. Você pode reativá-la aqui depois."),
+  ).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Arquivar" }).click();
   await expect(page.getByTestId(`company-${archSlug}`).getByText("Arquivada")).toBeVisible();
 

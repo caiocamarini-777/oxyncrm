@@ -14,7 +14,8 @@ export async function updateProfile(input: { fullName: string }): Promise<Action
     return { ok: false, error: "Informe o nome.", fieldErrors: { fullName: "Informe o nome." } };
   }
   if (fullName.length > 120) {
-    return { ok: false, error: "Nome muito longo.", fieldErrors: { fullName: "Nome muito longo." } };
+    const message = "O nome pode ter no máximo 120 caracteres.";
+    return { ok: false, error: message, fieldErrors: { fullName: message } };
   }
   const supabase = await createServerClient();
   const { error } = await supabase.from("profiles").update({ full_name: fullName }).eq("id", user.id);

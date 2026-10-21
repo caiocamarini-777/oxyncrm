@@ -1,5 +1,5 @@
 begin;
-select plan(19);
+select plan(24);
 
 select has_table('public'::name, t::name) from unnest(array['companies','profiles','roles','teams','team_members','memberships','audit_log']) as t;
 
@@ -39,6 +39,23 @@ select throws_ok(
   $$insert into memberships (user_id, company_id, role_id)
     select '00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000a4', id from roles where is_system$$,
   '23505');
+
+select throws_ok(
+  $$insert into companies (id, name, slug) values ('00000000-0000-4000-8000-0000000000a5', 'Perfil', 'perfil')$$,
+  '23514', null, 'slug reservado de rota é recusado');
+select throws_ok(
+  $$insert into roles (name, permissions, is_system)
+    select 'tst-Segundo sistema', permissions, true from roles where is_system$$,
+  '23505', null, 'só pode existir um papel de sistema');
+select throws_ok(
+  $$update profiles set full_name = repeat('x', 121) where id = '00000000-0000-4000-8000-0000000000b1'$$,
+  '23514', null, 'nome acima de 120 caracteres é recusado');
+select throws_ok(
+  $$update profiles set avatar_url = 'https://evil.example/x.png' where id = '00000000-0000-4000-8000-0000000000b1'$$,
+  '23514', null, 'avatar externo é recusado');
+select lives_ok(
+  $$update profiles set avatar_url = 'https://abc.supabase.co/storage/v1/object/public/avatars/00000000-0000-4000-8000-0000000000b1/1.png' where id = '00000000-0000-4000-8000-0000000000b1'$$,
+  'avatar na própria pasta é aceito');
 
 select * from finish();
 rollback;

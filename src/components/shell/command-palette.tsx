@@ -22,7 +22,7 @@ export function CommandPalette({
   isSuperAdmin,
 }: {
   companies: CompanySummary[];
-  scopeSlug: string;
+  scopeSlug: string | null;
   allowAll: boolean;
   isSuperAdmin: boolean;
 }) {
@@ -48,7 +48,9 @@ export function CommandPalette({
   const targets = allowAll
     ? [{ id: "all", name: "Todas as empresas", slug: ALL_COMPANIES_SLUG }, ...companies]
     : companies;
-  const pages = NAV_ITEMS.filter((i) => isNavItemEnabled(i, isSuperAdmin));
+  const pages = NAV_ITEMS.filter(
+    (i) => isNavItemEnabled(i, isSuperAdmin) && (!i.scoped || scopeSlug),
+  );
 
   return (
     <>
@@ -74,7 +76,7 @@ export function CommandPalette({
           </CommandGroup>
           <CommandGroup heading="Ir para">
             {pages.map((i) => (
-              <CommandItem key={i.key} value={`ir ${i.label}`} onSelect={() => go(navHref(i, scopeSlug))}>
+              <CommandItem key={i.key} value={`ir ${i.label}`} onSelect={() => go(navHref(i, scopeSlug ?? ""))}>
                 <i.icon className="size-4" />
                 {i.label}
               </CommandItem>

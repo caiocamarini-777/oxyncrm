@@ -128,6 +128,16 @@ test("admin geral vê Configurações e Todas as empresas", async ({ page }) => 
   await expect(page.getByRole("menuitem", { name: "Todas as empresas" })).toBeVisible();
 });
 
+test("rotas fora de [empresa] também ficam dentro do shell", async ({ page }) => {
+  await login(page, users.admin, password);
+  await expect(page).toHaveURL(/inicio/);
+  await page.goto("/perfil");
+  await expect(page.getByRole("heading", { name: "Perfil" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Principal" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Configurações" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Trocar de empresa" })).toBeVisible();
+});
+
 test("sair pelo menu do usuário", async ({ page }) => {
   await login(page, users.one, password);
   await expect(page).toHaveURL(/inicio/);

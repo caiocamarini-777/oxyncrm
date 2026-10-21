@@ -13,7 +13,7 @@ export function Sidebar({
   scopeSlug,
   isSuperAdmin,
 }: {
-  scopeSlug: string;
+  scopeSlug: string | null;
   isSuperAdmin: boolean;
 }) {
   const pathname = usePathname();
@@ -22,7 +22,7 @@ export function Sidebar({
   return (
     <aside className="sticky top-0 flex h-screen w-16 shrink-0 flex-col items-center gap-2 bg-[var(--color-sidebar)] py-3 text-sidebar-foreground">
       <Link
-        href={`/${scopeSlug}/inicio`}
+        href={scopeSlug ? `/${scopeSlug}/inicio` : "/"}
         aria-label="Início"
         className="mb-3 flex size-10 items-center justify-center"
       >
@@ -31,7 +31,7 @@ export function Sidebar({
       <nav aria-label="Principal" className="flex flex-col items-center gap-1">
         {items.map((item) => {
           const Icon = item.icon;
-          if (!isNavItemEnabled(item, isSuperAdmin)) {
+          if (!isNavItemEnabled(item, isSuperAdmin) || (item.scoped && !scopeSlug)) {
             return (
               <Tooltip key={item.key}>
                 <TooltipTrigger asChild>
@@ -44,11 +44,13 @@ export function Sidebar({
                     <Icon className="size-5" />
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="right">Disponível em breve</TooltipContent>
+                <TooltipContent side="right">
+                  {isNavItemEnabled(item, isSuperAdmin) ? "Selecione uma empresa" : "Disponível em breve"}
+                </TooltipContent>
               </Tooltip>
             );
           }
-          const href = navHref(item, scopeSlug);
+          const href = navHref(item, scopeSlug ?? "");
           const segment = href.split("/").slice(0, item.scoped ? 3 : 2).join("/");
           const active = pathname === href || pathname.startsWith(`${segment}/`) || pathname === segment;
           return (

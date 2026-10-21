@@ -19,13 +19,14 @@ export function CompanySwitcher({
   allowAll,
 }: {
   companies: CompanySummary[];
-  scopeSlug: string;
+  scopeSlug: string | null;
   allowAll: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const label =
-    scopeSlug === ALL_COMPANIES_SLUG
+  const label = !scopeSlug
+    ? "Nenhuma empresa"
+    : scopeSlug === ALL_COMPANIES_SLUG
       ? "Todas as empresas"
       : (companies.find((c) => c.slug === scopeSlug)?.name ?? scopeSlug);
   const go = (slug: string) => router.push(switchCompanyPath(pathname, slug));

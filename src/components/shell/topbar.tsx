@@ -15,7 +15,7 @@ export function Topbar({
 }: {
   profile: MenuProfile;
   companies: CompanySummary[];
-  scopeSlug: string;
+  scopeSlug: string | null;
   allowAll: boolean;
 }) {
   return (

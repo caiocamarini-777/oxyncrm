@@ -50,3 +50,16 @@ export function pickDefaultCompany(
   return companies.find((c) => c.slug === lastSlug) ?? companies[0] ?? null;
 }
 
+
+/** Slug de escopo exibido no shell: o da URL quando válido; senão a empresa padrão; senão null. */
+export function deriveScopeSlug(
+  pathname: string,
+  companies: CompanySummary[],
+  isSuperAdmin: boolean,
+  lastSlug: string | undefined,
+): string | null {
+  const first = pathname.split("/").filter(Boolean)[0] ?? "";
+  const scope = resolveCompanyScope(first, companies, isSuperAdmin);
+  if (scope) return scope.kind === "all" ? ALL_COMPANIES_SLUG : scope.company.slug;
+  return pickDefaultCompany(companies, lastSlug)?.slug ?? null;
+}

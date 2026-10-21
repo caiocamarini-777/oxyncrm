@@ -10,7 +10,11 @@ export type EmailMessage = {
 };
 
 export async function sendEmail(msg: EmailMessage): Promise<void> {
-  const transport = process.env.EMAIL_TRANSPORT || "file";
+  const explicit = process.env.EMAIL_TRANSPORT;
+  if (!explicit && process.env.NODE_ENV === "production") {
+    throw new Error("EMAIL_TRANSPORT não configurado");
+  }
+  const transport = explicit || "file";
   if (transport === "file") {
     const dir = path.join(process.cwd(), ".e2e-outbox");
     await mkdir(dir, { recursive: true });

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCloseAfterSave } from "@/lib/use-close-after-save";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -60,6 +61,7 @@ function InviteForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const markSaved = useCloseAfterSave(pending, close);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -87,8 +89,8 @@ function InviteForm({
       });
       if (result.ok) {
         toast.success("Convite enviado.");
-        close();
         router.refresh();
+        markSaved();
       } else {
         setErrors(result.fieldErrors ?? {});
         if (!result.fieldErrors) setFormError(result.error);

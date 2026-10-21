@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useCloseAfterSave } from "@/lib/use-close-after-save";
 import { createCompany, updateCompany } from "@/lib/companies/actions";
 import { formatCnpj } from "@/lib/companies/cnpj";
 import { slugify } from "@/lib/companies/slug";
@@ -51,6 +52,7 @@ export function CompanyForm({
 function FormBody({ company, close }: { company: CompanyRow | null; close: () => void }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const markSaved = useCloseAfterSave(pending, close);
   const [name, setName] = useState(company?.name ?? "");
   const [slug, setSlug] = useState(company?.slug ?? "");
   const [slugTouched, setSlugTouched] = useState(Boolean(company));
@@ -67,8 +69,8 @@ function FormBody({ company, close }: { company: CompanyRow | null; close: () =>
       const input = { name, slug, legalName, cnpj };
       const result = company ? await updateCompany(company.id, input) : await createCompany(input);
       if (result.ok) {
-        close();
         router.refresh();
+        markSaved();
       } else {
         setErrors(result.fieldErrors ?? {});
         setFormError(result.fieldErrors ? null : result.error);

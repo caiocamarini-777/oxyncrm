@@ -1,10 +1,11 @@
+import { cache } from "react";
 import { createServerClient } from "@/lib/supabase/server";
 import type { CompanySummary } from "./pure";
 
 export * from "./pure";
 
 /** O RLS já limita ao que o usuário enxerga; aqui só tiramos as arquivadas. */
-export async function getAccessibleCompanies(): Promise<CompanySummary[]> {
+export const getAccessibleCompanies = cache(async (): Promise<CompanySummary[]> => {
   const supabase = await createServerClient();
   const { data } = await supabase
     .from("companies")
@@ -17,4 +18,4 @@ export async function getAccessibleCompanies(): Promise<CompanySummary[]> {
     slug: c.slug,
     logoUrl: c.logo_url,
   }));
-}
+});

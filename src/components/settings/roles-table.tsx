@@ -1,5 +1,6 @@
 "use client";
 
+import { useCloseAfterSave } from "@/lib/use-close-after-save";
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -147,6 +148,7 @@ export function RolesTable({ roles }: { roles: RoleListItem[] }) {
 function CreateBody({ close }: { close: () => void }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const markSaved = useCloseAfterSave(pending, close);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -159,8 +161,8 @@ function CreateBody({ close }: { close: () => void }) {
     startTransition(async () => {
       const result = await createRole({ name, description });
       if (result.ok) {
-        close();
         router.push(`/configuracoes/papeis/${result.data.id}`);
+        markSaved();
       } else {
         setErrors(result.fieldErrors ?? {});
         setFormError(result.fieldErrors ? null : result.error);

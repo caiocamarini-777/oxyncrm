@@ -55,7 +55,7 @@ export function ProfileForm({ fullName, email }: { fullName: string; email: stri
           )}
           <div>
             <Button type="submit" disabled={pending}>
-              Salvar dados
+              {pending ? "Salvando..." : "Salvar dados"}
             </Button>
           </div>
         </form>

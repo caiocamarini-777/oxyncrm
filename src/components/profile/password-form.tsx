@@ -73,7 +73,7 @@ export function PasswordForm() {
           )}
           <div>
             <Button type="submit" disabled={pending}>
-              Alterar senha
+              {pending ? "Salvando..." : "Alterar senha"}
             </Button>
           </div>
         </form>

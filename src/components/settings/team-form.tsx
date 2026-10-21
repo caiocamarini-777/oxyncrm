@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useCloseAfterSave } from "@/lib/use-close-after-save";
 import { createTeam, deleteTeam, renameTeam, setTeamMembers } from "@/lib/teams/actions";
 
 export type PersonOption = { id: string; name: string; email: string; avatarUrl: string | null; active: boolean };
@@ -163,6 +164,7 @@ function TeamForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const markSaved = useCloseAfterSave(pending, close);
   const [teamId, setTeamId] = useState<string | null>(team?.id ?? null);
   const [name, setName] = useState(team?.name ?? "");
   const [selected, setSelected] = useState<Set<string>>(
@@ -218,7 +220,7 @@ function TeamForm({
         setFormError(result.error);
         return;
       }
-      close();
+      markSaved();
     });
   }
 

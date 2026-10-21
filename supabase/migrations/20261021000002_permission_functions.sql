@@ -69,12 +69,12 @@ begin
   end if;
   if p_action = 'create' then return true; end if;
   vis := perms->'visibility'->>p_entity;
-  return case vis
+  return coalesce(case vis
     when 'company' then true
     when 'team' then p_owner = me or public.shares_team(p_owner)
     when 'own' then p_owner = me
     else false
-  end;
+  end, false);
 end;
 $$;
 

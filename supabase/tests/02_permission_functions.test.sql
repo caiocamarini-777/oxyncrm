@@ -1,5 +1,5 @@
 begin;
-select plan(19);
+select plan(27);
 
 insert into companies (id, name, slug) values
   ('00000000-0000-4000-8000-0000000000d1', 'Volt Teste', 'tst-volt'),
@@ -127,6 +127,53 @@ update companies set archived_at = null where id = '00000000-0000-4000-8000-0000
 select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c3'::text, 'role', 'authenticated')::text, true);
 set local role authenticated;
 select is(can_access('00000000-0000-4000-8000-0000000000d1', 'invoices', '00000000-0000-4000-8000-0000000000c3', 'read'), false, 'entidade desconhecida (invoices) cai no else');
+reset role;
+
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c3'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(can_access('00000000-0000-4000-8000-0000000000d1', 'deals', null, 'read'), false, 'owner nulo: visibilidade own retorna false (não null)');
+reset role;
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c2'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(can_access('00000000-0000-4000-8000-0000000000d1', 'deals', null, 'read'), false, 'owner nulo: visibilidade team retorna false (não null)');
+reset role;
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c4'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(has_company_access('00000000-0000-4000-8000-0000000000d1'), true, 'has_company_access: membro de empresa ativa');
+reset role;
+
+update companies set archived_at = now() where id = '00000000-0000-4000-8000-0000000000d1';
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c4'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(has_company_access('00000000-0000-4000-8000-0000000000d1'), false, 'has_company_access: membro após arquivar empresa');
+reset role;
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c1'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(has_company_access('00000000-0000-4000-8000-0000000000d1'), true, 'has_company_access: super admin em empresa arquivada');
+reset role;
+
+update companies set archived_at = null where id = '00000000-0000-4000-8000-0000000000d1';
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c5'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(has_company_access('00000000-0000-4000-8000-0000000000d1'), false, 'has_company_access: membro inativo');
+reset role;
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c4'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(has_company_access('00000000-0000-4000-8000-0000000000d2'), false, 'has_company_access: não membro');
+reset role;
+
+update profiles set is_super_admin = true where id = '00000000-0000-4000-8000-0000000000c5';
+
+select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c5'::text, 'role', 'authenticated')::text, true);
+set local role authenticated;
+select is(is_super_admin(), false, 'is_super_admin: super admin inativo');
 reset role;
 
 select * from finish();

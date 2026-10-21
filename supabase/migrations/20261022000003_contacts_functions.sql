@@ -153,26 +153,26 @@ begin
     return;
   end if;
   pat := '%' || replace(replace(replace(btrim(p_query), '\', '\\'), '%', '\%'), '_', '\_') || '%';
-  p_limit := greatest(coalesce(p_limit, 5), 0);
+  p_limit := least(greatest(coalesce(p_limit, 5), 1), 20);
 
   return query
     (select 'organizations'::text, o.id, o.company_id, o.name, coalesce(o.domain, o.cnpj)
      from public.organizations o
      where o.deleted_at is null and (p_company is null or o.company_id = p_company)
-       and (o.name ilike pat escape '\' or o.cnpj ilike pat escape '\' or o.domain ilike pat escape '\')
+       and (lower(o.name) like lower(pat) escape '\' or o.cnpj ilike pat escape '\' or o.domain ilike pat escape '\')
      order by o.name limit p_limit)
     union all
     (select 'persons'::text, p.id, p.company_id, p.full_name, p.emails->0->>'value'
      from public.persons p
      where p.deleted_at is null and (p_company is null or p.company_id = p_company)
-       and (p.full_name ilike pat escape '\'
+       and (lower(p.full_name) like lower(pat) escape '\'
          or exists (select 1 from jsonb_array_elements(p.emails) e where e->>'value' ilike pat escape '\'))
      order by p.full_name limit p_limit)
     union all
     (select 'leads'::text, l.id, l.company_id, l.title, l.status
      from public.leads l
      where l.deleted_at is null and (p_company is null or l.company_id = p_company)
-       and l.title ilike pat escape '\'
+       and lower(l.title) like lower(pat) escape '\'
      order by l.title limit p_limit);
 end $$;
 revoke execute on function public.global_search(text, uuid, int) from public, anon;

@@ -101,8 +101,8 @@ select results_eq($$ select id from leads where company_id in ('00000000-0000-40
 -- notas e timeline
 select results_eq($$ select id from notes where company_id = '00000000-0000-4000-8000-0000000000d1' $$,
   $$ values ('00000000-0000-4000-8000-000000000e01'::uuid) $$, 'bruno lê só notas de registros que lê');
-select results_eq($$ select distinct record_id from timeline_events where company_id = '00000000-0000-4000-8000-0000000000d1' and entity = 'organizations' $$,
-  $$ values ('00000000-0000-4000-8000-000000000b01'::uuid) $$, 'bruno lê só timeline de registros que lê');
+select results_eq($$ select distinct record_id from timeline_events where company_id = '00000000-0000-4000-8000-0000000000d1' order by 1 $$,
+  $$ values ('00000000-0000-4000-8000-000000000a01'::uuid), ('00000000-0000-4000-8000-000000000b01'::uuid), ('00000000-0000-4000-8000-000000000c01'::uuid) $$, 'bruno lê só timeline de registros que lê');
 select throws_ok($$ insert into notes (company_id, entity, record_id, body, created_by) values
   ('00000000-0000-4000-8000-0000000000d1','organizations','00000000-0000-4000-8000-000000000b01','x','00000000-0000-4000-8000-0000000000c2') $$,
   '42501', null, 'bruno não cria nota em nome de outro');

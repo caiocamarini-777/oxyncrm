@@ -1,5 +1,5 @@
 begin;
-select plan(35);
+select plan(41);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -84,6 +84,8 @@ select results_eq($$ select matched_on, record_id from check_duplicates('0000000
   $$ values ('email'::text, '00000000-0000-4000-8000-000000000a02'::uuid) $$, 'bruno vê record_id do que pode ler');
 select is((select count(*) from check_duplicates('00000000-0000-4000-8000-0000000000d2', 'persons', array['dani@volt.com'])), 0::bigint, 'bruno sem acesso à empresa: zero linhas');
 select throws_ok($$ select * from check_duplicates('00000000-0000-4000-8000-0000000000d1', 'deals', array['a@b.com']) $$, null, null, 'entidade inválida falha');
+select results_eq($$ select matched_on, record_id from check_duplicates('00000000-0000-4000-8000-0000000000d1', 'organizations', '{}', '{}', '11222333000181') $$,
+  $$ values ('cnpj'::text, null::uuid) $$, 'organização sem permissão de leitura: record_id nulo');
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
 select results_eq($$ select record_id from check_duplicates('00000000-0000-4000-8000-0000000000d1', 'persons', array['ana@volt.com']) $$,
   $$ values ('00000000-0000-4000-8000-000000000a01'::uuid) $$, 'caio (empresa toda) recebe record_id');
@@ -152,8 +154,19 @@ select pg_temp.as_pg();
 insert into persons (id, company_id, owner_id, full_name, deleted_at) values
   ('00000000-0000-4000-8000-000000000a21', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'Velha', now() - interval '31 days'),
   ('00000000-0000-4000-8000-000000000a22', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'Recente', now() - interval '29 days');
+insert into leads (id, company_id, owner_id, title, deleted_at) values
+  ('00000000-0000-4000-8000-000000000c31', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'Lead velho', now() - interval '31 days');
+insert into organizations (id, company_id, owner_id, name, deleted_at) values
+  ('00000000-0000-4000-8000-000000000b31', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'Org velha', now() - interval '31 days');
+insert into notes (company_id, entity, record_id, body, created_by) values ('00000000-0000-4000-8000-0000000000d1', 'leads', '00000000-0000-4000-8000-000000000c31', 'n', '00000000-0000-4000-8000-0000000000c2');
+insert into record_labels (label_id, entity, record_id) values ('00000000-0000-4000-8000-000000000d01', 'leads', '00000000-0000-4000-8000-000000000c31');
 select ok(purge_trash() >= 1, 'purge_trash devolve contagem');
 select is((select count(*) from persons where id = '00000000-0000-4000-8000-000000000a21'), 0::bigint, 'registro de 31 dias apagado');
+select is((select count(*) from leads where id = '00000000-0000-4000-8000-000000000c31'), 0::bigint, 'lead antigo apagado');
+select is((select count(*) from organizations where id = '00000000-0000-4000-8000-000000000b31'), 0::bigint, 'organização antiga apagada');
+select is((select count(*) from record_labels where record_id = '00000000-0000-4000-8000-000000000c31'), 0::bigint, 'purge remove etiquetas do registro');
+select is((select count(*) from notes where record_id = '00000000-0000-4000-8000-000000000c31'), 0::bigint, 'purge remove notas do registro');
+select is((select count(*) from timeline_events where record_id in ('00000000-0000-4000-8000-000000000c31','00000000-0000-4000-8000-000000000b31')), 0::bigint, 'purge remove timeline do registro');
 select is((select count(*) from persons where id = '00000000-0000-4000-8000-000000000a22'), 1::bigint, 'registro de 29 dias mantido');
 select ok(not has_function_privilege('service_role', 'public.purge_trash()', 'execute'), 'service_role sem execute');
 select is((select count(*) from cron.job where jobname = 'oxyn-purge-trash'), 1::bigint, 'job agendado');

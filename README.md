@@ -88,3 +88,5 @@ pnpm bootstrap:admin caiocamarini@gmail.com "Caio Camarini"
 ```
 
 O comando convida o e-mail e marca o usuário como admin geral. Se o usuário já existir, apenas o marca como admin geral. Abra o convite recebido, crie a senha e entre.
+
+Se o envio do e-mail falhar, o usuário já foi criado e marcado como admin geral: corrija a configuração e rode o comando de novo. Enquanto o usuário não tiver confirmado o acesso, cada nova execução reenvia o convite ("Convite reenviado."). Em desenvolvimento, com `EMAIL_TRANSPORT` vazio, o link vai para `.e2e-outbox/emails.jsonl`.

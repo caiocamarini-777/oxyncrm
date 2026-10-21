@@ -38,26 +38,54 @@ async function main() {
     .maybeSingle();
   if (lookupError) throw lookupError;
 
+  const name = fullName.trim();
+  const markAdmin = async (id: string) => {
+    const { error } = await admin
+      .from("profiles")
+      .update({ is_super_admin: true })
+      .eq("id", id);
+    if (error) throw error;
+  };
+
   let userId = existing?.id as string | undefined;
-  const existed = Boolean(userId);
+  let outcome: string;
 
   if (!userId) {
     const { link, userId: createdId } = await createAuthLink("invite", email, {
-      fullName: fullName.trim(),
+      fullName: name,
     });
     userId = createdId;
-    await sendEmail({ to: email, ...inviteEmail({ fullName: fullName.trim(), link }) });
+    await markAdmin(userId);
+    try {
+      await sendEmail({ to: email, ...inviteEmail({ fullName: name, link }) });
+    } catch (err) {
+      console.error(
+        `O usuário foi criado, mas o e-mail não foi enviado (${(err as Error).message}). Rode o comando novamente para reenviar o convite.`,
+      );
+      process.exit(1);
+    }
+    outcome = "Convite enviado.";
+  } else {
+    await markAdmin(userId);
+    const { data: u, error: userError } = await admin.auth.admin.getUserById(userId);
+    if (userError) throw userError;
+    if (u.user?.email_confirmed_at) {
+      outcome = "Usuário já existia.";
+    } else {
+      const { link } = await createAuthLink("recovery", email);
+      try {
+        await sendEmail({ to: email, ...inviteEmail({ fullName: name, link }) });
+      } catch (err) {
+        console.error(
+          `O e-mail não foi enviado (${(err as Error).message}). Rode o comando novamente para reenviar o convite.`,
+        );
+        process.exit(1);
+      }
+      outcome = "Convite reenviado.";
+    }
   }
 
-  const { error } = await admin
-    .from("profiles")
-    .update({ is_super_admin: true })
-    .eq("id", userId);
-  if (error) throw error;
-
-  console.log(
-    `Admin geral pronto: ${email}. ${existed ? "Usuário já existia." : "Convite enviado."}`,
-  );
+  console.log(`Admin geral pronto: ${email}. ${outcome}`);
 }
 
 main().catch((err) => {

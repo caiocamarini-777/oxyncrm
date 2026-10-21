@@ -1,5 +1,5 @@
 begin;
-select plan(61);
+select plan(80);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -37,14 +37,20 @@ insert into roles (id, name, description, permissions) values
   ('00000000-0000-4000-8000-0000000000e1', 'tst-Equipe', 'teste', '{"visibility":{"leads":"team","deals":"team","persons":"team","organizations":"team","activities":"team"},"actions":{"create":true,"edit":true,"delete":false,"export":false,"reassign_owner":false},"settings":{"manage_pipelines":false,"manage_custom_fields":false,"manage_products":false,"view_reports":true,"create_dashboards":true,"share_dashboards":false}}'::jsonb),
   ('00000000-0000-4000-8000-0000000000e3', 'tst-Gestor', 'teste', '{"visibility":{"leads":"company","deals":"company","persons":"company","organizations":"company","activities":"company"},"actions":{"create":true,"edit":true,"delete":true,"export":true,"reassign_owner":true},"settings":{"manage_pipelines":true,"manage_custom_fields":true,"manage_products":true,"view_reports":true,"create_dashboards":true,"share_dashboards":true}}'::jsonb);
 
+insert into auth.users (id, instance_id, aud, role, email, raw_user_meta_data) values
+  ('00000000-0000-4000-8000-0000000000c6', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-eva@oxyn.test', '{"full_name":"eva"}');
+insert into roles (id, name, description, permissions) values
+  ('00000000-0000-4000-8000-0000000000e4', 'tst-EquipeReassign', 'teste', '{"visibility":{"leads":"team","deals":"team","persons":"team","organizations":"team","activities":"team"},"actions":{"create":true,"edit":true,"delete":false,"export":false,"reassign_owner":true},"settings":{"manage_pipelines":false,"manage_custom_fields":false,"manage_products":false,"view_reports":true,"create_dashboards":true,"share_dashboards":false}}'::jsonb);
 insert into teams (id, name) values ('00000000-0000-4000-8000-0000000000f1', 'tst-SDR');
 insert into team_members (team_id, user_id) values
   ('00000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-0000000000c2'),
-  ('00000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-0000000000c3');
+  ('00000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-0000000000c3'),
+  ('00000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-0000000000c6');
 
 insert into memberships (user_id, company_id, role_id) values
   ('00000000-0000-4000-8000-0000000000c2', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000e1'),
   ('00000000-0000-4000-8000-0000000000c4', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000e3'),
+  ('00000000-0000-4000-8000-0000000000c6', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000e4'),
   ('00000000-0000-4000-8000-0000000000c5', '00000000-0000-4000-8000-0000000000d2', '00000000-0000-4000-8000-0000000000e3');
 insert into memberships (user_id, company_id, role_id)
   select '00000000-0000-4000-8000-0000000000c3', '00000000-0000-4000-8000-0000000000d1', id from roles where is_system;
@@ -75,7 +81,8 @@ insert into custom_field_defs (company_id, entity, key, label, type, options) va
   ('00000000-0000-4000-8000-0000000000d1', 'organizations', 'obs', 'Obs', 'text', '[]');
 
 insert into labels (id, company_id, name, color) values
-  ('00000000-0000-4000-8000-000000000d01', '00000000-0000-4000-8000-0000000000d1', 'tst-Quente', 'red');
+  ('00000000-0000-4000-8000-000000000d01', '00000000-0000-4000-8000-0000000000d1', 'tst-Quente', 'red'),
+  ('00000000-0000-4000-8000-000000000d02', '00000000-0000-4000-8000-0000000000d1', 'tst-Frio', 'blue');
 insert into notes (id, company_id, entity, record_id, body, created_by) values
   ('00000000-0000-4000-8000-000000000e01', '00000000-0000-4000-8000-0000000000d1', 'organizations', '00000000-0000-4000-8000-000000000b01', 'Nota bruno', '00000000-0000-4000-8000-0000000000c1'),
   ('00000000-0000-4000-8000-000000000e02', '00000000-0000-4000-8000-0000000000d1', 'organizations', '00000000-0000-4000-8000-000000000b02', 'Nota ana', '00000000-0000-4000-8000-0000000000c1');
@@ -117,7 +124,22 @@ select lives_ok($$ insert into record_labels (label_id, entity, record_id) value
 select throws_ok($$ insert into record_labels (label_id, entity, record_id) values
   ('00000000-0000-4000-8000-000000000d01','organizations','00000000-0000-4000-8000-000000000b02') $$,
   '42501', null, 'bruno não etiqueta registro que não edita');
-select is((select count(*) from record_labels), 1::bigint, 'bruno lê etiquetas de registros que lê');
+select is((select count(*) from record_labels where label_id in ('00000000-0000-4000-8000-000000000d01','00000000-0000-4000-8000-000000000d02')), 1::bigint, 'bruno lê etiquetas de registros que lê');
+select throws_ok($$ select * from record_ref('organizations', '00000000-0000-4000-8000-000000000b01') $$,
+  '42501', null, 'authenticated não executa record_ref');
+select is(owner_has_membership('00000000-0000-4000-8000-0000000000d2', '00000000-0000-4000-8000-0000000000c5'), false,
+  'bruno não sonda membership de outra empresa');
+select throws_ok($$ select validate_custom_fields('00000000-0000-4000-8000-0000000000d2', 'organizations', '{}') $$,
+  '42501', null, 'bruno não valida campos de outra empresa');
+select throws_ok($$ insert into leads (company_id, owner_id, title, deleted_at) values
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c3','Já na lixeira', now()) $$,
+  '42501', null, 'insert não cria registro já na lixeira');
+select throws_ok($$ insert into leads (company_id, owner_id, title, created_by) values
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c3','Autor falso','00000000-0000-4000-8000-0000000000c2') $$,
+  '42501', null, 'insert não aceita created_by de outro');
+select throws_ok($$ insert into record_labels (label_id, entity, record_id, created_by) values
+  ('00000000-0000-4000-8000-000000000d02','organizations','00000000-0000-4000-8000-000000000b01','00000000-0000-4000-8000-0000000000c2') $$,
+  '42501', null, 'record_labels não aceita created_by de outro');
 -- criação
 select lives_ok($$ insert into leads (id, company_id, owner_id, title) values
   ('00000000-0000-4000-8000-000000000c05','00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c3','Novo do bruno') $$,
@@ -148,6 +170,12 @@ select throws_ok($$ update leads set owner_id = '00000000-0000-4000-8000-0000000
 select is(pg_temp.affected($q$delete from leads where id = '00000000-0000-4000-8000-000000000c02'$q$),
   0::bigint, 'ana não exclui definitivamente');
 
+select results_eq($$ select id from persons where company_id = '00000000-0000-4000-8000-0000000000d1' order by full_name $$,
+  $$ values ('00000000-0000-4000-8000-000000000a02'::uuid), ('00000000-0000-4000-8000-000000000a01'::uuid) $$,
+  'ana vê pessoas dela e de bruno');
+select is(pg_temp.affected($q$update notes set body = 'invadida' where body = 'minha nota'$q$), 0::bigint,
+  'ana não edita nota de outro');
+
 -- caio (company, gestor)
 select pg_temp.as_pg();
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
@@ -157,6 +185,13 @@ select is((select count(*) from leads where company_id = '00000000-0000-4000-800
   + (select count(*) from persons where company_id = '00000000-0000-4000-8000-0000000000d2')
   + (select count(*) from organizations where company_id = '00000000-0000-4000-8000-0000000000d2'),
   0::bigint, 'caio não vê nada de tst-naia');
+select results_eq($$ select id from persons where company_id = '00000000-0000-4000-8000-0000000000d1' order by full_name $$,
+  $$ values ('00000000-0000-4000-8000-000000000a02'::uuid), ('00000000-0000-4000-8000-000000000a01'::uuid), ('00000000-0000-4000-8000-000000000a03'::uuid) $$,
+  'caio vê todas as pessoas de tst-volt');
+select is((select count(*) from organizations where id in ('00000000-0000-4000-8000-000000000b01','00000000-0000-4000-8000-000000000b02','00000000-0000-4000-8000-000000000b03')),
+  3::bigint, 'caio vê todas as organizações de tst-volt');
+select is(pg_temp.affected($q$update organizations set name = 'Invadida' where id = '00000000-0000-4000-8000-000000000b04'$q$), 0::bigint,
+  'update em outra empresa afeta 0 linhas');
 select lives_ok($$ insert into leads (id, company_id, owner_id, title) values
   ('00000000-0000-4000-8000-000000000c06','00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c2','Lead do caio para ana') $$,
   'caio cria lead para ana');
@@ -212,6 +247,38 @@ select is((select count(*) from leads where id = '00000000-0000-4000-8000-000000
 select pg_temp.as_pg();
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c2');
 select is((select count(*) from leads where id = '00000000-0000-4000-8000-000000000c02'), 0::bigint, 'lead na lixeira some para ana');
+-- caio restaura da lixeira
+select pg_temp.as_pg();
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
+select lives_ok($$ update leads set deleted_at = null where id = '00000000-0000-4000-8000-000000000c02' $$, 'caio restaura lead da lixeira');
+select pg_temp.as_pg();
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c2');
+select is((select count(*) from leads where id = '00000000-0000-4000-8000-000000000c02'), 1::bigint, 'lead restaurado volta para ana');
+-- reassign_record
+select pg_temp.as_pg();
+insert into leads (id, company_id, owner_id, title) values
+  ('00000000-0000-4000-8000-000000000c07', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c6', 'Lead Eva');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c6');
+select lives_ok($$ select reassign_record('leads', '00000000-0000-4000-8000-000000000c07', '00000000-0000-4000-8000-0000000000c4') $$,
+  'equipe com reassign reatribui para fora da equipe');
+select throws_ok($$ select reassign_record('leads', '00000000-0000-4000-8000-000000000c06', '00000000-0000-4000-8000-0000000000c5') $$,
+  'P0001', 'OXYN_OWNER_NOT_MEMBER', 'eva não reatribui para quem não é da empresa');
+select pg_temp.as_pg();
+select is((select owner_id from leads where id = '00000000-0000-4000-8000-000000000c07'), '00000000-0000-4000-8000-0000000000c4'::uuid,
+  'dono do lead mudou para caio');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c2');
+select throws_ok($$ select reassign_record('leads', '00000000-0000-4000-8000-000000000c06', '00000000-0000-4000-8000-0000000000c3') $$,
+  'P0001', 'OXYN_REASSIGN_FORBIDDEN', 'ana sem reassign_owner não usa reassign_record');
+select pg_temp.as_pg();
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
+select throws_ok($$ select reassign_record('leads', '00000000-0000-4000-8000-000000000c06', '00000000-0000-4000-8000-0000000000c5') $$,
+  'P0001', 'OXYN_OWNER_NOT_MEMBER', 'reassign_record exige membership do novo dono');
+
+-- nota: criador apaga logicamente a própria nota
+select pg_temp.as_pg();
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c3');
+select lives_ok($$ update notes set deleted_at = now() where body = 'minha nota' $$, 'criador apaga logicamente a própria nota');
+
 select pg_temp.as_pg();
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');
 select is(pg_temp.affected($q$delete from leads where id = '00000000-0000-4000-8000-000000000c03'$q$),

@@ -28,7 +28,7 @@ $$;
 
 create function public.owner_has_membership(p_company uuid, p_owner uuid) returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
-  select exists (
+  select (auth.uid() is null or public.has_company_access(p_company)) and exists (
     select 1 from public.profiles p
     where p.id = p_owner and p.active
       and (p.is_super_admin
@@ -60,6 +60,9 @@ declare
   ok boolean;
   e jsonb;
 begin
+  if auth.uid() is not null and not public.has_company_access(p_company) then
+    raise exception 'insufficient_privilege' using errcode = '42501';
+  end if;
   if p_values is null or jsonb_typeof(p_values) <> 'object' then
     raise exception 'OXYN_INVALID_CUSTOM_FIELD' using detail = '';
   end if;
@@ -105,6 +108,26 @@ begin
     end if;
   end loop;
 end $$;
+
+create function public.reassign_record(p_entity text, p_id uuid, p_owner uuid) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  r record;
+begin
+  select * into r from public.record_ref(p_entity, p_id);
+  if not found or r.deleted_at is not null
+     or not public.can_access(r.company_id, p_entity, r.owner_id, 'edit')
+     or not public.has_company_action(r.company_id, 'reassign_owner') then
+    raise exception 'OXYN_REASSIGN_FORBIDDEN';
+  end if;
+  if not public.owner_has_membership(r.company_id, p_owner) then
+    raise exception 'OXYN_OWNER_NOT_MEMBER';
+  end if;
+  execute format('update public.%I set owner_id = $1 where id = $2', p_entity) using p_owner, p_id;
+end $$;
+
+revoke execute on function public.reassign_record(text, uuid, uuid) from public, anon;
+grant execute on function public.reassign_record(text, uuid, uuid) to authenticated;
 
 -- Triggers -----------------------------------------------------------------
 
@@ -172,13 +195,14 @@ create trigger guard_company_immutable before update on public.notes
 
 -- Execute ------------------------------------------------------------------
 
+revoke execute on function public.record_ref(text, uuid) from authenticated;
 revoke execute on function
   public.record_ref(text, uuid), public.can_read_record(text, uuid), public.can_edit_record(text, uuid),
   public.owner_has_membership(uuid, uuid), public.can_manage_company_lists(uuid),
   public.has_company_action(uuid, text), public.validate_custom_fields(uuid, text, jsonb)
   from public, anon;
 grant execute on function
-  public.record_ref(text, uuid), public.can_read_record(text, uuid), public.can_edit_record(text, uuid),
+  public.can_read_record(text, uuid), public.can_edit_record(text, uuid),
   public.owner_has_membership(uuid, uuid), public.can_manage_company_lists(uuid),
   public.has_company_action(uuid, text), public.validate_custom_fields(uuid, text, jsonb)
   to authenticated;
@@ -198,7 +222,9 @@ begin
         or (deleted_at is not null and public.can_access(company_id, %1$L, owner_id, 'delete')))$f$, t);
     execute format($f$
       create policy %1$s_insert on public.%1$s for insert to authenticated with check (
-        public.can_access(company_id, %1$L, owner_id, 'create')
+        deleted_at is null
+        and created_by = auth.uid()
+        and public.can_access(company_id, %1$L, owner_id, 'create')
         and public.owner_has_membership(company_id, owner_id)
         and (owner_id = auth.uid() or public.can_access(company_id, %1$L, owner_id, 'reassign_owner')))$f$, t);
     execute format($f$
@@ -232,12 +258,13 @@ end $$;
 create policy record_labels_select on public.record_labels for select to authenticated
   using (public.can_read_record(entity, record_id));
 create policy record_labels_insert on public.record_labels for insert to authenticated
-  with check (public.can_edit_record(entity, record_id));
+  with check (public.can_edit_record(entity, record_id) and created_by = auth.uid());
 create policy record_labels_delete on public.record_labels for delete to authenticated
   using (public.can_edit_record(entity, record_id));
 
 create policy notes_select on public.notes for select to authenticated
-  using (deleted_at is null and public.can_read_record(entity, record_id));
+  using ((deleted_at is null or created_by = auth.uid() or public.is_super_admin())
+    and public.can_read_record(entity, record_id));
 create policy notes_insert on public.notes for insert to authenticated
   with check (public.can_read_record(entity, record_id) and created_by = auth.uid());
 create policy notes_update on public.notes for update to authenticated

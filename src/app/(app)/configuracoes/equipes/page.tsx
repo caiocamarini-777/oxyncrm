@@ -12,8 +12,7 @@ export default async function TeamsSettingsPage() {
     supabase.from("team_members").select("team_id, user_id"),
     supabase
       .from("profiles")
-      .select("id, full_name, email, avatar_url")
-      .eq("active", true)
+      .select("id, full_name, email, avatar_url, active")
       .order("full_name"),
   ]);
   const people: PersonOption[] = (profiles ?? []).map((p) => ({
@@ -21,6 +20,7 @@ export default async function TeamsSettingsPage() {
     name: p.full_name,
     email: p.email,
     avatarUrl: p.avatar_url,
+    active: p.active,
   }));
   const byId = new Map(people.map((p) => [p.id, p]));
   const items: TeamItem[] = (teams ?? []).map((t) => ({

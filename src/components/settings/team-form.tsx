@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createTeam, deleteTeam, renameTeam, setTeamMembers } from "@/lib/teams/actions";
 
-export type PersonOption = { id: string; name: string; email: string; avatarUrl: string | null };
+export type PersonOption = { id: string; name: string; email: string; avatarUrl: string | null; active: boolean };
 export type TeamItem = { id: string; name: string; members: PersonOption[] };
 
 const MAX_AVATARS = 5;
@@ -173,11 +173,14 @@ function TeamForm({
   const [formError, setFormError] = useState<string | null>(null);
 
   const q = query.trim().toLowerCase();
+  const memberIds = new Set(team?.members.map((m) => m.id) ?? []);
+  const pool = people.filter((p) => p.active || memberIds.has(p.id));
   const visible = q
-    ? people.filter((p) => p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q))
-    : people;
+    ? pool.filter((p) => p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q))
+    : pool;
 
   function toggle(id: string, checked: boolean) {
+    if (!people.find((p) => p.id === id)?.active) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (checked) next.add(id);
@@ -258,11 +261,15 @@ function TeamForm({
                     type="checkbox"
                     className="size-4 accent-[var(--color-brand)]"
                     checked={selected.has(p.id)}
+                    disabled={!p.active}
                     onChange={(e) => toggle(p.id, e.target.checked)}
                     aria-label={`${p.name || p.email} ${p.email}`}
                   />
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium">{p.name || p.email}</span>
+                    <span className="truncate font-medium">
+                      {p.name || p.email}
+                      {p.active ? "" : " (inativo)"}
+                    </span>
                     <span className="truncate text-xs text-muted-foreground">{p.email}</span>
                   </span>
                 </label>

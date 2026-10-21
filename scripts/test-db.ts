@@ -35,6 +35,8 @@ async function main() {
           Array.isArray(results) && Array.isArray(results[0])
             ? results
             : [results as never];
+        let plan: number | null = null;
+        let count = 0;
         for (const set of sets) {
           for (const row of set as Array<Record<string, unknown>>) {
             for (const value of Object.values(row)) {
@@ -42,6 +44,9 @@ async function main() {
               for (const line of value.split("\n")) {
                 if (!/^(ok|not ok|1\.\.|#)/.test(line)) continue;
                 console.log(line);
+                const planMatch = /^1\.\.(\d+)/.exec(line);
+                if (planMatch) plan = Number(planMatch[1]);
+                if (/^(ok|not ok)\b/.test(line)) count++;
                 if (
                   /^not ok/.test(line) ||
                   /^# Looks like you (planned|failed)/.test(line)
@@ -51,6 +56,15 @@ async function main() {
               }
             }
           }
+        }
+        if (plan === null) {
+          failed = true;
+          console.error(`ERRO em ${file}: sem linha de plano (1..N)`);
+        } else if (count === 0 || count !== plan) {
+          failed = true;
+          console.error(
+            `ERRO em ${file}: plano ${plan}, resultados ${count}`,
+          );
         }
       } catch (err) {
         failed = true;

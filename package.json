@@ -12,7 +12,8 @@
     "test:db": "tsx scripts/test-db.ts",
     "test:e2e": "playwright test --pass-with-no-tests",
     "db:migrate": "tsx scripts/db-migrate.ts",
-    "db:seed": "tsx scripts/seed-dev.ts"
+    "db:seed": "tsx scripts/seed-dev.ts",
+    "bootstrap:admin": "tsx --conditions=react-server scripts/bootstrap-admin.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^6.0.0",

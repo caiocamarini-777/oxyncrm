@@ -34,7 +34,12 @@ export type AssignableOwner = {
 };
 
 export const ENTITY_PATHS: Record<RecordEntity, string> = {
-  organizations: "organizacoes",
-  persons: "pessoas",
+  organizations: "contatos/organizacoes",
+  persons: "contatos/pessoas",
   leads: "leads",
 };
+
+/** Rota do detalhe: sempre usa o slug da empresa do próprio registro. */
+export function recordHref(entity: RecordEntity, companySlug: string, id: string): string {
+  return `/${companySlug}/${ENTITY_PATHS[entity]}/${id}`;
+}

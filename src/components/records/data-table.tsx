@@ -52,6 +52,7 @@ export function DataTable<T extends { id: string }>({
   query,
   entity,
   companyColumn = false,
+  rowHref,
   createHref,
   createLabel = "Criar",
 }: {
@@ -62,6 +63,8 @@ export function DataTable<T extends { id: string }>({
   entity: RecordEntity;
   /** true na visão "Todas": mostra a coluna de empresa. */
   companyColumn?: boolean;
+  /** Destino do detalhe de cada linha (use recordHref com o slug da empresa do registro). */
+  rowHref: (row: T) => string;
   createHref?: string;
   createLabel?: string;
 }) {
@@ -201,9 +204,14 @@ export function DataTable<T extends { id: string }>({
                 key={row.id}
                 className="cursor-pointer"
                 tabIndex={0}
-                onClick={() => router.push(`${pathname}/${row.original.id}`)}
+                onClick={(e) => {
+                  if ((e.target as HTMLElement).closest("a, button, input, [role=checkbox]")) return;
+                  router.push(rowHref(row.original));
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") router.push(`${pathname}/${row.original.id}`);
+                  if (e.key !== "Enter") return;
+                  if ((e.target as HTMLElement).closest("a, button, input, [role=checkbox]")) return;
+                  router.push(rowHref(row.original));
                 }}
               >
                 {row.getAllCells().map((cell) => (

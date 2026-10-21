@@ -18,4 +18,11 @@ describe("toCsv", () => {
     const out = toCsv([{ key: "a", header: "A" }, { key: "b", header: "B" }], [{ a: null, b: "x\ny" }]);
     expect(out).toContain('\r\n;"x\ny"');
   });
+  it.each(["=1+1", "+x", "-x", "@x"])("prefixa apóstrofo em %s", (v) => {
+    const out = toCsv([{ key: "a", header: "A" }], [{ a: v }]);
+    expect(out).toContain(`\r\n'${v}`);
+  });
+  it("número negativo fica como está", () => {
+    expect(toCsv([{ key: "a", header: "A" }], [{ a: -5 }])).toContain("\r\n-5");
+  });
 });

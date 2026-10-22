@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -103,12 +103,12 @@ function NoteCard({ item }: { item: TimelineItem }) {
   );
 }
 
-export function Timeline({ items }: { items: TimelineItem[] }) {
+export function Timeline({ items, planned }: { items: TimelineItem[]; planned?: ReactNode }) {
   return (
     <div className="flex flex-col gap-4">
       <section aria-label="Planejado">
         <h3 className="mb-1 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">Planejado</h3>
-        <p className="text-sm text-muted-foreground">As atividades chegam na próxima fase.</p>
+        {planned ?? <p className="text-sm text-muted-foreground">Nenhuma atividade planejada.</p>}
       </section>
       <section aria-label="Histórico">
         <h3 className="mb-2 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">Histórico</h3>

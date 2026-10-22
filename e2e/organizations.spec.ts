@@ -142,7 +142,7 @@ test("cria organização, aparece na lista e abre o detalhe", async ({ browser }
   await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
   await expect(page.getByLabel("Domínio")).toHaveValue(`volt${stamp}.com.br`);
   await expect(page.getByRole("tab", { name: "Anotação" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Atividade" })).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByRole("tab", { name: "Atividade" })).toHaveAttribute("aria-selected", "false");
   await expect(page.getByRole("tab", { name: "E-mail" })).toHaveAttribute("aria-disabled", "true");
   await page.context().close();
 });

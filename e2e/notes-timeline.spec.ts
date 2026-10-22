@@ -93,7 +93,7 @@ test("anotação aparece na linha do tempo e só o autor edita", async ({ browse
   await expect(link).toHaveAttribute("target", "_blank");
   await expect(link).toHaveAttribute("rel", "noopener noreferrer");
   await expect(note.getByRole("button", { name: "Editar" })).toBeVisible();
-  await expect(gestor.getByText("As atividades chegam na próxima fase.")).toBeVisible();
+  await expect(gestor.getByText("Nenhuma atividade planejada.")).toBeVisible();
 
   // edição pelo autor
   await note.getByRole("button", { name: "Editar" }).click();

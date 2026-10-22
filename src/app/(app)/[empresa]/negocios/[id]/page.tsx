@@ -11,6 +11,9 @@ import { RecordHeader } from "@/components/records/record-header";
 import { RecordLayout } from "@/components/records/record-layout";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
+import { ActivityTab } from "@/components/activities/activity-tab";
+import { PlannedList } from "@/components/activities/planned-list";
+import { loadRecordActivity } from "@/lib/activities/record-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
@@ -33,8 +36,9 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
   if (!deal) notFound();
   if (scope.kind === "company" && scope.company.id !== deal.companyId) notFound();
 
-  const [timeline, owners, labels, defs, permissions, products, reasons] = await Promise.all([
+  const [timeline, activity, owners, labels, defs, permissions, products, reasons] = await Promise.all([
     getTimeline("deals", deal.id),
+    loadRecordActivity({ entity: "deals", recordId: deal.id, companyId: deal.companyId, partyName: (deal.person?.state === "ok" ? deal.person.name : null) ?? (deal.organization?.state === "ok" ? deal.organization.name : "") }),
     listAssignableOwners(deal.companyId),
     listCompanyLabels(deal.companyId),
     listActiveCustomFieldDefs(deal.companyId, "deals"),
@@ -135,7 +139,8 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
       main={
         <RecordTabs
           notes={<NoteComposer entity="deals" recordId={deal.id} />}
-          timeline={<Timeline items={timeline} />}
+          activity={<ActivityTab data={activity} />}
+          timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }
     />

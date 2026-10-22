@@ -147,7 +147,12 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
       }
     : null;
   const meeting = d.meeting
-    ? { subject: d.meeting.subject, due_at: d.meeting.dueAt, ...(d.meeting.typeId ? { type_id: d.meeting.typeId } : {}) }
+    ? {
+        subject: d.meeting.subject,
+        due_at: d.meeting.dueAt,
+        ...(d.meeting.typeId ? { type_id: d.meeting.typeId } : {}),
+        ...(d.meeting.durationMinutes !== undefined ? { duration_minutes: d.meeting.durationMinutes } : {}),
+      }
     : null;
 
   const { data, error } = await supabase.rpc("complete_activity", {

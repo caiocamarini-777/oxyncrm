@@ -93,6 +93,7 @@ export type NextActivityInput = z.input<typeof nextActivitySchema>;
 /** Reunião agendada pelo resultado: assunto e data; o tipo é opcional (primeiro tipo de reunião ativo). */
 export const meetingSchema = activityBase.pick({ subject: true, dueAt: true }).extend({
   typeId: z.string().uuid().optional(),
+  durationMinutes: activityBase.shape.durationMinutes.optional(),
 });
 export type MeetingInput = z.input<typeof meetingSchema>;
 

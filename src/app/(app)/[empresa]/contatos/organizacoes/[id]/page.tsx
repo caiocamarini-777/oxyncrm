@@ -5,6 +5,9 @@ import { RecordHeader } from "@/components/records/record-header";
 import { NoteComposer } from "@/components/records/note-composer";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
+import { ActivityTab } from "@/components/activities/activity-tab";
+import { PlannedList } from "@/components/activities/planned-list";
+import { loadRecordActivity } from "@/lib/activities/record-context";
 import { getTimeline } from "@/lib/timeline/queries";
 import { RecordLayout } from "@/components/records/record-layout";
 import { requireUser } from "@/lib/auth/session";
@@ -30,8 +33,9 @@ export default async function OrganizationPage({
   if (!organization) notFound();
   if (scope.kind === "company" && scope.company.id !== organization.companyId) notFound();
 
-  const [timeline, owners, labels, defs, permissions] = await Promise.all([
+  const [timeline, activity, owners, labels, defs, permissions] = await Promise.all([
     getTimeline("organizations", organization.id),
+    loadRecordActivity({ entity: "organizations", recordId: organization.id, companyId: organization.companyId, partyName: organization.name }),
     listAssignableOwners(organization.companyId),
     listCompanyLabels(organization.companyId),
     listActiveCustomFieldDefs(organization.companyId, "organizations"),
@@ -71,7 +75,8 @@ export default async function OrganizationPage({
       main={
         <RecordTabs
           notes={<NoteComposer entity="organizations" recordId={organization.id} />}
-          timeline={<Timeline items={timeline} />}
+          activity={<ActivityTab data={activity} />}
+          timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }
     />

@@ -42,11 +42,15 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
 
   const ids = new Set<string>();
   const reasonIds = new Set<string>();
+  const stageIds = new Set<string>();
   for (const e of events.data) {
     if (e.actor_id) ids.add(e.actor_id);
     const d = (e.data ?? {}) as Record<string, unknown>;
     for (const k of ["from", "to"]) if (e.kind === "owner_changed" && typeof d[k] === "string") ids.add(d[k] as string);
     if (typeof d.reason_id === "string") reasonIds.add(d.reason_id);
+    if (e.kind === "stage_changed") {
+      for (const k of ["from", "to"]) if (typeof d[k] === "string") stageIds.add(d[k] as string);
+    }
   }
   for (const n of notes.data) ids.add(n.created_by);
 
@@ -57,8 +61,16 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     for (const p of data) names[p.id] = p.full_name;
   }
   if (reasonIds.size > 0) {
-    const { data, error } = await supabase.from("disqualification_reasons").select("id, name").in("id", [...reasonIds]);
+    const { data, error } = await supabase
+      .from(entity === "deals" ? "lost_reasons" : "disqualification_reasons")
+      .select("id, name")
+      .in("id", [...reasonIds]);
     if (error) fail("motivos", error);
+    for (const r of data) names[r.id] = r.name;
+  }
+  if (stageIds.size > 0) {
+    const { data, error } = await supabase.from("stages").select("id, name").in("id", [...stageIds]);
+    if (error) fail("etapas", error);
     for (const r of data) names[r.id] = r.name;
   }
 

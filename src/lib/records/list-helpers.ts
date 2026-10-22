@@ -10,6 +10,7 @@ const PLURAL: Record<RecordEntity, string> = {
   organizations: "organizações",
   persons: "pessoas",
   leads: "leads",
+  deals: "negócios",
 };
 
 /** Embed do PostgREST pode vir como objeto ou lista de um item. */

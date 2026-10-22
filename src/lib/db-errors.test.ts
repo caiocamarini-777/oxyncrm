@@ -21,6 +21,12 @@ describe("translateDbError", () => {
     ["OXYN_COMPANY_IMMUTABLE", "Não é possível mudar a empresa do registro."],
     ["OXYN_INVALID_CUSTOM_FIELD", "Valor inválido no campo personalizado."],
     ["OXYN_CROSS_COMPANY", "Os registros ligados precisam ser da mesma empresa."],
+    ["OXYN_REQUIRED_FIELDS", "Preencha os campos obrigatórios desta etapa."],
+    ["OXYN_TOTALS_FROM_ITEMS", "Com produtos no negócio, os totais vêm dos itens."],
+    ["OXYN_PRODUCT_INACTIVE", "Este produto está inativo."],
+    ["OXYN_INVALID_TRANSITION", "Essa mudança de status não é permitida."],
+    ["OXYN_STAGE_ARCHIVED", "Esta etapa está arquivada."],
+    ["OXYN_PIPELINE_ARCHIVED", "Este funil está arquivado."],
   ])("%s", (code, text) => expect(translateDbError({ message: `x ${code}` })).toBe(text));
   it("genérico", () =>
     expect(translateDbError({ code: "XX000" })).toBe("Não foi possível concluir. Tente novamente."));

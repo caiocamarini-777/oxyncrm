@@ -103,6 +103,25 @@ create trigger guard_company_immutable before update on public.products
 create trigger guard_company_immutable before update on public.deal_items
   for each row execute function public.guard_company_immutable();
 
+-- Vínculos imutáveis: etapa não muda de funil, item não muda de negócio.
+create function public.guard_fk_immutable() returns trigger
+language plpgsql set search_path = public, pg_temp as $$
+begin
+  if tg_table_name = 'stages' then
+    if new.pipeline_id is distinct from old.pipeline_id then
+      raise exception 'OXYN_FORBIDDEN_FIELD';
+    end if;
+  elsif new.deal_id is distinct from old.deal_id then
+    raise exception 'OXYN_FORBIDDEN_FIELD';
+  end if;
+  return new;
+end $$;
+revoke execute on function public.guard_fk_immutable() from public, anon, authenticated;
+create trigger guard_fk_immutable before update on public.stages
+  for each row execute function public.guard_fk_immutable();
+create trigger guard_fk_immutable before update on public.deal_items
+  for each row execute function public.guard_fk_immutable();
+
 -- Policies: deals (idênticas às de leads) --------------------------------------
 
 create policy deals_select on public.deals for select to authenticated using (

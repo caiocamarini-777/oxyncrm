@@ -1,5 +1,5 @@
 begin;
-select plan(90);
+select plan(92);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -200,6 +200,10 @@ select lives_ok($$ insert into products (company_id, name, kind) values ('000000
 select throws_ok($$ insert into pipelines (company_id, name) values ('00000000-0000-4000-8000-0000000000d2','tst-fora') $$, '42501', null, 'caio não cria funil em outra empresa');
 select throws_ok($$ delete from pipelines where id = '00000000-0000-4000-8000-0000000000a1' $$, '23503', null, 'funil com negócios não é excluído');
 select throws_ok($$ delete from stages where id = '00000000-0000-4000-8000-0000000000b1' $$, '23503', null, 'etapa com negócios não é excluída');
+select throws_ok($$ update stages set pipeline_id = '00000000-0000-4000-8000-0000000000a8' where id = '00000000-0000-4000-8000-0000000000b1' $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'caio não move etapa para outro funil');
+select throws_ok($$ update deal_items set deal_id = '00000000-0000-4000-8000-000000000d02' where id = '00000000-0000-4000-8000-000000000e03' $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'caio não move item para outro negócio');
 select lives_ok($$ delete from pipelines where id = '00000000-0000-4000-8000-0000000000a8' $$, 'funil sem negócios é excluído');
 select throws_ok($$ insert into deal_revenue_schedule (deal_id, company_id, month, mrr) values ('00000000-0000-4000-8000-000000000d03','00000000-0000-4000-8000-0000000000d1','2026-08-01',1) $$,
   '42501', null, 'nem o gestor escreve no cronograma');

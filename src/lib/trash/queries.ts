@@ -20,6 +20,7 @@ const NAME_COLUMN: Record<RecordEntity, string> = {
   leads: "title",
   persons: "full_name",
   organizations: "name",
+  deals: "title",
 };
 
 export function purgeDate(deletedAt: string): string {

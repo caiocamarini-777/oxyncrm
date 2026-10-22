@@ -7,3 +7,7 @@ describe("recordHref", () => {
   it("organizações", () =>
     expect(recordHref("organizations", "acme", "2")).toBe("/acme/contatos/organizacoes/2"));
 });
+
+describe("negócios", () => {
+  it("rota", () => expect(recordHref("deals", "oxyn", "1")).toBe("/oxyn/negocios/1"));
+});

@@ -34,3 +34,11 @@ export async function listActiveCustomFieldDefs(
     options: Array.isArray(d.options) ? (d.options as string[]) : [],
   }));
 }
+
+/** Equipes (globais, não por empresa) para filtros. */
+export async function listTeams(): Promise<{ id: string; name: string }[]> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from("teams").select("id, name").order("name");
+  if (error) fail("configurações", "equipes", error);
+  return data ?? [];
+}

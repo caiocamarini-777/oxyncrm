@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isUuid } from "@/lib/uuid";
 
 export const CUSTOM_FIELD_TYPES = [
   "text",
@@ -21,13 +22,14 @@ export const CUSTOM_FIELD_TYPE_LABELS: Record<CustomFieldType, string> = {
   user: "Usuário",
 };
 
-export const CUSTOM_FIELD_ENTITIES_PHASE2 = ["organizations", "persons", "leads"] as const;
+export const CUSTOM_FIELD_ENTITIES_PHASE2 = ["organizations", "persons", "leads", "deals"] as const;
 export type CustomFieldEntity = (typeof CUSTOM_FIELD_ENTITIES_PHASE2)[number];
 
 export const CUSTOM_FIELD_ENTITY_LABELS: Record<CustomFieldEntity, string> = {
   organizations: "Organizações",
   persons: "Pessoas",
   leads: "Leads",
+  deals: "Negócios",
 };
 
 export const LABEL_COLORS = ["teal", "blue", "green", "red", "gray", "purple"] as const;
@@ -107,7 +109,6 @@ export const customFieldUpdateSchema = z
     }
   });
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function validDate(s: string): boolean {
@@ -131,7 +132,7 @@ function valueOk(def: CustomFieldDef, v: unknown, memberIds: string[]): boolean 
     case "multiselect":
       return Array.isArray(v) && v.every((e) => typeof e === "string" && def.options.includes(e));
     case "user":
-      return typeof v === "string" && UUID_RE.test(v) && memberIds.includes(v.toLowerCase());
+      return isUuid(v) && memberIds.includes(v.toLowerCase());
   }
 }
 

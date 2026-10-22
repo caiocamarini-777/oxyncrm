@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseBRL } from "@/lib/records/format";
 
 export const LEAD_STATUSES = ["open", "disqualified", "archived"] as const;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
@@ -14,13 +15,7 @@ const optionalUuid = z
 const estimatedValue = z
   .preprocess((v) => {
     if (v === undefined || v === null) return null;
-    if (typeof v === "string") {
-      const raw = v.trim();
-      // Com vírgula, o ponto é separador de milhar ("1.500,25"); sem vírgula, o ponto é decimal.
-      const t = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw;
-      if (t === "") return null;
-      return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : Number.NaN;
-    }
+    if (typeof v === "string") return parseBRL(v);
     return v;
   }, z.number({ message: "Informe um valor válido." }).nullable())
   .refine((v) => v === null || v >= 0, "O valor não pode ser negativo.")

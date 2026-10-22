@@ -1,4 +1,4 @@
-export const RECORD_ENTITIES = ["organizations", "persons", "leads"] as const;
+export const RECORD_ENTITIES = ["organizations", "persons", "leads", "deals"] as const;
 export type RecordEntity = (typeof RECORD_ENTITIES)[number];
 
 export const PAGE_SIZE = 50 as const;
@@ -37,6 +37,7 @@ export const ENTITY_PATHS: Record<RecordEntity, string> = {
   organizations: "contatos/organizacoes",
   persons: "contatos/pessoas",
   leads: "leads",
+  deals: "negocios",
 };
 
 /** Rota do detalhe: sempre usa o slug da empresa do próprio registro. */

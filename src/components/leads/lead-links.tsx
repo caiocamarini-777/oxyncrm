@@ -41,6 +41,30 @@ export function LeadLinks({ lead }: { lead: LeadDetail }) {
               href={(id) => recordHref("organizations", lead.companySlug, id)}
             />
           </dd>
+          {lead.status === "converted" ? (
+            <>
+              <dt className="text-muted-foreground">Convertido em</dt>
+              <dd>
+                {lead.convertedDeal?.state === "ok" ? (
+                  <Link
+                    data-testid="lead-deal-link"
+                    href={recordHref("deals", lead.companySlug, lead.convertedDeal.id)}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {lead.convertedDeal.name}
+                  </Link>
+                ) : lead.convertedDeal?.state === "trashed" ? (
+                  <span data-testid="lead-deal-link" className="text-muted-foreground">
+                    {lead.convertedDeal.name} (na lixeira)
+                  </span>
+                ) : (
+                  <span data-testid="lead-deal-link" className="text-muted-foreground">
+                    um negócio
+                  </span>
+                )}
+              </dd>
+            </>
+          ) : null}
           <dt className="text-muted-foreground">Origem</dt>
           <dd data-testid="lead-source">{lead.sourceName ?? <span className="text-muted-foreground">Não informada</span>}</dd>
           <dt className="text-muted-foreground">Valor</dt>

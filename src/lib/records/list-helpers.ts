@@ -10,6 +10,7 @@ const PLURAL: Record<RecordEntity, string> = {
   organizations: "organizações",
   persons: "pessoas",
   leads: "leads",
+  deals: "negócios",
 };
 
 /** Embed do PostgREST pode vir como objeto ou lista de um item. */
@@ -40,17 +41,20 @@ export function endOfDay(d: string): string {
   return `${d}T23:59:59.999-03:00`;
 }
 
-/** Ids filtrados por etiqueta; `null` = sem filtro, `[]` = nenhum registro. */
-export async function idsByLabels(entity: RecordEntity, labels: string[]): Promise<string[] | null> {
-  if (labels.length === 0) return null;
-  const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from("record_labels")
-    .select("record_id")
-    .eq("entity", entity)
-    .in("label_id", labels);
-  if (error) fail(entity, "filtro de etiquetas", error);
-  return [...new Set((data ?? []).map((r) => r.record_id as string))];
+/**
+ * Origem da consulta de lista: a tabela ou, com etiquetas, a função `<tabela>_with_labels`
+ * (todas as etiquetas escolhidas; o RLS continua valendo e a contagem vai nas opções do rpc).
+ * As colunas de ordenação precisam constar no `select`.
+ */
+export function listSource(
+  supabase: Awaited<ReturnType<typeof createServerClient>>,
+  entity: RecordEntity,
+  label: string[] | undefined,
+) {
+  // Síncrona de propósito: o builder é "thenable" e uma função async o executaria ao retornar.
+  return (label && label.length > 0
+    ? supabase.rpc(`${entity}_with_labels`, { p_label_ids: label }, { count: "exact" })
+    : supabase.from(entity)) as unknown as ReturnType<typeof supabase.from>;
 }
 
 /** Etiquetas por registro, ordenadas por nome. */

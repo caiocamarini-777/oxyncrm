@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ConvertLeadDialog } from "@/components/leads/convert-lead-dialog";
+import type { CreatablePipeline } from "@/components/deals/create-deal-dialog";
+import type { CustomFieldDef } from "@/lib/custom-fields/schema";
 import { archiveLead, disqualifyLead, reopenLead } from "@/lib/leads/actions";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,11 +25,22 @@ export function LeadActions({
   status,
   reasons,
   canEdit,
+  canConvert,
+  leadTitle,
+  empresa,
+  pipelines,
+  dealDefs,
 }: {
+  leadTitle: string;
+  empresa: string;
+  pipelines: CreatablePipeline[];
+  dealDefs: CustomFieldDef[];
   leadId: string;
   status: string;
   reasons: { id: string; name: string }[];
   canEdit: boolean;
+  /** Editar o lead e criar negócios na empresa. */
+  canConvert: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -66,18 +79,15 @@ export function LeadActions({
       </Badge>
       {canEdit ? (
         <>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0}>
-                  <Button type="button" disabled aria-disabled>
-                    Converter em negócio
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Disponível com o funil de negócios</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          {status === "open" && canConvert ? (
+            <ConvertLeadDialog
+              leadId={leadId}
+              leadTitle={leadTitle}
+              empresa={empresa}
+              pipelines={pipelines}
+              defs={dealDefs}
+            />
+          ) : null}
           {status === "open" ? (
             <Button type="button" variant="outline" onClick={() => setOpen(true)}>
               Desqualificar

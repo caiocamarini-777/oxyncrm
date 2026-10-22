@@ -4,6 +4,9 @@ import { ORGANIZATION_SORTS } from "@/lib/organizations/queries";
 import { ORGANIZATION_EXPORT_COLUMNS, exportOrganizations } from "@/lib/organizations/export";
 import { LEAD_SORTS } from "@/lib/leads/queries";
 import { LEAD_EXPORT_COLUMNS, exportLeads } from "@/lib/leads/export";
+import { DEAL_SORTS } from "@/lib/deals/queries";
+import { parseDealListQuery } from "@/lib/deals/query";
+import { DEAL_EXPORT_COLUMNS, exportDeals } from "@/lib/deals/export";
 import { PERSON_SORTS } from "@/lib/persons/queries";
 import { PERSON_EXPORT_COLUMNS, exportPersons } from "@/lib/persons/export";
 import type { ListQuery, RecordEntity } from "./types";
@@ -13,6 +16,8 @@ export type EntityExporter = {
   filePrefix: string;
   allowedSorts: string[];
   columns: { key: string; header: string }[];
+  /** Leitura própria dos parâmetros (filtros extras); sem ela vale `parseListQuery`. */
+  parseQuery?: (params: URLSearchParams, allowedSorts: string[]) => ListQuery;
   /** `companyIds`: empresas em que o usuário pode exportar (o RLS continua valendo). */
   fetchRows: (scope: CompanyScope, query: ListQuery, companyIds: string[]) => Promise<Record<string, unknown>[]>;
 };
@@ -22,6 +27,7 @@ export const EXPORT_SEGMENTS: Record<string, RecordEntity> = {
   organizacoes: "organizations",
   pessoas: "persons",
   leads: "leads",
+  negocios: "deals",
 };
 
 /**
@@ -46,5 +52,12 @@ export const EXPORTERS: Partial<Record<RecordEntity, EntityExporter>> = {
     allowedSorts: LEAD_SORTS,
     columns: LEAD_EXPORT_COLUMNS,
     fetchRows: exportLeads,
+  },
+  deals: {
+    filePrefix: "negocios",
+    allowedSorts: DEAL_SORTS,
+    columns: DEAL_EXPORT_COLUMNS,
+    parseQuery: parseDealListQuery,
+    fetchRows: exportDeals,
   },
 };

@@ -3,15 +3,14 @@ import { RoleEditor } from "@/components/settings/role-editor";
 import { requireSuperAdmin } from "@/lib/auth/session";
 import { permissionsSchema } from "@/lib/permissions/schema";
 import { createServerClient } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/uuid";
 
 export const instant = false;
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default async function RolePage({ params }: { params: Promise<{ id: string }> }) {
   await requireSuperAdmin();
   const { id } = await params;
-  if (!UUID.test(id)) notFound();
+  if (!isUuid(id)) notFound();
   const supabase = await createServerClient();
   const { data: role } = await supabase
     .from("roles")

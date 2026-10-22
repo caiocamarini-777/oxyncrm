@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/uuid";
 import type { ListQuery } from "./types";
 
 const DEFAULT_SORT = "created_at";
@@ -22,8 +23,9 @@ export function parseListQuery(params: URLSearchParams, allowedSorts: string[]):
     page,
     sort,
     dir,
-    owner: list(params, "owner"),
-    label: list(params, "label"),
+    // responsáveis e etiquetas são ids: valor que não é uuid é descartado
+    owner: list(params, "owner").filter(isUuid),
+    label: list(params, "label").filter(isUuid),
     status: list(params, "status"),
     source: list(params, "source"),
     createdFrom: date(params.get("createdFrom")),

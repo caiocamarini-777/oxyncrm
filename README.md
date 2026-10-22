@@ -1,21 +1,28 @@
 # Oxyn CRM
 
-CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads.
+CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios).
 
 - Especificação: [docs/superpowers/specs/2026-10-21-oxyn-crm-design.md](docs/superpowers/specs/2026-10-21-oxyn-crm-design.md)
 - Plano da fase 1: [docs/superpowers/plans/2026-10-21-fase-1-fundacao.md](docs/superpowers/plans/2026-10-21-fase-1-fundacao.md)
+- Pendências da fase 3: [docs/superpowers/followups/2026-10-23-fase-3-pendencias.md](docs/superpowers/followups/2026-10-23-fase-3-pendencias.md)
 - Pendências da fase 2: [docs/superpowers/followups/2026-10-22-fase-2-pendencias.md](docs/superpowers/followups/2026-10-22-fase-2-pendencias.md)
 
 ## Módulos
 
-Depois da fase 2, cada empresa tem:
+Depois da fase 3, cada empresa tem:
 
-- **Leads**: caixa de leads com abas por status (abertos, desqualificados, arquivados), idade do lead, valor estimado, origem, vínculo com pessoa e organização, desqualificação com motivo e reabertura. A conversão em negócio chega na fase 3.
+- **Leads**: caixa de leads com abas por status (abertos, desqualificados, arquivados), idade do lead, valor estimado, origem, vínculo com pessoa e organização, desqualificação com motivo e reabertura. Um lead aberto converte em negócio (a pessoa, a organização, o valor e as etiquetas vão junto) e passa a aparecer na aba Convertidos.
+- **Negócios**: funis com etapas configuráveis, em quatro partes.
+  - **Kanban**: colunas com contagem e soma, cards arrastáveis, selo de negócio esfriando, filtros por responsável, equipe e etiqueta, e rodapé de arraste para Ganho, Perdido e Excluir. Se a etapa de destino exige campos que faltam, um diálogo pede só o que falta e conclui o movimento.
+  - **Lista e forecast**: lista paginada com abas Abertos, Ganhos e Perdidos e exportação em CSV; forecast por mês de fechamento esperado, com opção de ponderar pela probabilidade da etapa. "Todas as empresas" abre a lista.
+  - **Detalhe do negócio**: barra de etapas, ganho, perdido (com motivo) e reabertura, produtos (setup e recorrente), condições de contrato e cronograma de receita mês a mês. Com produtos, os totais vêm dos itens.
+  - **Conversão de lead**: do lead para um negócio no funil e na etapa escolhidos.
+  - **Configurações** (por empresa): funis e etapas (ordem por arrastar, probabilidade, prazo para esfriar, campos obrigatórios, campo exibido no card), catálogo de produtos e motivos de perda. Campos personalizados também valem para Negócios.
 - **Contatos**: **Pessoas** (vários e-mails e telefones, link de WhatsApp, organização vinculada) e **Organizações** (CNPJ, domínio, segmento). Listas paginadas no servidor, com filtros, ordenação, colunas configuráveis e exportação em CSV conforme a permissão. A visão "Todas as empresas" reúne os registros que o usuário pode ver. Avisos de duplicidade não expõem dados de quem não tem acesso.
 - **Registros**: etiquetas, campos personalizados, anotações e linha do tempo unificada em cada ficha, além de troca de responsável com permissão.
-- **Busca global** (Ctrl+K): encontra leads, pessoas e organizações e leva à lixeira.
+- **Busca global** (Ctrl+K): encontra leads, negócios, pessoas e organizações e leva à lixeira.
 - **Lixeira**: registros excluídos ficam 30 dias e podem ser restaurados; a exclusão definitiva é automática após o prazo ou manual, só pelo admin geral.
-- **Configurações** (admin geral, por empresa): campos personalizados, etiquetas, origens de lead e motivos de desqualificação.
+- **Configurações** (admin geral, por empresa): campos personalizados, etiquetas, origens de lead, motivos de desqualificação, funis, produtos e motivos de perda.
 
 ## Desenvolvimento
 

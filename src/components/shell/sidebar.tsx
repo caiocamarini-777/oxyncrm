@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NAV_ITEMS, isNavItemEnabled, navHref } from "@/lib/nav";
-import { cn } from "@/lib/utils";
+import { cn } from "cn";
 
 const base = "flex size-10 items-center justify-center rounded-lg";
 

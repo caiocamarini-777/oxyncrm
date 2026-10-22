@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { TRASH_TABS } from "@/lib/trash/tabs";
-import { cn } from "@/lib/utils";
+import { cn } from "cn";
 
 export function TrashTabs({ scopeSlug, active }: { scopeSlug: string; active: string }) {
   return (

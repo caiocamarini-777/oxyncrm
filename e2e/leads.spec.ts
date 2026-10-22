@@ -144,7 +144,7 @@ test("desqualificar exige motivo e move para a aba Desqualificados", async ({ br
   const title = `Lead Desq ${stamp}`;
   await page.goto(`/${slugA}/leads/${rec.disq}`);
   await expect(page.getByTestId("lead-status")).toHaveText("Aberto");
-  await expect(page.getByRole("button", { name: "Converter em negócio" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Converter em negócio" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Reabrir" })).toHaveCount(0);
   await page.getByRole("button", { name: "Desqualificar" }).click();
   await page.getByRole("button", { name: "Confirmar desqualificação" }).click();
@@ -165,6 +165,18 @@ test("desqualificar exige motivo e move para a aba Desqualificados", async ({ br
   expect(d.data?.status).toBe("disqualified");
   expect(d.data?.disqualification_reason_id).not.toBeNull();
   expect(d.data?.disqualification_note).toBe("Sem orçamento este ano");
+  await page.context().close();
+});
+
+test("lead desqualificado pode ser arquivado", async ({ browser }) => {
+  const page = await newPage(browser);
+  await page.goto(`/${slugA}/leads/${rec.disq}`);
+  await expect(page.getByTestId("lead-status")).toHaveText("Desqualificado");
+  await page.getByRole("button", { name: "Arquivar" }).click();
+  await expect(page.getByText("Lead arquivado.")).toBeVisible();
+  await expect(page.getByTestId("lead-status")).toHaveText("Arquivado");
+  const d = await admin().from("leads").select("status").eq("id", rec.disq).single();
+  expect(d.data?.status).toBe("archived");
   await page.context().close();
 });
 

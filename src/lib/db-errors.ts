@@ -19,6 +19,12 @@ export function translateDbError(err: { code?: string; message?: string }): stri
   if (msg.includes("OXYN_COMPANY_IMMUTABLE")) return "Não é possível mudar a empresa do registro.";
   if (msg.includes("OXYN_INVALID_CUSTOM_FIELD")) return "Valor inválido no campo personalizado.";
   if (msg.includes("OXYN_CROSS_COMPANY")) return "Os registros ligados precisam ser da mesma empresa.";
+  if (msg.includes("OXYN_REQUIRED_FIELDS")) return "Preencha os campos obrigatórios desta etapa.";
+  if (msg.includes("OXYN_TOTALS_FROM_ITEMS")) return "Com produtos no negócio, os totais vêm dos itens.";
+  if (msg.includes("OXYN_PRODUCT_INACTIVE")) return "Este produto está inativo.";
+  if (msg.includes("OXYN_INVALID_TRANSITION")) return "Essa mudança de status não é permitida.";
+  if (msg.includes("OXYN_STAGE_ARCHIVED")) return "Esta etapa está arquivada.";
+  if (msg.includes("OXYN_PIPELINE_ARCHIVED")) return "Este funil está arquivado.";
   switch (err.code) {
     case "23505":
       return "Já existe um registro com esse valor.";

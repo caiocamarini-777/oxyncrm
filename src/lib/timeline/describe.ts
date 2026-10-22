@@ -32,6 +32,23 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     estimated_value: "valor estimado",
     custom_fields: "campos personalizados",
   },
+  deals: {
+    title: "título",
+    pipeline_id: "funil",
+    stage_id: "etapa",
+    person_id: "pessoa",
+    organization_id: "organização",
+    estimated_value: "valor estimado",
+    expected_close_date: "data de fechamento",
+    setup_total: "setup",
+    setup_installments: "parcelas do setup",
+    setup_first_due: "primeira parcela",
+    mrr: "MRR",
+    mrr_start: "início do MRR",
+    contract_months: "duração do contrato",
+    lost_note: "nota de perda",
+    custom_fields: "campos personalizados",
+  },
 };
 
 export type EventLike = { kind: string; entity: string; data: Record<string, unknown> | null };
@@ -56,9 +73,18 @@ export function describeEvent(event: EventLike, names: Record<string, string>): 
       return "Restaurou da lixeira";
     case "owner_changed":
       return `Trocou o responsável de ${names[str(d.from)] ?? "alguém"} para ${names[str(d.to)] ?? "alguém"}`;
+    case "stage_changed":
+      return `Moveu de ${names[str(d.from)] ?? "outra etapa"} para ${names[str(d.to)] ?? "outra etapa"}`;
+    case "converted":
+      return "Converteu em negócio";
     case "status_changed": {
       const to = str(d.to);
       const reason = names[str(d.reason_id)];
+      if (event.entity === "deals") {
+        if (to === "won") return "Marcou como ganho";
+        if (to === "lost") return `Marcou como perdido${reason ? ` (${reason})` : ""}`;
+        return "Reabriu o negócio";
+      }
       return `Mudou o status para ${STATUS_LABELS[to] ?? to}${reason ? ` (${reason})` : ""}`;
     }
     case "label_added":

@@ -5,7 +5,7 @@ import { normalizePhone } from "@/lib/records/format";
 import {
   endOfDay,
   fail as failFor,
-  idsByLabels as idsByLabelsFor,
+  listSource,
   loadRecordLabels,
   one,
   safeTerm,
@@ -17,6 +17,7 @@ import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("persons", what, error);
 import type { ContactEntry } from "./schema";
+import { isUuid } from "@/lib/uuid";
 
 export const PERSON_SORTS = ["full_name", "job_title", "created_at"];
 
@@ -85,15 +86,11 @@ export async function fetchPersonRows(
   range: { from: number; to: number },
   companyIds?: string[],
 ): Promise<{ rows: PersonRow[]; total: number }> {
-  const labelIds = await idsByLabelsFor("persons", query.label);
-  if (labelIds && labelIds.length === 0) return { rows: [], total: 0 };
-
   const supabase = await createServerClient();
-  let q = supabase.from("persons").select(LIST_SELECT, { count: "exact" }).is("deleted_at", null);
+  let q = listSource(supabase, "persons", query.label).select(LIST_SELECT, { count: "exact" }).is("deleted_at", null);
   if (scope.kind === "company") q = q.eq("company_id", scope.company.id);
   if (companyIds) q = q.in("company_id", companyIds);
   if (query.owner.length > 0) q = q.in("owner_id", query.owner);
-  if (labelIds) q = q.in("id", labelIds);
   if (query.createdFrom) q = q.gte("created_at", startOfDay(query.createdFrom));
   if (query.createdTo) q = q.lte("created_at", endOfDay(query.createdTo));
   const term = safeTerm(query.q);
@@ -162,7 +159,7 @@ async function resolveOrganization(orgId: string | null): Promise<PersonOrganiza
 }
 
 export async function getPerson(id: string): Promise<PersonDetail | null> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  if (!isUuid(id)) return null;
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("persons")

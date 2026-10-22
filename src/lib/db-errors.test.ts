@@ -27,6 +27,9 @@ describe("translateDbError", () => {
     ["OXYN_INVALID_TRANSITION", "Essa mudança de status não é permitida."],
     ["OXYN_STAGE_ARCHIVED", "Esta etapa está arquivada."],
     ["OXYN_PIPELINE_ARCHIVED", "Este funil está arquivado."],
+    ["OXYN_LAST_MEETING_TYPE", "Mantenha ao menos um tipo de reunião ativo."],
+    ["OXYN_LAST_BOOKING_OUTCOME", "Mantenha ao menos um resultado que agenda reunião."],
+    ["OXYN_LEGACY_CHANNEL", "O canal de importação não pode ser ativado."],
   ])("%s", (code, text) => expect(translateDbError({ message: `x ${code}` })).toBe(text));
   it("genérico", () =>
     expect(translateDbError({ code: "XX000" })).toBe("Não foi possível concluir. Tente novamente."));

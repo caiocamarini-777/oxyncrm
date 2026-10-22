@@ -25,6 +25,9 @@ export function translateDbError(err: { code?: string; message?: string }): stri
   if (msg.includes("OXYN_INVALID_TRANSITION")) return "Essa mudança de status não é permitida.";
   if (msg.includes("OXYN_STAGE_ARCHIVED")) return "Esta etapa está arquivada.";
   if (msg.includes("OXYN_PIPELINE_ARCHIVED")) return "Este funil está arquivado.";
+  if (msg.includes("OXYN_LAST_MEETING_TYPE")) return "Mantenha ao menos um tipo de reunião ativo.";
+  if (msg.includes("OXYN_LAST_BOOKING_OUTCOME")) return "Mantenha ao menos um resultado que agenda reunião.";
+  if (msg.includes("OXYN_LEGACY_CHANNEL")) return "O canal de importação não pode ser ativado.";
   switch (err.code) {
     case "23505":
       return "Já existe um registro com esse valor.";

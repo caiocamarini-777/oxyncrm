@@ -7,7 +7,7 @@ function DisabledTab({ label }: { label: string }) {
       <TooltipTrigger asChild>
         <span
           role="tab"
-          tabIndex={0}
+          tabIndex={-1}
           aria-disabled="true"
           aria-label={label}
           className="-mb-px cursor-not-allowed border-b-2 border-transparent px-3 py-2 text-sm font-medium opacity-40"
@@ -24,12 +24,13 @@ function DisabledTab({ label }: { label: string }) {
  * Centro do detalhe. A Task 8 passa `notes` (anotações) e `timeline` (linha do tempo);
  * até lá ficam os espaços reservados.
  */
-export function OrganizationTabs({ notes, timeline }: { notes?: ReactNode; timeline?: ReactNode }) {
+export function RecordTabs({ notes, timeline }: { notes?: ReactNode; timeline?: ReactNode }) {
   return (
     <div className="flex flex-col gap-4">
       <div role="tablist" aria-label="Registro" className="flex gap-1 border-b">
         <span
           role="tab"
+          tabIndex={0}
           aria-selected="true"
           className="-mb-px border-b-2 border-primary px-3 py-2 text-sm font-medium"
         >

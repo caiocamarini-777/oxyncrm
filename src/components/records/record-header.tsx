@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,9 +24,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { moveToTrash, reassignOwner } from "@/lib/records/actions";
-import type { AssignableOwner } from "@/lib/records/types";
+import type { AssignableOwner, RecordEntity } from "@/lib/records/types";
 
-export function OrganizationHeader({
+export type RecordNoun = {
+  /** Ex.: "organização". */
+  singular: string;
+  /** Ex.: "Organização movida para a lixeira." */
+  trashedToast: string;
+  /** Ex.: "{noun.trashDescription}" */
+  trashDescription: string;
+};
+
+export function RecordHeader({
+  entity,
+  noun,
+  actions,
   id,
   companyId,
   companyName,
@@ -40,6 +52,10 @@ export function OrganizationHeader({
   canDelete,
   canReassign,
 }: {
+  entity: RecordEntity;
+  noun: RecordNoun;
+  /** Slot ao lado do responsável (ex.: link da organização, botões de lead). */
+  actions?: ReactNode;
   id: string;
   companyId: string;
   companyName: string;
@@ -59,13 +75,13 @@ export function OrganizationHeader({
 
   function trash() {
     start(async () => {
-      const res = await moveToTrash("organizations", id);
+      const res = await moveToTrash(entity, id);
       if (!res.ok) {
         toast.error(res.error);
         setConfirm(false);
         return;
       }
-      toast.success("Organização movida para a lixeira.");
+      toast.success(noun.trashedToast);
       router.push(listHref);
     });
   }
@@ -79,14 +95,15 @@ export function OrganizationHeader({
         </div>
         <LabelPicker
           companyId={companyId}
-          entity="organizations"
+          entity={entity}
           recordId={id}
           options={labels}
           value={labelIds}
           canEdit={canEdit}
         />
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {actions}
         <div className="w-56">
           <OwnerPicker
             companyId={companyId}
@@ -94,7 +111,7 @@ export function OrganizationHeader({
             value={ownerId}
             canReassign={canReassign}
             onChange={async (next) => {
-              const res = await reassignOwner("organizations", id, next);
+              const res = await reassignOwner(entity, id, next);
               if (res.ok) router.refresh();
               return res;
             }}
@@ -119,7 +136,7 @@ export function OrganizationHeader({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Mover para a lixeira?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    A organização some das listas e pode ser restaurada pela lixeira por 30 dias.
+                    {noun.trashDescription}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

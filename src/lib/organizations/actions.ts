@@ -83,6 +83,7 @@ export async function updateOrganization(id: string, input: OrganizationInput): 
     .from("organizations")
     .select("company_id, custom_fields")
     .eq("id", id)
+    .is("deleted_at", null)
     .maybeSingle();
   if (!current) return { ok: false, error: "Registro não encontrado ou sem permissão." };
   const cf = await checkCustomFields(current.company_id, d.customFields);
@@ -102,9 +103,12 @@ export async function updateOrganization(id: string, input: OrganizationInput): 
       custom_fields: merged,
     })
     .eq("id", id)
+    .is("deleted_at", null)
     .select("id");
   if (error) return { ok: false, error: translateDbError(error) };
-  if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  if (!data || data.length === 0) {
+    return { ok: false, error: "Não foi possível salvar: a organização não existe, está na lixeira ou você não tem permissão." };
+  }
   revalidatePath("/", "layout");
   return { ok: true, data: undefined };
 }

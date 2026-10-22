@@ -42,7 +42,12 @@ export function useDuplicateMatches(key: string, check: () => Promise<DuplicateM
   useEffect(() => {
     let cancelled = false;
     const t = setTimeout(async () => {
-      const found = await check();
+      let found: DuplicateMatch[] = [];
+      try {
+        found = await check();
+      } catch {
+        // falha da action: sem aviso, o salvamento segue permitido
+      }
       if (!cancelled) setMatches(found);
     }, 400);
     return () => {

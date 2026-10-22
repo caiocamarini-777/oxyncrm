@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 import { OrganizationEditPanel } from "@/components/organizations/organization-edit-panel";
-import { OrganizationHeader } from "@/components/organizations/organization-header";
 import { OrganizationPersons } from "@/components/organizations/organization-persons";
-import { OrganizationTabs } from "@/components/organizations/organization-tabs";
+import { RecordHeader } from "@/components/records/record-header";
+import { RecordTabs } from "@/components/records/record-tabs";
 import { RecordLayout } from "@/components/records/record-layout";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
@@ -37,7 +37,13 @@ export default async function OrganizationPage({
   return (
     <RecordLayout
       header={
-        <OrganizationHeader
+        <RecordHeader
+          entity="organizations"
+          noun={{
+            singular: "organização",
+            trashedToast: "Organização movida para a lixeira.",
+            trashDescription: "A organização some das listas e pode ser restaurada pela lixeira por 30 dias.",
+          }}
           id={organization.id}
           companyId={organization.companyId}
           companyName={organization.companyName}
@@ -58,7 +64,7 @@ export default async function OrganizationPage({
           <OrganizationPersons organization={organization} />
         </div>
       }
-      main={<OrganizationTabs />}
+      main={<RecordTabs />}
     />
   );
 }

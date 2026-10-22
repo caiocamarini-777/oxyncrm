@@ -70,6 +70,12 @@ function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
+/** Registra no servidor e interrompe: falha de consulta não pode virar "sem resultados". */
+function fail(what: string, error: { message: string; code?: string }): never {
+  console.error(`[organizations] ${what}:`, error.code, error.message);
+  throw new Error(`Falha ao carregar organizações (${what}).`);
+}
+
 /** Remove caracteres que quebram a sintaxe do filtro `or` do PostgREST. */
 function safeTerm(q: string): string {
   return q.replace(/[,()*%\\"]/g, " ").replace(/\s+/g, " ").trim();
@@ -86,11 +92,12 @@ function endOfDay(d: string): string {
 async function idsByLabels(labels: string[]): Promise<string[] | null> {
   if (labels.length === 0) return null;
   const supabase = await createServerClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("record_labels")
     .select("record_id")
     .eq("entity", "organizations")
     .in("label_id", labels);
+  if (error) fail("filtro de etiquetas", error);
   return [...new Set((data ?? []).map((r) => r.record_id as string))];
 }
 
@@ -127,7 +134,10 @@ export async function fetchOrganizationRows(
   }
   const sort = ORGANIZATION_SORTS.includes(query.sort) ? query.sort : "created_at";
   q = q.order(sort, { ascending: query.dir === "asc", nullsFirst: false }).order("id");
-  const { data, count } = await q.range(range.from, range.to);
+  const { data, count, error } = await q.range(range.from, range.to);
+  // PGRST103: página além do fim; é lista vazia, não falha.
+  if (error?.code === "PGRST103") return { rows: [], total: 0 };
+  if (error) fail("lista", error);
 
   const raw = (data ?? []) as unknown as RawRow[];
   const ids = raw.map((r) => r.id);
@@ -142,6 +152,8 @@ export async function fetchOrganizationRows(
         .eq("entity", "organizations")
         .in("record_id", ids),
     ]);
+    if (persons.error) fail("pessoas vinculadas", persons.error);
+    if (links.error) fail("etiquetas", links.error);
     for (const p of persons.data ?? []) {
       const id = p.organization_id as string;
       counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -183,7 +195,7 @@ export async function listOrganizations(
 export async function getOrganization(id: string): Promise<OrganizationDetail | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
   const supabase = await createServerClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("organizations")
     .select(
       "id, company_id, name, legal_name, cnpj, domain, segment, address, owner_id, custom_fields, created_at, company:companies(name, slug)",
@@ -191,6 +203,7 @@ export async function getOrganization(id: string): Promise<OrganizationDetail | 
     .eq("id", id)
     .is("deleted_at", null)
     .maybeSingle();
+  if (error) fail("detalhe", error);
   if (!data) return null;
   const [labels, persons] = await Promise.all([
     supabase.from("record_labels").select("label_id").eq("entity", "organizations").eq("record_id", id),
@@ -201,6 +214,8 @@ export async function getOrganization(id: string): Promise<OrganizationDetail | 
       .is("deleted_at", null)
       .order("full_name"),
   ]);
+  if (labels.error) fail("etiquetas do detalhe", labels.error);
+  if (persons.error) fail("pessoas do detalhe", persons.error);
   const company = one(data.company as { name: string; slug: string } | { name: string; slug: string }[] | null);
   return {
     id: data.id,

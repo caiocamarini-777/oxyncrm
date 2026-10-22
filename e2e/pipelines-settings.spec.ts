@@ -56,9 +56,13 @@ test("cria funil com 3 etapas e reordena arrastando", async ({ page }) => {
   // Teclado: foco na alça de Gama, Espaço, seta para cima duas vezes, Espaço.
   const handle = row.getByRole("button", { name: "Arrastar etapa Gama" });
   await handle.focus();
+  // Pausas curtas: o dnd-kit precisa de um quadro entre cada tecla para medir e mover.
   await page.keyboard.press("Space");
+  await page.waitForTimeout(250);
   await page.keyboard.press("ArrowUp");
+  await page.waitForTimeout(250);
   await page.keyboard.press("ArrowUp");
+  await page.waitForTimeout(250);
   await page.keyboard.press("Space");
   await expect.poll(stageNames).toEqual(["Gama", "Alfa", "Beta"]);
   await page.reload();

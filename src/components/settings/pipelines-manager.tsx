@@ -322,6 +322,7 @@ function StageList({
   const [order, setOrder] = useState(stages.map((s) => s.id));
   const [error, setError] = useState<string | null>(null);
   const byId = new Map(stages.map((s) => [s.id, s]));
+  const name = (id: string | number) => byId.get(String(id))?.name ?? "";
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -351,7 +352,24 @@ function StageList({
           {error}
         </p>
       ) : null}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+        accessibility={{
+          announcements: {
+            onDragStart: ({ active }) => `Etapa ${name(active.id)} levantada.`,
+            onDragOver: ({ active, over }) =>
+              over ? `Etapa ${name(active.id)} na posição ${order.indexOf(String(over.id)) + 1} de ${order.length}.` : "Fora da lista.",
+            onDragEnd: ({ active, over }) =>
+              over ? `Etapa ${name(active.id)} solta na posição ${order.indexOf(String(over.id)) + 1}.` : "Movimento cancelado.",
+            onDragCancel: () => "Movimento cancelado.",
+          },
+          screenReaderInstructions: {
+            draggable: "Para reordenar, pressione Espaço, use as setas para cima e para baixo e pressione Espaço de novo. Esc cancela.",
+          },
+        }}
+      >
         <SortableContext items={order} strategy={verticalListSortingStrategy}>
           <ul className="flex flex-col gap-2">
             {order.map((id) => {

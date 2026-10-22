@@ -1,6 +1,6 @@
 "use client";
 
-import { useDroppable } from "@dnd-kit/core";
+import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { CircleCheck, CircleX, Trash2, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "cn";
@@ -29,6 +29,8 @@ const ZONES: Record<DropZoneKind, { label: string; icon: LucideIcon; idle: strin
   },
 };
 
+const ZONE_IDS = (["won", "lost", "trash"] as const).map((k) => `${ZONE_PREFIX}${k}`);
+
 export const ZONE_LABELS: Record<DropZoneKind, string> = { won: ZONES.won.label, lost: ZONES.lost.label, trash: ZONES.trash.label };
 
 function Zone({ kind, reduced }: { kind: DropZoneKind; reduced: boolean }) {
@@ -56,6 +58,7 @@ function Zone({ kind, reduced }: { kind: DropZoneKind; reduced: boolean }) {
 
 /** Rodapé que aparece durante o arraste: Ganho, Perdido e (com permissão) Excluir. */
 export function DropZones({ visible, canDelete, reduced }: { visible: boolean; canDelete: boolean; reduced: boolean }) {
+  const { measureDroppableContainers } = useDndContext();
   return (
     <AnimatePresence>
       {visible ? (
@@ -65,6 +68,9 @@ export function DropZones({ visible, canDelete, reduced }: { visible: boolean; c
           animate={{ opacity: 1, y: 0 }}
           exit={reduced ? { opacity: 0 } : { opacity: 0, y: 48 }}
           transition={{ duration: reduced ? 0.1 : 0.2, ease: "easeOut" }}
+          // As zonas foram medidas no meio da entrada (deslocadas): mede de novo no lugar final, senão
+          // um card solto logo depois de o rodapé aparecer pode cair "fora" da zona.
+          onAnimationComplete={() => measureDroppableContainers(ZONE_IDS)}
           className="pointer-events-auto fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 px-4 py-3 shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.25)] backdrop-blur"
         >
           <div className="mx-auto flex max-w-4xl gap-3">

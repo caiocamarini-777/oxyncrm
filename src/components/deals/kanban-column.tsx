@@ -69,27 +69,28 @@ function DraggableCard({
         data-testid="deal-card"
         data-deal-id={deal.id}
         data-shaking={shakeToken ? "true" : "false"}
+        data-draggable={canDrag ? "true" : "false"}
         {...drag.listeners}
         onClick={() => router.push(href)}
         className={cn("rounded-lg", canDrag ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-pointer")}
       >
+        {/*
+          Ao levantar, o mesmo DealCardBody continua montado (só fica transparente sobre o espaço
+          tracejado): o link do título, ativador do teclado, não perde o foco no início do arraste.
+        */}
         <div ref={scope}>
-          {drag.isDragging ? (
-            <div className="rounded-lg border-2 border-dashed border-primary/40 bg-primary/5">
-              <div className="invisible">
-                <DealCardBody deal={deal} field={field} href={href} lifted />
-              </div>
+          <div className={cn("rounded-lg", drag.isDragging && "border-2 border-dashed border-primary/40 bg-primary/5")}>
+            <div className={drag.isDragging ? "opacity-0" : undefined}>
+              <DealCardBody
+                deal={deal}
+                field={field}
+                href={href}
+                activatorRef={canDrag ? drag.setActivatorNodeRef : undefined}
+                describedBy={[descId, canDrag ? instructions : null].filter(Boolean).join(" ")}
+                descriptionId={descId}
+              />
             </div>
-          ) : (
-            <DealCardBody
-              deal={deal}
-              field={field}
-              href={href}
-              activatorRef={canDrag ? drag.setActivatorNodeRef : undefined}
-              describedBy={[descId, canDrag ? instructions : null].filter(Boolean).join(" ")}
-              descriptionId={descId}
-            />
-          )}
+          </div>
         </div>
       </div>
     </motion.li>
@@ -118,7 +119,8 @@ export function KanbanColumn({
   stageLimit: number;
   field: CardValueField;
   dealHref: (id: string) => string;
-  canDrag: boolean;
+  /** Por card: um card com movimento em andamento fica travado; os demais continuam arrastáveis. */
+  canDrag: (id: string) => boolean;
   reduced: boolean;
   shake: { id: string; token: number } | null;
 }) {
@@ -169,7 +171,7 @@ export function KanbanColumn({
             deal={d}
             field={field}
             href={dealHref(d.id)}
-            canDrag={canDrag}
+            canDrag={canDrag(d.id)}
             reduced={reduced}
             shakeToken={shake?.id === d.id ? shake.token : 0}
           />

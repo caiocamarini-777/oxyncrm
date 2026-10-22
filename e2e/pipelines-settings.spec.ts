@@ -56,14 +56,17 @@ test("cria funil com 3 etapas e reordena arrastando", async ({ page }) => {
   // Teclado: foco na alça de Gama, Espaço, seta para cima duas vezes, Espaço.
   const handle = row.getByRole("button", { name: "Arrastar etapa Gama" });
   await handle.focus();
-  // Pausas curtas: o dnd-kit precisa de um quadro entre cada tecla para medir e mover.
+  // Cada tecla espera o anúncio do dnd-kit (região ao vivo): ele só sai depois de medir e mover.
+  const live = page.locator('[id^="DndLiveRegion"]');
   await page.keyboard.press("Space");
-  await page.waitForTimeout(250);
+  // Ao levantar, o dnd-kit anuncia a posição atual logo em seguida.
+  await expect(live).toHaveText(/^Etapa Gama (levantada|na posição 3 de 3)\.$/);
   await page.keyboard.press("ArrowUp");
-  await page.waitForTimeout(250);
+  await expect(live).toHaveText("Etapa Gama na posição 2 de 3.");
   await page.keyboard.press("ArrowUp");
-  await page.waitForTimeout(250);
+  await expect(live).toHaveText("Etapa Gama na posição 1 de 3.");
   await page.keyboard.press("Space");
+  await expect(live).toHaveText("Etapa Gama solta na posição 1.");
   await expect.poll(stageNames).toEqual(["Gama", "Alfa", "Beta"]);
   await page.reload();
   await page.getByRole("button", { name: `Editar ${PIPE}` }).click();
@@ -112,6 +115,20 @@ test("excluir etapa com negócio mostra a mensagem", async ({ page }) => {
   await page.getByRole("button", { name: "Excluir etapa Beta" }).click();
   await expect(page.getByText("Mova os negócios desta etapa antes de excluí-la.")).toBeVisible();
   expect(await stageNames()).toContain("Beta");
+
+  // Só negócios na lixeira prendem a etapa: a mensagem diz isso.
+  const trash = await admin().from("deals").update({ deleted_at: new Date().toISOString() }).eq("id", deal.data.id);
+  if (trash.error) throw trash.error;
+  await page.reload();
+  await page.getByRole("button", { name: `Editar ${PIPE}` }).click();
+  await page.getByRole("button", { name: "Excluir etapa Beta" }).click();
+  await expect(
+    page.getByText("Há negócios na lixeira nesta etapa. Esvazie a lixeira ou restaure-os antes de excluir."),
+  ).toBeVisible();
+  expect(await stageNames()).toContain("Beta");
+  // Restaura para os próximos testes (que usam este negócio).
+  const back = await admin().from("deals").update({ deleted_at: null }).eq("id", deal.data.id);
+  if (back.error) throw back.error;
 });
 
 test("arquivar funil com negócios funciona", async ({ page }) => {

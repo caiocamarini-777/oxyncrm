@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   closestCenter,
@@ -41,7 +41,21 @@ import { LostDialog, type LostReasonOption } from "./lost-dialog";
 import { RequiredFieldsDialog } from "./required-fields-dialog";
 
 type Columns = Record<string, BoardDeal[]>;
-type Origin = { snapshot: Columns; stageId: string; index: number };
+type Origin = { stageId: string; index: number };
+/**
+ * Mudança local ainda não refletida pelo servidor. `inFlight`: a ação está rodando (o card fica
+ * travado). Depois do sucesso a entrada fica "assentada" até o quadro do servidor confirmar (ou
+ * por algumas adoções), para um refresh antigo não fazer o card piscar de volta.
+ */
+type Pending = {
+  deal: BoardDeal;
+  origin: Origin;
+  inFlight: boolean;
+  /** Destino otimista; `null` quando o card saiu do quadro (ganho, perdido, lixeira). */
+  target: { stageId: string; position: number } | null;
+  /** Adoções restantes antes de descartar uma entrada assentada não confirmada. */
+  ttl: number;
+};
 type RequiredState = { snapshot: DealEditSnapshot; stageId: string; stageName: string; missing: string[]; position: number };
 
 const REFRESH_MS = 30_000;
@@ -82,9 +96,38 @@ function placeAt(cols: Columns, id: string, stageId: string, index: number): Col
   return { ...rest, [stageId]: list };
 }
 
+/** Devolve um card à etapa/índice de origem dentro das colunas atuais (sem mexer nos outros). */
+function restore(cols: Columns, deal: BoardDeal, origin: Origin): Columns {
+  const rest = without(cols, deal.id);
+  if (!rest[origin.stageId]) return rest;
+  const list = [...rest[origin.stageId]];
+  list.splice(Math.max(0, Math.min(origin.index, list.length)), 0, { ...deal, stageId: origin.stageId });
+  return { ...rest, [origin.stageId]: list };
+}
+
+/** O quadro do servidor já mostra o resultado da mudança? */
+function confirmed(cols: Columns, p: Pending): boolean {
+  if (!p.target) return locate(cols, p.deal.id) === null;
+  const d = findDeal(cols, p.deal.id);
+  return d !== null && d.stageId === p.target.stageId && d.position === p.target.position;
+}
+
+/** Quadro do servidor com as mudanças locais ainda pendentes reaplicadas por cima. */
+function overlay(cols: Columns, pending: Iterable<Pending>): Columns {
+  let out = cols;
+  for (const p of pending) {
+    if (!p.target) out = without(out, p.deal.id);
+    else if (out[p.target.stageId]) {
+      const base = findDeal(out, p.deal.id) ?? p.deal;
+      out = placeByPosition(without(out, p.deal.id), p.deal.id, p.target.stageId, p.target.position, base);
+    }
+  }
+  return out;
+}
+
 /** Insere respeitando a ordem por `position` (após salvar no diálogo de obrigatórios). */
-function placeByPosition(cols: Columns, id: string, stageId: string, position: number): Columns {
-  const deal = findDeal(cols, id);
+function placeByPosition(cols: Columns, id: string, stageId: string, position: number, fallback?: BoardDeal): Columns {
+  const deal = findDeal(cols, id) ?? fallback;
   if (!deal) return cols;
   const rest = without(cols, id);
   const list = [...(rest[stageId] ?? []), { ...deal, stageId, position }].sort((a, b) => a.position - b.position);
@@ -144,19 +187,30 @@ export function KanbanBoard({
   const [shake, setShake] = useState<{ id: string; token: number } | null>(null);
   const [required, setRequired] = useState<RequiredState | null>(null);
   const [lost, setLost] = useState<BoardDeal | null>(null);
-  const [busy, startTransition] = useTransition();
+  const [pending, setPending] = useState<ReadonlyMap<string, Pending>>(() => new Map());
   const origin = useRef<Origin | null>(null);
   const idle = useRef(true);
 
-  // O servidor manda: fora de arraste e de ação em andamento, o quadro adota a ordem recebida.
-  if (board !== seenBoard && activeId === null && !busy) {
+  // O servidor manda, mas fora de arraste: o quadro recebido é adotado com as mudanças locais ainda
+  // pendentes reaplicadas por cima (sem piscar nem duplicar cards). Durante um arraste, espera.
+  if (board !== seenBoard && activeId === null) {
+    const server = fromBoard(board);
+    const next = new Map<string, Pending>();
+    for (const [id, p] of pending) {
+      if (p.inFlight) next.set(id, p);
+      else if (!confirmed(server, p) && p.ttl > 1) next.set(id, { ...p, ttl: p.ttl - 1 });
+    }
     setSeenBoard(board);
-    setColumns(fromBoard(board));
+    setPending(next);
+    setColumns(overlay(server, next.values()));
   }
+  /** Só os cards com movimento em andamento ficam travados. */
+  const locked = (id: string) => pending.get(id)?.inFlight === true;
+  const anyInFlight = [...pending.values()].some((p) => p.inFlight);
 
   useEffect(() => {
-    idle.current = activeId === null && !busy && required === null && lost === null;
-  }, [activeId, busy, required, lost]);
+    idle.current = activeId === null && !anyInFlight && required === null && lost === null;
+  }, [activeId, anyInFlight, required, lost]);
 
   // Atualiza a cada 30 s com a aba visível (e ao voltar para a aba), sem atrapalhar um arraste.
   useEffect(() => {
@@ -199,11 +253,49 @@ export function KanbanBoard({
     };
   }
 
+  function setEntry(id: string, update: (p: Pending | undefined) => Pending | null) {
+    setPending((prev) => {
+      const next = new Map(prev);
+      const value = update(prev.get(id));
+      if (value) next.set(id, value);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  /**
+   * Roda a ação de um card sem travar o quadro: o card fica travado até a resposta; se falhar,
+   * só ele volta para a origem (nas colunas atuais) com tremor.
+   */
+  async function track<R extends { ok: boolean; error?: string }>(
+    deal: BoardDeal,
+    from: Origin,
+    target: Pending["target"],
+    action: () => Promise<R>,
+  ): Promise<R | { ok: false; error: string }> {
+    setEntry(deal.id, () => ({ deal, origin: from, target, inFlight: true, ttl: 2 }));
+    let res: R | { ok: false; error: string };
+    try {
+      res = await action();
+    } catch {
+      res = { ok: false, error: "Não foi possível concluir. Tente novamente." };
+    }
+    if (res.ok) {
+      setEntry(deal.id, (p) => (p ? { ...p, inFlight: false } : null));
+    } else {
+      setEntry(deal.id, () => null);
+      setColumns((c) => restore(c, deal, from));
+      bump(deal.id);
+    }
+    router.refresh();
+    return res;
+  }
+
   function onDragStart(e: DragStartEvent) {
     const id = String(e.active.id);
     const at = locate(columns, id);
     if (!at) return;
-    origin.current = { snapshot: columns, ...at };
+    origin.current = at;
     setActiveId(id);
   }
 
@@ -233,26 +325,27 @@ export function KanbanBoard({
     });
   }
 
-  function onDragCancel() {
-    if (origin.current) setColumns(origin.current.snapshot);
+  /** Devolve só o card arrastado para onde estava (os outros cards podem ter mudado no meio). */
+  function putBack(id: string, o: Origin) {
+    setColumns((c) => {
+      const deal = findDeal(c, id);
+      return deal ? restore(c, deal, o) : c;
+    });
+  }
+
+  function onDragCancel({ active }: { active: { id: string | number } }) {
+    if (origin.current) putBack(String(active.id), origin.current);
     origin.current = null;
     setActiveId(null);
     setOverZone(false);
   }
 
   /** Ação otimista: o card some na hora; se falhar, volta com tremor e aviso. */
-  function runRemoval(id: string, snapshot: Columns, action: () => Promise<DealResult | { ok: boolean; error?: string }>, done: string) {
-    setColumns(without(snapshot, id));
-    startTransition(async () => {
-      const res = await action();
-      if (res.ok) {
-        toast.success(done);
-      } else {
-        setColumns(snapshot);
-        bump(id);
-        toast.error("error" in res && res.error ? res.error : "Não foi possível concluir. Tente novamente.");
-      }
-      router.refresh();
+  function runRemoval(deal: BoardDeal, from: Origin, action: () => Promise<DealResult | { ok: boolean; error?: string }>, done: string) {
+    setColumns((c) => without(c, deal.id));
+    void track(deal, from, null, action).then((res) => {
+      if (res.ok) toast.success(done);
+      else toast.error("error" in res && res.error ? res.error : "Não foi possível concluir. Tente novamente.");
     });
   }
 
@@ -263,26 +356,26 @@ export function KanbanBoard({
     setActiveId(null);
     setOverZone(false);
     if (!o) return;
-    if (!over) {
-      setColumns(o.snapshot);
+    const deal = findDeal(columns, id);
+    if (!over || !deal) {
+      putBack(id, o);
       return;
     }
     if (isZone(over.id)) {
       const kind = String(over.id).slice(ZONE_PREFIX.length) as DropZoneKind;
-      const deal = findDeal(o.snapshot, id);
-      if (!deal) return;
-      if (kind === "won") runRemoval(id, o.snapshot, () => markWon(id), "Negócio marcado como ganho.");
-      else if (kind === "trash") runRemoval(id, o.snapshot, () => moveToTrash("deals", id), "Negócio movido para a lixeira.");
+      const original = { ...deal, stageId: o.stageId };
+      if (kind === "won") runRemoval(original, o, () => markWon(id), "Negócio marcado como ganho.");
+      else if (kind === "trash") runRemoval(original, o, () => moveToTrash("deals", id), "Negócio movido para a lixeira.");
       else {
-        setColumns(o.snapshot);
-        setLost(deal);
+        putBack(id, o);
+        setLost(original);
       }
       return;
     }
 
     const now = locate(columns, id);
     if (!now) {
-      setColumns(o.snapshot);
+      putBack(id, o);
       return;
     }
     if (now.stageId === o.stageId && now.index === o.index) return;
@@ -294,31 +387,35 @@ export function KanbanBoard({
     const target = now.stageId;
     setColumns((c) => ({ ...c, [target]: c[target].map((d) => (d.id === id ? { ...d, position } : d)) }));
 
-    startTransition(async () => {
-      const res = await moveDeal(id, target, position);
-      if (!res.ok) {
-        setColumns(o.snapshot);
-        bump(id);
-        if (res.missing && res.missing.length > 0) {
-          const snap = await getDealEditSnapshot(id);
-          if (snap.ok) {
-            setRequired({ snapshot: snap.data, stageId: target, stageName: stageName(target), missing: res.missing, position });
-          } else {
-            toast.error(snap.error);
-          }
+    const original = { ...deal, stageId: o.stageId };
+    void track(original, o, { stageId: target, position }, () => moveDeal(id, target, position)).then(async (r) => {
+      if (r.ok) return;
+      if ("missing" in r && r.missing && r.missing.length > 0) {
+        const snap = await getDealEditSnapshot(id);
+        if (snap.ok) {
+          setRequired({ snapshot: snap.data, stageId: target, stageName: stageName(target), missing: r.missing, position });
         } else {
-          toast.error(res.error);
+          toast.error(snap.error);
         }
+      } else {
+        toast.error(r.error);
       }
-      router.refresh();
     });
+  }
+
+  /** Assenta uma mudança feita por diálogo (já gravada) para o próximo refresh não desfazê-la. */
+  function settle(deal: BoardDeal, target: Pending["target"]) {
+    const at = locate(columns, deal.id);
+    setEntry(deal.id, () => ({ deal, origin: at ?? { stageId: deal.stageId, index: 0 }, target, inFlight: false, ttl: 2 }));
   }
 
   async function retryRequired(r: RequiredState): Promise<DealResult> {
     const res = await moveDeal(r.snapshot.id, r.stageId, r.position);
     if (res.ok) {
+      const deal = findDeal(columns, r.snapshot.id);
+      if (deal) settle(deal, { stageId: r.stageId, position: r.position });
       setColumns((c) => placeByPosition(c, r.snapshot.id, r.stageId, r.position));
-      startTransition(() => router.refresh());
+      router.refresh();
     }
     return res;
   }
@@ -326,9 +423,10 @@ export function KanbanBoard({
   async function confirmLost(deal: BoardDeal, input: { reasonId: string; note?: string | null }): Promise<DealResult> {
     const res = await markLost(deal.id, input);
     if (res.ok) {
+      settle(deal, null);
       setColumns((c) => without(c, deal.id));
       toast.success("Negócio marcado como perdido.");
-      startTransition(() => router.refresh());
+      router.refresh();
     }
     return res;
   }
@@ -376,7 +474,7 @@ export function KanbanBoard({
               stageLimit={stageLimit}
               field={board.pipeline.cardValueField}
               dealHref={dealHref}
-              canDrag={canEdit && !busy}
+              canDrag={(id) => canEdit && !locked(id)}
               reduced={reduced}
               shake={shake}
             />

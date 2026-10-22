@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import { admin, createTestUser, deleteTestUser, login } from "./helpers/auth";
+import { dragCard } from "./helpers/kanban";
 
 const stamp = Date.now();
 const password = "oxyn-test-123";
@@ -110,26 +111,6 @@ const column = (page: Page, name: string) => page.locator(`[data-testid="kanban-
 const card = (scope: Page | Locator, title: string) => scope.getByTestId("deal-card").filter({ hasText: title });
 
 /** Arrasta com o mouse em passos (o sensor de ponteiro só ativa depois de 6 px). */
-async function drag(page: Page, source: Locator, target: () => Locator) {
-  const s = await source.boundingBox();
-  if (!s) throw new Error("card sem caixa");
-  const sx = s.x + s.width / 2;
-  const sy = s.y + s.height / 2;
-  await page.mouse.move(sx, sy);
-  await page.mouse.down();
-  await page.mouse.move(sx + 12, sy + 12, { steps: 4 });
-  await target().scrollIntoViewIfNeeded();
-  const t = await target().boundingBox();
-  if (!t) throw new Error("destino sem caixa");
-  const tx = t.x + t.width / 2;
-  const ty = t.y + t.height / 2;
-  await page.mouse.move(tx, ty, { steps: 20 });
-  await page.waitForTimeout(150);
-  await page.mouse.move(tx + 1, ty + 1, { steps: 2 });
-  await page.waitForTimeout(150);
-  await page.mouse.up();
-}
-
 test("admin configura o funil (etapa exige contrato) e cria um produto recorrente", async ({ browser }) => {
   const page = await loggedIn(browser, adminEmail);
 
@@ -179,16 +160,16 @@ test("closer arrasta pelas etapas, preenche o contrato, adiciona o produto e gan
 
   // Qualificação para Reunião.
   await expect(card(column(page, "Qualificação"), dealTitle)).toBeVisible();
-  await drag(page, card(page, dealTitle), () => column(page, "Reunião"));
+  await dragCard(page, card(page, dealTitle), () => column(page, "Reunião"), { announce: "Sobre a etapa Reunião." });
   await expect(card(column(page, "Reunião"), dealTitle)).toBeVisible();
   await expect
     .poll(async () => (await admin().from("deals").select("stage_id, stages(name)").eq("id", dealId).single()).data?.stages)
     .toMatchObject({ name: "Reunião" });
 
-  // Reunião para Proposta: a etapa exige contrato e o modal pede.
-  await page.reload();
-  await expect(card(column(page, "Reunião"), dealTitle)).toBeVisible();
-  await drag(page, card(page, dealTitle), () => column(page, "Proposta"));
+  // Reunião para Proposta, sem recarregar: o card destrava assim que o movimento anterior termina.
+  // A etapa exige contrato e o modal pede.
+  await expect(card(column(page, "Reunião"), dealTitle)).toHaveAttribute("data-draggable", "true");
+  await dragCard(page, card(page, dealTitle), () => column(page, "Proposta"), { announce: "Sobre a etapa Proposta." });
   const dialog = page.getByRole("dialog", { name: "Campos obrigatórios" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("Condições de contrato");

@@ -1,6 +1,7 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import { admin, createTestUser, deleteTestUser, login } from "./helpers/auth";
 import { withoutTriggers } from "./helpers/db";
+import { dragCard, liveRegion } from "./helpers/kanban";
 
 const stamp = Date.now();
 const password = "oxyn-test-123";
@@ -77,6 +78,9 @@ test.beforeAll(async () => {
   await mkDeal("neg", { stage_id: stage.negociacao, title: `Negociando ${stamp}` });
   await mkDeal("rot", { stage_id: stage.esfria, title: `Esfriando ${stamp}` });
   await mkDeal("fresh", { stage_id: stage.esfria, title: `Recente ${stamp}` });
+  await mkDeal("seqA", { stage_id: stage.entrada, title: `Sequencia A ${stamp}` });
+  await mkDeal("seqB", { stage_id: stage.entrada, title: `Sequencia B ${stamp}` });
+  await mkDeal("kbd", { stage_id: stage.entrada, title: `Teclado ${stamp}` });
   await mkDeal("mine", { stage_id: stage.negociacao, title: `Do Paulo ${stamp}`, owner_id: userId });
   const mrrStart = "2026-11-01";
   await mkDeal("mrr1", {
@@ -136,33 +140,6 @@ async function openBoard(page: Page, pipelineId = pipe.main) {
   await expect(page.getByTestId("kanban-column").first()).toBeVisible();
 }
 
-/** Arrasta com o mouse em passos (o sensor de ponteiro só ativa depois de 6 px). */
-async function drag(
-  page: Page,
-  source: Locator,
-  target: () => Locator,
-  where: "center" | "top" = "center",
-  during?: () => Promise<void>,
-) {
-  const s = await source.boundingBox();
-  if (!s) throw new Error("card sem caixa");
-  const sx = s.x + s.width / 2;
-  const sy = s.y + s.height / 2;
-  await page.mouse.move(sx, sy);
-  await page.mouse.down();
-  await page.mouse.move(sx + 12, sy + 12, { steps: 4 });
-  const t = await target().boundingBox();
-  if (!t) throw new Error("destino sem caixa");
-  const tx = t.x + t.width / 2;
-  const ty = where === "top" ? t.y + 6 : t.y + t.height / 2;
-  await page.mouse.move(tx, ty, { steps: 20 });
-  await page.waitForTimeout(150);
-  await page.mouse.move(tx + 1, ty + 1, { steps: 2 });
-  await page.waitForTimeout(150);
-  if (during) await during();
-  await page.mouse.up();
-}
-
 test("funil arquivado não aparece no seletor", async ({ browser }) => {
   const page = await newPage(browser);
   await page.goto(`/${slug}/negocios`);
@@ -179,7 +156,10 @@ test("arrastar para outra etapa persiste a etapa e a ordem", async ({ browser })
   const page = await newPage(browser);
   await openBoard(page);
   const title = `Mover ${stamp}`;
-  await drag(page, card(page, title), () => card(page, `Negociando ${stamp}`), "top");
+  await dragCard(page, card(page, title), () => card(page, `Negociando ${stamp}`), {
+    where: "top",
+    announce: "Sobre a etapa Negociação.",
+  });
   await expect(card(column(page, "Negociação"), title)).toBeVisible();
   await expect(card(column(page, "Entrada"), title)).toHaveCount(0);
   await expect.poll(async () => (await admin().from("deals").select("stage_id").eq("id", deal.move).single()).data?.stage_id).toBe(
@@ -193,11 +173,54 @@ test("arrastar para outra etapa persiste a etapa e a ordem", async ({ browser })
   await page.context().close();
 });
 
+test("arrastar um segundo card logo depois de soltar o primeiro: os dois persistem", async ({ browser }) => {
+  const page = await newPage(browser);
+  await openBoard(page);
+  const a = `Sequencia A ${stamp}`;
+  const b = `Sequencia B ${stamp}`;
+  await dragCard(page, card(page, a), () => column(page, "Negociação"), { announce: "Sobre a etapa Negociação." });
+  // Sem esperar o servidor: só o card A fica travado enquanto o movimento dele roda.
+  await expect(card(column(page, "Negociação"), a)).toBeVisible();
+  await expect(card(page, b)).toHaveAttribute("data-draggable", "true");
+  await dragCard(page, card(page, b), () => column(page, "Negociação"), { announce: "Sobre a etapa Negociação." });
+  await expect(card(column(page, "Negociação"), b)).toBeVisible();
+  await expect(card(column(page, "Negociação"), a)).toBeVisible();
+
+  const stageOf = async (id: string) => (await admin().from("deals").select("stage_id").eq("id", id).single()).data?.stage_id;
+  await expect.poll(() => stageOf(deal.seqA)).toBe(stage.negociacao);
+  await expect.poll(() => stageOf(deal.seqB)).toBe(stage.negociacao);
+  // Depois do refresh do servidor, cada card aparece uma vez e na etapa nova (sem piscar de volta).
+  await expect(card(page, a)).toHaveCount(1);
+  await expect(card(page, b)).toHaveCount(1);
+  await expect(card(column(page, "Entrada"), a)).toHaveCount(0);
+  await expect(card(column(page, "Entrada"), b)).toHaveCount(0);
+  await page.reload();
+  await expect(card(column(page, "Negociação"), a)).toHaveCount(1);
+  await expect(card(column(page, "Negociação"), b)).toHaveCount(1);
+  await page.context().close();
+});
+
+test("arraste pelo teclado mantém o foco no card", async ({ browser }) => {
+  const page = await newPage(browser);
+  await openBoard(page);
+  const title = card(page, `Teclado ${stamp}`).getByTestId("deal-title");
+  await title.focus();
+  await page.keyboard.press("Space");
+  // Ao levantar, o dnd-kit anuncia o card e logo em seguida a etapa em que ele está.
+  await expect(liveRegion(page)).toHaveText(new RegExp(`^(Card Teclado ${stamp} levantado|Sobre a etapa Entrada)\\.$`));
+  await expect(title).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(liveRegion(page)).toHaveText("Movimento cancelado.");
+  await expect(title).toBeFocused();
+  await expect(card(column(page, "Entrada"), `Teclado ${stamp}`)).toBeVisible();
+  await page.context().close();
+});
+
 test("campo obrigatório faltando abre o modal e completa o movimento", async ({ browser }) => {
   const page = await newPage(browser);
   await openBoard(page);
   const title = `Obrigatorio ${stamp}`;
-  await drag(page, card(page, title), () => column(page, "Proposta"));
+  await dragCard(page, card(page, title), () => column(page, "Proposta"), { announce: "Sobre a etapa Proposta." });
   const dialog = page.getByRole("dialog", { name: "Campos obrigatórios" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("Para mover para Proposta, preencha:");
@@ -222,7 +245,7 @@ test("soltar em Perdido exige motivo", async ({ browser }) => {
   const page = await newPage(browser);
   await openBoard(page);
   const title = `Perder ${stamp}`;
-  await drag(page, card(page, title), () => page.getByTestId("drop-lost"));
+  await dragCard(page, card(page, title), () => page.getByTestId("drop-lost"), { announce: "Sobre a zona Perdido." });
   const dialog = page.getByRole("dialog", { name: "Marcar como perdido" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Marcar como perdido" }).click();
@@ -241,7 +264,7 @@ test("soltar em Ganho marca ganho e tira do quadro", async ({ browser }) => {
   const page = await newPage(browser);
   await openBoard(page);
   const title = `Ganhar ${stamp}`;
-  await drag(page, card(page, title), () => page.getByTestId("drop-won"));
+  await dragCard(page, card(page, title), () => page.getByTestId("drop-won"), { announce: "Sobre a zona Ganho." });
   await expect(page.getByText("Negócio marcado como ganho.")).toBeVisible();
   await expect(card(page, title)).toHaveCount(0);
   await expect.poll(async () => (await admin().from("deals").select("status").eq("id", deal.won).single()).data?.status).toBe("won");
@@ -255,7 +278,7 @@ test("soltar em Excluir manda para a lixeira", async ({ browser }) => {
   const page = await newPage(browser);
   await openBoard(page);
   const title = `Excluir ${stamp}`;
-  await drag(page, card(page, title), () => page.getByTestId("drop-trash"));
+  await dragCard(page, card(page, title), () => page.getByTestId("drop-trash"), { announce: "Sobre a zona Excluir." });
   await expect(page.getByText("Negócio movido para a lixeira.")).toBeVisible();
   await expect(card(page, title)).toHaveCount(0);
   await expect
@@ -271,9 +294,12 @@ test("usuário padrão só vê os próprios cards", async ({ browser }) => {
   await expect(card(page, `Negociando ${stamp}`)).toHaveCount(0);
   await expect(page.getByTestId("deal-card")).toHaveCount(1);
   // Sem permissão de excluir, a zona Excluir não aparece durante o arraste.
-  await drag(page, card(page, `Do Paulo ${stamp}`), () => column(page, "Negociação"), "center", async () => {
-    await expect(page.getByTestId("drop-won")).toBeVisible();
-    await expect(page.getByTestId("drop-trash")).toHaveCount(0);
+  await dragCard(page, card(page, `Do Paulo ${stamp}`), () => column(page, "Negociação"), {
+    announce: "Sobre a etapa Negociação.",
+    during: async () => {
+      await expect(page.getByTestId("drop-won")).toBeVisible();
+      await expect(page.getByTestId("drop-trash")).toHaveCount(0);
+    },
   });
   await page.context().close();
 });

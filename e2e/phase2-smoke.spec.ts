@@ -57,11 +57,22 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   const a = admin();
-  if (companyId) await a.from("companies").delete().eq("id", companyId);
-  await a.from("roles").delete().eq("name", roleName);
+  const errors: string[] = [];
+  if (companyId) {
+    const r = await a.from("companies").delete().eq("id", companyId);
+    if (r.error) errors.push(`empresa: ${r.error.message}`);
+  }
+  const r = await a.from("roles").delete().eq("name", roleName);
+  if (r.error) errors.push(`papel: ${r.error.message}`);
   const { data } = await a.from("profiles").select("id").eq("email", sdrEmail);
-  for (const p of data ?? []) await deleteTestUser(p.id).catch(() => {});
-  if (gestorId) await deleteTestUser(gestorId).catch(() => {});
+  const ids = [...(data ?? []).map((p) => p.id), gestorId].filter(Boolean);
+  for (const id of ids) {
+    await deleteTestUser(id).catch((e) => errors.push(`usuário ${id}: ${String(e?.message ?? e)}`));
+  }
+  if (errors.length) {
+    console.error("Falha na limpeza do E2E da jornada:", errors);
+    throw new Error(`Limpeza incompleta: ${errors.join("; ")}`);
+  }
 });
 
 async function loggedIn(browser: Browser, email: string): Promise<Page> {
@@ -176,7 +187,13 @@ test("SDR vê só os próprios leads e o gestor vê todos da empresa", async ({ 
   const sdr = await loggedIn(browser, sdrEmail);
   await sdr.goto(`/${slug}/leads?status=disqualified`);
   await expect(sdr.getByRole("row").filter({ hasText: leadTitle })).toBeVisible();
+  const sdrProfile = await admin().from("profiles").select("id").eq("email", sdrEmail).single();
+  if (sdrProfile.error) throw sdrProfile.error;
+  const ownOpen = `Lead Aberto do SDR ${stamp}`;
+  const ins = await admin().from("leads").insert({ company_id: companyId, owner_id: sdrProfile.data.id, title: ownOpen });
+  if (ins.error) throw ins.error;
   await sdr.goto(`/${slug}/leads`);
+  await expect(sdr.getByRole("row").filter({ hasText: ownOpen })).toBeVisible();
   await expect(sdr.getByRole("row").filter({ hasText: gestorLeadTitle })).toHaveCount(0);
   await sdr.context().close();
 

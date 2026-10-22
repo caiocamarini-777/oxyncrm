@@ -48,7 +48,6 @@ test("cria campo de seleção em organizações", async ({ page }) => {
 });
 
 test("arquivar campo esconde da lista ativa e mantém o valor", async ({ page }) => {
-  // Task 6 acrescenta a asserção no detalhe da organização.
   const a = admin();
   const org = await a
     .from("organizations")
@@ -78,10 +77,20 @@ test("arquivar campo esconde da lista ativa e mantém o valor", async ({ page })
     .single();
   expect(def.data?.archived_at).not.toBeNull();
 
+  // Arquivado: some do detalhe da organização, mas o valor segue no banco.
+  await page.goto(`/${slug}/contatos/organizacoes/${org.data.id}`);
+  await expect(page.getByLabel("Nome", { exact: true })).toHaveValue(`Tst Org ${stamp}`);
+  await expect(page.getByText("Porte da empresa")).toHaveCount(0);
+  await page.goto(`/configuracoes/campos?empresa=${slug}`);
+
   await row.getByRole("button", { name: "Restaurar" }).click();
   await expect(row).toHaveAttribute("data-archived", "false");
   const after = await a.from("organizations").select("custom_fields").eq("id", org.data.id).single();
   expect(after.data?.custom_fields).toEqual({ porte_da_empresa: "Médio" });
+
+  // Restaurado: volta ao detalhe com o valor.
+  await page.goto(`/${slug}/contatos/organizacoes/${org.data.id}`);
+  await expect(page.getByLabel("Porte da empresa")).toHaveValue("Médio");
 });
 
 test("cria etiqueta e não aceita nome repetido", async ({ page }) => {

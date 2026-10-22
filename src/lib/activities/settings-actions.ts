@@ -10,7 +10,6 @@ import {
   activityChannelSchema,
   activityOutcomeSchema,
   activityTypeSchema,
-  CLASSIFICATIONS,
   leadRuleSchema,
 } from "./settings-schema";
 
@@ -37,7 +36,7 @@ type CreateInput =
 
 export async function createActivityConfig(companyId: string, input: CreateInput): Promise<ActionResult<{ id: string }>> {
   await requireSuperAdmin();
-  if (!uuid.safeParse(companyId).success || !(input.kind in TABLES)) return { ok: false, error: "Dados inválidos." };
+  if (!uuid.safeParse(companyId).success || !Object.hasOwn(TABLES, input.kind)) return { ok: false, error: "Dados inválidos." };
   let fields: Record<string, unknown>;
   if (input.kind === "activity_type") {
     const parsed = activityTypeSchema.safeParse(input);
@@ -58,12 +57,13 @@ export async function createActivityConfig(companyId: string, input: CreateInput
   }
   const supabase = await createServerClient();
   const table = TABLES[input.kind];
-  const { data: last } = await supabase
+  const { data: last, error: lastError } = await supabase
     .from(table)
     .select("position")
     .eq("company_id", companyId)
     .order("position", { ascending: false })
     .limit(1);
+  if (lastError) return dbFailure(lastError);
   const position = (last?.[0]?.position ?? -1) + 1;
   const { data, error } = await supabase
     .from(table)
@@ -97,14 +97,11 @@ export async function updateOutcome(
 ): Promise<ActionResult> {
   await requireSuperAdmin();
   if (!uuid.safeParse(id).success) return { ok: false, error: "Dados inválidos." };
+  const parsed = activityOutcomeSchema.pick({ classification: true, booksMeeting: true }).partial().safeParse(patch);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0].message };
   const update: Record<string, unknown> = {};
-  if (patch.classification !== undefined) {
-    if (!(CLASSIFICATIONS as readonly string[]).includes(patch.classification)) {
-      return { ok: false, error: "Escolha a classificação." };
-    }
-    update.classification = patch.classification;
-  }
-  if (patch.booksMeeting !== undefined) update.books_meeting = patch.booksMeeting;
+  if (parsed.data.classification !== undefined) update.classification = parsed.data.classification;
+  if (parsed.data.booksMeeting !== undefined) update.books_meeting = parsed.data.booksMeeting;
   if (Object.keys(update).length === 0) return { ok: true, data: undefined };
   const supabase = await createServerClient();
   const { error } = await supabase.from("activity_outcomes").update(update).eq("id", id);
@@ -113,21 +110,14 @@ export async function updateOutcome(
   return { ok: true, data: undefined };
 }
 
-/** Grava `lead_next_activity_rule` em companies.settings sem apagar as outras chaves. */
+/** Grava `lead_next_activity_rule` em companies.settings (RPC atômica, sem apagar as outras chaves). */
 export async function setLeadNextActivityRule(companyId: string, rule: string): Promise<ActionResult> {
   await requireSuperAdmin();
   if (!uuid.safeParse(companyId).success) return { ok: false, error: "Dados inválidos." };
   const parsed = leadRuleSchema.safeParse(rule);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0].message };
   const supabase = await createServerClient();
-  const { data: company, error: readError } = await supabase
-    .from("companies")
-    .select("settings")
-    .eq("id", companyId)
-    .single();
-  if (readError) return { ok: false, error: translateDbError(readError) };
-  const settings = { ...((company.settings as Record<string, unknown> | null) ?? {}), lead_next_activity_rule: parsed.data };
-  const { error } = await supabase.from("companies").update({ settings }).eq("id", companyId);
+  const { error } = await supabase.rpc("set_lead_next_activity_rule", { p_company: companyId, p_rule: parsed.data });
   if (error) return { ok: false, error: translateDbError(error) };
   revalidatePath(PATH);
   return { ok: true, data: undefined };

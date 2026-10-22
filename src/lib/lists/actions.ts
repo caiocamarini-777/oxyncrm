@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireSuperAdmin } from "@/lib/auth/session";
 import { createServerClient } from "@/lib/supabase/server";
+import { NAME_MAX } from "@/lib/activities/settings-schema";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 
 export type ListKind = "source" | "reason" | "lost_reason" | "activity_type" | "activity_channel" | "activity_outcome";
@@ -12,8 +13,6 @@ const TABLES = { source: "lead_sources", reason: "disqualification_reasons", los
   activity_type: "activity_types", activity_channel: "activity_channels", activity_outcome: "activity_outcomes" } as const;
 const PATHS = { source: "/configuracoes/origens", reason: "/configuracoes/motivos", lost_reason: "/configuracoes/motivos-perda",
   activity_type: "/configuracoes/atividades", activity_channel: "/configuracoes/atividades", activity_outcome: "/configuracoes/atividades" } as const;
-
-const NAME_MAX = { source: 80, reason: 80, lost_reason: 80, activity_type: 40, activity_channel: 40, activity_outcome: 60 } as const;
 
 function nameSchemaFor(kind: ListKind) {
   const max = NAME_MAX[kind];
@@ -30,7 +29,7 @@ function dbFailure(err: { code?: string; message?: string }): ActionResult<never
 }
 
 function validKind(kind: string): kind is ListKind {
-  return kind in TABLES;
+  return Object.hasOwn(TABLES, kind);
 }
 
 export async function createListItem(

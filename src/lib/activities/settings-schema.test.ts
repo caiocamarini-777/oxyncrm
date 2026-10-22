@@ -33,6 +33,14 @@ describe("activityOutcomeSchema", () => {
   });
 });
 
+describe("patch parcial de resultado", () => {
+  const patch = activityOutcomeSchema.pick({ classification: true, booksMeeting: true }).partial();
+  test("aceita parcial e recusa classificação inválida", () => {
+    expect(patch.safeParse({ booksMeeting: true }).success).toBe(true);
+    expect(patch.safeParse({ classification: "x" }).success).toBe(false);
+  });
+});
+
 describe("leadRuleSchema", () => {
   test("off, suggest, require", () => {
     for (const r of ["off", "suggest", "require"]) expect(leadRuleSchema.safeParse(r).success).toBe(true);

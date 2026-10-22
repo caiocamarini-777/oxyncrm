@@ -30,7 +30,7 @@ test.beforeEach(async ({ page }) => {
 
 test("cria e desativa canal; o canal legado só mostra o selo", async ({ page }) => {
   await page.getByLabel("Novo canal").fill(CHANNEL);
-  await page.getByRole("button", { name: "Adicionar" }).nth(1).click();
+  await page.getByRole("region", { name: "Canais" }).getByRole("button", { name: "Adicionar" }).click();
   const row = page.getByTestId("channel-row").filter({ hasText: CHANNEL });
   await expect(row).toBeVisible();
   const read = async () => {
@@ -50,7 +50,7 @@ test("cria e desativa canal; o canal legado só mostra o selo", async ({ page })
 
 test("cria resultado neutro", async ({ page }) => {
   await page.getByLabel("Novo resultado").fill(OUTCOME);
-  await page.getByRole("button", { name: "Adicionar" }).nth(2).click();
+  await page.getByRole("region", { name: "Resultados" }).getByRole("button", { name: "Adicionar" }).click();
   await expect(page.getByTestId("outcome-row").filter({ hasText: OUTCOME })).toBeVisible();
   const { data, error } = await admin().from("activity_outcomes").select("classification, books_meeting, active").eq("company_id", companyId).eq("name", OUTCOME).single();
   if (error) throw error;

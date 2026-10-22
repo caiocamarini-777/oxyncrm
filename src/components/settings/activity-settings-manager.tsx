@@ -315,15 +315,24 @@ function OutcomesBlock({ companyId, items }: { companyId: string; items: Outcome
 
 function LeadRuleBlock({ companyId, rule }: { companyId: string; rule: LeadRule }) {
   const { pending, error, run } = useRunner();
+  const [value, setValue] = useState(rule);
+  const [prev, setPrev] = useState(rule);
+  if (prev !== rule) {
+    setPrev(rule);
+    setValue(rule);
+  }
   return (
     <Block title="Regra de próxima atividade para leads" hint="Define se, ao concluir uma atividade de um lead, o sistema sugere ou exige a próxima.">
       <div className="flex flex-wrap items-center gap-2">
         <Label htmlFor="lead-rule">Regra</Label>
         <select
           id="lead-rule"
-          value={rule}
+          value={value}
           disabled={pending}
-          onChange={(e) => run(() => setLeadNextActivityRule(companyId, e.target.value))}
+          onChange={(e) => {
+            setValue(e.target.value as LeadRule);
+            run(() => setLeadNextActivityRule(companyId, e.target.value));
+          }}
           className="h-8 rounded-md border bg-background px-2 text-sm"
         >
           {NEXT_ACTIVITY_RULES.map((r) => (

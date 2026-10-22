@@ -28,8 +28,9 @@ export function normalizeEmail(v: string): string {
   return v.trim().toLowerCase();
 }
 
+/** Só dígitos, na forma nacional: `+55 11 99999-0000` e `(11) 99999-0000` dão o mesmo valor. */
 export function normalizePhone(v: string): string {
-  return v.replace(/\D/g, "");
+  return v.replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, "");
 }
 
 export function formatPhone(v: string): string {

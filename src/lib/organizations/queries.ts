@@ -1,12 +1,23 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 import type { CompanyScope } from "@/lib/companies/pure";
-import type { LabelColor } from "@/lib/custom-fields/schema";
+import {
+  endOfDay,
+  fail as failFor,
+  idsByLabels as idsByLabelsFor,
+  loadRecordLabels,
+  one,
+  safeTerm,
+  startOfDay,
+  type LabelRef,
+} from "@/lib/records/list-helpers";
 import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
+
+const fail = (what: string, error: { message: string; code?: string }) => failFor("organizations", what, error);
 
 export const ORGANIZATION_SORTS = ["name", "cnpj", "domain", "segment", "created_at"];
 
-export type OrganizationLabel = { id: string; name: string; color: LabelColor };
+export type OrganizationLabel = LabelRef;
 
 export type OrganizationRow = {
   id: string;
@@ -66,41 +77,6 @@ type RawRow = {
   owner: { full_name: string } | null;
 };
 
-function one<T>(v: T | T[] | null): T | null {
-  return Array.isArray(v) ? (v[0] ?? null) : v;
-}
-
-/** Registra no servidor e interrompe: falha de consulta não pode virar "sem resultados". */
-function fail(what: string, error: { message: string; code?: string }): never {
-  console.error(`[organizations] ${what}:`, error.code, error.message);
-  throw new Error(`Falha ao carregar organizações (${what}).`);
-}
-
-/** Remove caracteres que quebram a sintaxe do filtro `or` do PostgREST. */
-function safeTerm(q: string): string {
-  return q.replace(/[,()*%\\"]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function startOfDay(d: string): string {
-  return `${d}T00:00:00-03:00`;
-}
-function endOfDay(d: string): string {
-  return `${d}T23:59:59.999-03:00`;
-}
-
-/** Ids filtrados por etiqueta; `null` = sem filtro, `[]` = nenhum registro. */
-async function idsByLabels(labels: string[]): Promise<string[] | null> {
-  if (labels.length === 0) return null;
-  const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from("record_labels")
-    .select("record_id")
-    .eq("entity", "organizations")
-    .in("label_id", labels);
-  if (error) fail("filtro de etiquetas", error);
-  return [...new Set((data ?? []).map((r) => r.record_id as string))];
-}
-
 /**
  * Linhas da lista conforme os filtros. `companyIds` (se informado) restringe as empresas
  * (usado pela exportação); o RLS continua valendo.
@@ -111,7 +87,7 @@ export async function fetchOrganizationRows(
   range: { from: number; to: number },
   companyIds?: string[],
 ): Promise<{ rows: OrganizationRow[]; total: number }> {
-  const labelIds = await idsByLabels(query.label);
+  const labelIds = await idsByLabelsFor("organizations", query.label);
   if (labelIds && labelIds.length === 0) return { rows: [], total: 0 };
 
   const supabase = await createServerClient();
@@ -142,26 +118,17 @@ export async function fetchOrganizationRows(
   const raw = (data ?? []) as unknown as RawRow[];
   const ids = raw.map((r) => r.id);
   const counts = new Map<string, number>();
-  const labelsBy = new Map<string, OrganizationLabel[]>();
+  let labelsBy = new Map<string, OrganizationLabel[]>();
   if (ids.length > 0) {
-    const [persons, links] = await Promise.all([
+    const [persons, labels] = await Promise.all([
       supabase.from("persons").select("organization_id").in("organization_id", ids).is("deleted_at", null),
-      supabase
-        .from("record_labels")
-        .select("record_id, label:labels(id, name, color)")
-        .eq("entity", "organizations")
-        .in("record_id", ids),
+      loadRecordLabels("organizations", ids),
     ]);
     if (persons.error) fail("pessoas vinculadas", persons.error);
-    if (links.error) fail("etiquetas", links.error);
+    labelsBy = labels;
     for (const p of persons.data ?? []) {
       const id = p.organization_id as string;
       counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    for (const l of (links.data ?? []) as unknown as { record_id: string; label: OrganizationLabel | OrganizationLabel[] | null }[]) {
-      const label = one(l.label);
-      if (!label) continue;
-      labelsBy.set(l.record_id, [...(labelsBy.get(l.record_id) ?? []), label]);
     }
   }
 
@@ -177,7 +144,7 @@ export async function fetchOrganizationRows(
     ownerId: r.owner_id,
     ownerName: one(r.owner)?.full_name ?? "",
     personsCount: counts.get(r.id) ?? 0,
-    labels: (labelsBy.get(r.id) ?? []).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+    labels: labelsBy.get(r.id) ?? [],
     createdAt: r.created_at,
   }));
   return { rows, total: count ?? 0 };

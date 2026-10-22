@@ -26,7 +26,7 @@ begin
   if p_entity = 'persons' then
     select coalesce(array_agg(distinct lower(regexp_replace(x, '\s', '', 'g'))) filter (where x is not null and btrim(x) <> ''), '{}')
       into v_emails from unnest(coalesce(p_emails, '{}')) x;
-    select coalesce(array_agg(distinct regexp_replace(x, '\D', '', 'g')) filter (where regexp_replace(coalesce(x, ''), '\D', '', 'g') <> ''), '{}')
+    select coalesce(array_agg(distinct regexp_replace(regexp_replace(x, '\D', '', 'g'), '^55(?=\d{10,11}$)', '')) filter (where regexp_replace(coalesce(x, ''), '\D', '', 'g') <> ''), '{}')
       into v_phones from unnest(coalesce(p_phones, '{}')) x;
     return query
       select distinct m.kind, pr.full_name, case when public.can_access(p.company_id, 'persons', p.owner_id, 'read') then p.id end
@@ -67,7 +67,7 @@ declare
   n jsonb := to_jsonb(new);
   o jsonb;
   changed text[];
-  skip text[] := array['updated_at', 'deleted_at', 'owner_id'];
+  skip text[] := array['updated_at', 'deleted_at', 'owner_id', 'search_text'];
 begin
   if tg_op = 'INSERT' then
     insert into public.timeline_events (company_id, entity, record_id, kind, actor_id)

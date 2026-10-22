@@ -1,6 +1,7 @@
 import "server-only";
 import type { CompanyScope } from "@/lib/companies/pure";
 import { formatCnpj } from "@/lib/companies/cnpj";
+import { exportInBatches } from "@/lib/records/list-helpers";
 import { formatDate } from "@/lib/records/format";
 import type { ListQuery } from "@/lib/records/types";
 import { fetchOrganizationRows, type OrganizationRow } from "./queries";
@@ -31,19 +32,10 @@ export function organizationExportRow(r: OrganizationRow): Record<string, unknow
   };
 }
 
-const BATCH = 1000;
-const MAX_ROWS = 50_000;
-
-export async function exportOrganizations(
+export function exportOrganizations(
   scope: CompanyScope,
   query: ListQuery,
   companyIds: string[],
 ): Promise<Record<string, unknown>[]> {
-  const out: Record<string, unknown>[] = [];
-  for (let from = 0; from < MAX_ROWS; from += BATCH) {
-    const { rows } = await fetchOrganizationRows(scope, query, { from, to: from + BATCH - 1 }, companyIds);
-    out.push(...rows.map(organizationExportRow));
-    if (rows.length < BATCH) break;
-  }
-  return out;
+  return exportInBatches((range) => fetchOrganizationRows(scope, query, range, companyIds), organizationExportRow);
 }

@@ -269,3 +269,31 @@ test("exportar CSV de pessoas só com permissão", async ({ browser }) => {
   expect(csv).toContain(`Duplicada Ana ${stamp};`);
   await gestor.context().close();
 });
+
+test("busca na lista por e-mail e por telefone", async ({ browser }) => {
+  const gestor = await newPage(browser, emails.gestor);
+  const row = gestor.getByRole("row").filter({ hasText: `Duplicada Ana ${stamp}` });
+
+  await gestor.goto(`/${slugA}/contatos?q=${encodeURIComponent(dupEmail.toUpperCase())}`);
+  await expect(row).toBeVisible();
+  await expect(gestor.getByRole("row").filter({ hasText: `Whats ${stamp}` })).toHaveCount(0);
+
+  const formatted = `(${dupPhone.slice(0, 2)}) ${dupPhone.slice(2, 7)}-${dupPhone.slice(7)}`;
+  await gestor.goto(`/${slugA}/contatos?q=${encodeURIComponent(formatted)}`);
+  await expect(row).toBeVisible();
+  await expect(gestor.getByRole("row").filter({ hasText: `Whats ${stamp}` })).toHaveCount(0);
+
+  await gestor.goto(`/${slugA}/contatos?q=${encodeURIComponent(`+55 ${dupPhone}`)}`);
+  await expect(row).toBeVisible();
+  await gestor.context().close();
+});
+
+test("telefone com +55 acusa duplicidade da forma nacional", async ({ browser }) => {
+  const gestor = await newPage(browser, emails.gestor);
+  await gestor.goto(`/${slugA}/contatos`);
+  await gestor.getByRole("button", { name: "Nova pessoa" }).click();
+  await gestor.getByRole("button", { name: "Adicionar telefone" }).click();
+  await gestor.getByLabel("Telefone 1", { exact: true }).fill(`+55 ${dupPhone}`);
+  await expect(gestor.getByTestId("duplicate-warning")).toContainText("com este telefone");
+  await gestor.context().close();
+});

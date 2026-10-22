@@ -3,33 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth/session";
-import { validateCustomFieldValues } from "@/lib/custom-fields/schema";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import type { DuplicateMatch } from "@/lib/records/duplicates";
-import { listActiveCustomFieldDefs } from "@/lib/records/lookups";
-import { listAssignableOwners } from "@/lib/records/owners";
+import { checkCustomFields, firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import { organizationSchema, normalizeDomain, type OrganizationInput } from "./schema";
 
 const uuid = z.string().uuid();
 
-function firstIssue(err: z.ZodError): { field: string; message: string } {
-  const issue = err.issues[0];
-  const field = issue.path[0] === "address" ? String(issue.path[1] ?? "address") : String(issue.path[0] ?? "name");
-  return { field, message: issue.message };
-}
-
-async function checkCustomFields(
-  companyId: string,
-  values: Record<string, unknown>,
-): Promise<{ ok: true } | { ok: false; error: string; key: string }> {
-  const [defs, owners] = await Promise.all([
-    listActiveCustomFieldDefs(companyId, "organizations"),
-    listAssignableOwners(companyId),
-  ]);
-  const res = validateCustomFieldValues(defs, values, owners.map((o) => o.id));
-  return res.ok ? res : { ok: false, error: res.message, key: res.key };
-}
+const issueField = (path: PropertyKey[]) => (path[0] === "address" ? String(path[1] ?? "address") : undefined);
 
 export async function createOrganization(
   companyId: string,
@@ -40,12 +22,12 @@ export async function createOrganization(
   if (!profile) return { ok: false, error: "Você não tem permissão para esta ação." };
   const parsed = organizationSchema.safeParse(input);
   if (!parsed.success) {
-    const { field, message } = firstIssue(parsed.error);
+    const { field, message } = firstIssue(parsed.error, "name", issueField);
     return { ok: false, error: message, fieldErrors: { [field]: message } };
   }
   const d = parsed.data;
   for (const k of Object.keys(d.customFields)) if (d.customFields[k] === null) delete d.customFields[k];
-  const cf = await checkCustomFields(companyId, d.customFields);
+  const cf = await checkCustomFields(companyId, "organizations", d.customFields);
   if (!cf.ok) return { ok: false, error: cf.error, fieldErrors: { [`cf-${cf.key}`]: cf.error } };
 
   const supabase = await createServerClient();
@@ -74,19 +56,23 @@ export async function updateOrganization(id: string, input: OrganizationInput): 
   if (!uuid.safeParse(id).success) return { ok: false, error: "Dados inválidos." };
   const parsed = organizationSchema.safeParse(input);
   if (!parsed.success) {
-    const { field, message } = firstIssue(parsed.error);
+    const { field, message } = firstIssue(parsed.error, "name", issueField);
     return { ok: false, error: message, fieldErrors: { [field]: message } };
   }
   const d = parsed.data;
   const supabase = await createServerClient();
-  const { data: current } = await supabase
+  const { data: current, error: readError } = await supabase
     .from("organizations")
     .select("company_id, custom_fields")
     .eq("id", id)
     .is("deleted_at", null)
     .maybeSingle();
+  if (readError) {
+    console.error(`[organizations] leitura antes de salvar:`, readError.code, readError.message);
+    return { ok: false, error: "Não foi possível salvar agora. Tente novamente." };
+  }
   if (!current) return { ok: false, error: "Registro não encontrado ou sem permissão." };
-  const cf = await checkCustomFields(current.company_id, d.customFields);
+  const cf = await checkCustomFields(current.company_id, "organizations", d.customFields);
   if (!cf.ok) return { ok: false, error: cf.error, fieldErrors: { [`cf-${cf.key}`]: cf.error } };
 
   const merged = { ...((current.custom_fields ?? {}) as Record<string, unknown>), ...d.customFields };

@@ -18,6 +18,9 @@ describe("format", () => {
   });
   it("normalizePhone e normalizeEmail", () => {
     expect(normalizePhone("(11) 98888-7777")).toBe("11988887777");
+    expect(normalizePhone("+55 11 98888-7777")).toBe("11988887777");
+    expect(normalizePhone("55 11 3333-4444")).toBe("1133334444");
+    expect(normalizePhone("55999990000")).toBe("55999990000");
     expect(normalizeEmail("  Ana@Exemplo.COM ")).toBe("ana@exemplo.com");
   });
 });

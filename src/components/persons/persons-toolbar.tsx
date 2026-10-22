@@ -1,26 +1,9 @@
 "use client";
 
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { Download } from "lucide-react";
+import { ExportLink } from "@/components/records/export-link";
 import { ListFilters, type ListFilterOptions } from "@/components/records/list-filters";
-import { buttonVariants } from "@/components/ui/button";
 import { CreatePersonDialog, type CreatablePersonCompany } from "./create-person-dialog";
-
-function ExportLink({ scopeSlug }: { scopeSlug: string }) {
-  const params = useSearchParams();
-  const next = new URLSearchParams(params.toString());
-  next.delete("page");
-  const qs = next.toString();
-  return (
-    <a
-      href={`/${scopeSlug}/exportar/pessoas${qs ? `?${qs}` : ""}`}
-      className={buttonVariants({ variant: "outline" })}
-    >
-      <Download /> Exportar CSV
-    </a>
-  );
-}
 
 export function PersonsToolbar({
   scopeSlug,
@@ -43,7 +26,7 @@ export function PersonsToolbar({
       <div className="flex items-center gap-2">
         {canExport ? (
           <Suspense>
-            <ExportLink scopeSlug={scopeSlug} />
+            <ExportLink scopeSlug={scopeSlug} segment="pessoas" />
           </Suspense>
         ) : null}
         {creatable.length > 0 ? <CreatePersonDialog options={creatable} askCompany={allCompanies} /> : null}

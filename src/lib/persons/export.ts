@@ -1,5 +1,6 @@
 import "server-only";
 import type { CompanyScope } from "@/lib/companies/pure";
+import { exportInBatches } from "@/lib/records/list-helpers";
 import { formatDate, formatPhone } from "@/lib/records/format";
 import type { ListQuery } from "@/lib/records/types";
 import { fetchPersonRows, type PersonRow } from "./queries";
@@ -30,19 +31,10 @@ export function personExportRow(r: PersonRow): Record<string, unknown> {
   };
 }
 
-const BATCH = 1000;
-const MAX_ROWS = 50_000;
-
-export async function exportPersons(
+export function exportPersons(
   scope: CompanyScope,
   query: ListQuery,
   companyIds: string[],
 ): Promise<Record<string, unknown>[]> {
-  const out: Record<string, unknown>[] = [];
-  for (let from = 0; from < MAX_ROWS; from += BATCH) {
-    const { rows } = await fetchPersonRows(scope, query, { from, to: from + BATCH - 1 }, companyIds);
-    out.push(...rows.map(personExportRow));
-    if (rows.length < BATCH) break;
-  }
-  return out;
+  return exportInBatches((range) => fetchPersonRows(scope, query, range, companyIds), personExportRow);
 }

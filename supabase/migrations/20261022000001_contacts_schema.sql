@@ -185,7 +185,7 @@ begin
   end if;
   if public.is_contact_list(new.phones) then
     new.phones = coalesce((
-      select jsonb_agg(jsonb_set(e, '{value}', to_jsonb(regexp_replace(e->>'value', '\D', '', 'g'))) order by o)
+      select jsonb_agg(jsonb_set(e, '{value}', to_jsonb(regexp_replace(regexp_replace(e->>'value', '\D', '', 'g'), '^55(?=\d{10,11}$)', ''))) order by o)
       from jsonb_array_elements(new.phones) with ordinality as t(e, o)
     ), '[]'::jsonb);
   end if;

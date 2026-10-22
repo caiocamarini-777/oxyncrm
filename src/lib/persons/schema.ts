@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { normalizePhone } from "@/lib/records/format";
 
 export const CONTACT_LABELS = ["Trabalho", "Pessoal", "Celular", "Outro"] as const;
 export type ContactLabel = (typeof CONTACT_LABELS)[number];
 export type ContactEntry = { label: ContactLabel; value: string };
 
 const labelSchema = z.enum(CONTACT_LABELS, { message: "Rótulo inválido." });
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 /** Linhas em branco (valor vazio) são descartadas antes de validar. */
 function dropBlank(v: unknown): unknown {
@@ -48,8 +49,11 @@ const phonesSchema = z
           label: labelSchema,
           value: z
             .string()
-            .transform((v) => v.replace(/\D/g, ""))
-            .refine((v) => v.length >= 10 && v.length <= 13, "Telefone deve ter de 10 a 13 dígitos."),
+            .refine((v) => {
+              const n = v.replace(/\D/g, "").length;
+              return n >= 10 && n <= 13;
+            }, "Telefone deve ter de 10 a 13 dígitos.")
+            .transform((v) => normalizePhone(v)),
         }),
       )
       .max(10, "Use no máximo 10 telefones."),

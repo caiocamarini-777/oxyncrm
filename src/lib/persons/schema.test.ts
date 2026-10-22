@@ -40,6 +40,18 @@ describe("personSchema", () => {
     expect(personSchema.safeParse({ ...base, phones: [{ label: "Outro", value: "12345678901234" }] }).success).toBe(false);
     expect(personSchema.safeParse({ ...base, phones: [{ label: "Outro", value: "+55 11 99999-0000" }] }).success).toBe(true);
   });
+  it("+55 e forma nacional são o mesmo telefone", () => {
+    const r = personSchema.parse({ ...base, phones: [{ label: "Celular", value: "+55 11 99999-0000" }] });
+    expect(r.phones).toEqual([{ label: "Celular", value: "11999990000" }]);
+    const dup = personSchema.safeParse({
+      ...base,
+      phones: [
+        { label: "Celular", value: "+55 11 99999-0000" },
+        { label: "Outro", value: "(11) 99999-0000" },
+      ],
+    });
+    expect(dup.success).toBe(false);
+  });
   it("rejeita telefone repetido depois de normalizar", () => {
     const r = personSchema.safeParse({
       ...base,

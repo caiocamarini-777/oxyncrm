@@ -1,13 +1,26 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 import type { CompanyScope } from "@/lib/companies/pure";
-import type { LabelColor } from "@/lib/custom-fields/schema";
+import { normalizePhone } from "@/lib/records/format";
+import {
+  endOfDay,
+  fail as failFor,
+  idsByLabels as idsByLabelsFor,
+  loadRecordLabels,
+  one,
+  safeTerm,
+  startOfDay,
+  type LabelRef,
+  type Rel,
+} from "@/lib/records/list-helpers";
 import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
+
+const fail = (what: string, error: { message: string; code?: string }) => failFor("persons", what, error);
 import type { ContactEntry } from "./schema";
 
 export const PERSON_SORTS = ["full_name", "job_title", "created_at"];
 
-export type PersonLabel = { id: string; name: string; color: LabelColor };
+export type PersonLabel = LabelRef;
 
 export type PersonRow = {
   id: string;
@@ -52,7 +65,6 @@ export type PersonDetail = {
 const LIST_SELECT =
   "id, company_id, full_name, job_title, emails, phones, owner_id, created_at, company:companies(name, slug), owner:profiles!owner_id(full_name), organization:organizations(id, name, deleted_at)";
 
-type Rel<T> = T | T[] | null;
 type RawRow = {
   id: string;
   company_id: string;
@@ -67,41 +79,13 @@ type RawRow = {
   organization: Rel<{ id: string; name: string; deleted_at: string | null }>;
 };
 
-function one<T>(v: Rel<T>): T | null {
-  return Array.isArray(v) ? (v[0] ?? null) : v;
-}
-
-/** Registra no servidor e interrompe: falha de consulta não pode virar "sem resultados". */
-function fail(what: string, error: { message: string; code?: string }): never {
-  console.error(`[persons] ${what}:`, error.code, error.message);
-  throw new Error(`Falha ao carregar pessoas (${what}).`);
-}
-
-function safeTerm(q: string): string {
-  return q.replace(/[,()*%\\"]/g, " ").replace(/\s+/g, " ").trim();
-}
-const startOfDay = (d: string) => `${d}T00:00:00-03:00`;
-const endOfDay = (d: string) => `${d}T23:59:59.999-03:00`;
-
-async function idsByLabels(labels: string[]): Promise<string[] | null> {
-  if (labels.length === 0) return null;
-  const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from("record_labels")
-    .select("record_id")
-    .eq("entity", "persons")
-    .in("label_id", labels);
-  if (error) fail("filtro de etiquetas", error);
-  return [...new Set((data ?? []).map((r) => r.record_id as string))];
-}
-
 export async function fetchPersonRows(
   scope: CompanyScope,
   query: ListQuery,
   range: { from: number; to: number },
   companyIds?: string[],
 ): Promise<{ rows: PersonRow[]; total: number }> {
-  const labelIds = await idsByLabels(query.label);
+  const labelIds = await idsByLabelsFor("persons", query.label);
   if (labelIds && labelIds.length === 0) return { rows: [], total: 0 };
 
   const supabase = await createServerClient();
@@ -113,7 +97,15 @@ export async function fetchPersonRows(
   if (query.createdFrom) q = q.gte("created_at", startOfDay(query.createdFrom));
   if (query.createdTo) q = q.lte("created_at", endOfDay(query.createdTo));
   const term = safeTerm(query.q);
-  if (term) q = q.or([`full_name.ilike.%${term}%`, `job_title.ilike.%${term}%`].join(","));
+  if (term) {
+    // search_text: nome, cargo, e-mails e telefones (só dígitos), em minúsculas.
+    const lower = term.toLowerCase();
+    const parts = [`search_text.ilike.%${lower}%`];
+    // Variante só com dígitos apenas se o termo parece telefone (sem letras nem @).
+    const digits = normalizePhone(term);
+    if (/^[\d\s().+-]+$/.test(term) && digits.length >= 4 && digits !== lower) parts.push(`search_text.ilike.%${digits}%`);
+    q = q.or(parts.join(","));
+  }
   const sort = PERSON_SORTS.includes(query.sort) ? query.sort : "created_at";
   q = q.order(sort, { ascending: query.dir === "asc", nullsFirst: false }).order("id");
   const { data, count, error } = await q.range(range.from, range.to);
@@ -121,21 +113,7 @@ export async function fetchPersonRows(
   if (error) fail("lista", error);
 
   const raw = (data ?? []) as unknown as RawRow[];
-  const ids = raw.map((r) => r.id);
-  const labelsBy = new Map<string, PersonLabel[]>();
-  if (ids.length > 0) {
-    const links = await supabase
-      .from("record_labels")
-      .select("record_id, label:labels(id, name, color)")
-      .eq("entity", "persons")
-      .in("record_id", ids);
-    if (links.error) fail("etiquetas", links.error);
-    for (const l of (links.data ?? []) as unknown as { record_id: string; label: Rel<PersonLabel> }[]) {
-      const label = one(l.label);
-      if (!label) continue;
-      labelsBy.set(l.record_id, [...(labelsBy.get(l.record_id) ?? []), label]);
-    }
-  }
+  const labelsBy = await loadRecordLabels("persons", raw.map((r) => r.id));
 
   const rows: PersonRow[] = raw.map((r) => {
     const org = one(r.organization);
@@ -151,7 +129,7 @@ export async function fetchPersonRows(
       primaryPhone: r.phones?.[0]?.value ?? null,
       ownerId: r.owner_id,
       ownerName: one(r.owner)?.full_name ?? "",
-      labels: (labelsBy.get(r.id) ?? []).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+      labels: labelsBy.get(r.id) ?? [],
       createdAt: r.created_at,
     };
   });

@@ -48,8 +48,15 @@ export function OrganizationCombobox({
   async function create() {
     setBusy(true);
     setError(null);
-    const res = await createOrganization(companyId, { name: newName });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof createOrganization>>;
+    try {
+      res = await createOrganization(companyId, { name: newName });
+    } catch {
+      setError("Não foi possível criar a organização. Tente novamente.");
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       setError(res.error);
       return;

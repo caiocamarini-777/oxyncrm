@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label";
 import type { CustomFieldDef } from "@/lib/custom-fields/schema";
 import type { ActionResult } from "@/lib/db-errors";
 import { findPersonDuplicates } from "@/lib/persons/actions";
-import type { ContactEntry, PersonInput } from "@/lib/persons/schema";
+import { EMAIL_RE, type ContactEntry, type PersonInput } from "@/lib/persons/schema";
+import { normalizePhone } from "@/lib/records/format";
 import { recordHref, type AssignableOwner } from "@/lib/records/types";
 import { ContactListEditor, type ContactRow } from "./contact-list-editor";
 import { OrganizationCombobox, type OrganizationOption } from "./organization-combobox";
@@ -24,8 +25,6 @@ export type PersonFormValues = {
   linkedinUrl: string | null;
   customFields: Record<string, unknown>;
 };
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 function indexedErrors(errors: Record<string, string>, prefix: string): Record<number, string | undefined> {
   const out: Record<number, string | undefined> = {};
@@ -77,7 +76,7 @@ export function PersonForm({
   const [pending, startTransition] = useTransition();
 
   const validEmails = emails.map((e) => e.value.trim().toLowerCase()).filter((v) => EMAIL_RE.test(v));
-  const validPhones = phones.map((p) => p.value.replace(/\D/g, "")).filter((v) => v.length >= 10 && v.length <= 13);
+  const validPhones = phones.map((p) => normalizePhone(p.value)).filter((v) => v.length >= 10 && v.length <= 13);
   const matches = useDuplicateMatches(`${validEmails.join(",")}|${validPhones.join(",")}`, async () => {
     if (validEmails.length === 0 && validPhones.length === 0) return [];
     const res = await findPersonDuplicates(companyId, { emails: validEmails, phones: validPhones }, excludeId);

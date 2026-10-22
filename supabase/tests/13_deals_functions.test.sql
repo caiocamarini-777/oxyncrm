@@ -1,5 +1,5 @@
 begin;
-select plan(110);
+select plan(122);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -61,7 +61,8 @@ insert into custom_field_defs (company_id, entity, key, label, type) values
 insert into products (id, company_id, name, kind, active) values
   ('00000000-0000-4000-8000-0000000000a4', '00000000-0000-4000-8000-0000000000d1', 'tst-recorrente', 'recurring', true),
   ('00000000-0000-4000-8000-0000000000a5', '00000000-0000-4000-8000-0000000000d1', 'tst-implantacao', 'setup', true),
-  ('00000000-0000-4000-8000-0000000000a6', '00000000-0000-4000-8000-0000000000d1', 'tst-inativo', 'recurring', false);
+  ('00000000-0000-4000-8000-0000000000a6', '00000000-0000-4000-8000-0000000000d1', 'tst-inativo', 'recurring', false),
+  ('00000000-0000-4000-8000-0000000000a9', '00000000-0000-4000-8000-0000000000d2', 'tst-naia-inativo', 'setup', false);
 insert into lost_reasons (id, company_id, name) values ('00000000-0000-4000-8000-0000000000a7', '00000000-0000-4000-8000-0000000000d1', 'tst-motivo');
 insert into disqualification_reasons (id, company_id, name) values ('00000000-0000-4000-8000-0000000000a8', '00000000-0000-4000-8000-0000000000d1', 'tst-desq');
 insert into labels (id, company_id, name, color) values
@@ -129,6 +130,23 @@ insert into deal_items (id, deal_id, company_id, product_id, quantity, unit_pric
 select set_config('oxyn.items_recalc', 'on', true);
 select throws_ok($$ update deals set mrr = 1 where id = '00000000-0000-4000-8000-000000000d11' $$, 'P0001', 'OXYN_TOTALS_FROM_ITEMS', 'a flag sozinha não libera totais manuais');
 select set_config('oxyn.items_recalc', 'off', true);
+select throws_ok($$ update deal_items set product_id = '00000000-0000-4000-8000-0000000000a5' where id = '00000000-0000-4000-8000-000000000e04' $$, 'P0001', 'OXYN_FORBIDDEN_FIELD', 'produto do item não muda');
+select throws_ok($$ insert into deal_items (deal_id, company_id, product_id, quantity, unit_price) values ('00000000-0000-4000-8000-000000000d11', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000a9', 1, 10) $$,
+  'P0001', 'OXYN_CROSS_COMPANY', 'produto de outra empresa (mesmo inativo) dá OXYN_CROSS_COMPANY');
+
+-- totais por tipo: só o tipo com itens é calculado
+insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, setup_total, setup_first_due, mrr_start, contract_months) values
+  ('00000000-0000-4000-8000-000000000d30', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'tst-neg-por-tipo', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2', 30000, '2026-05-01', '2026-05-01', 12);
+insert into deal_items (id, deal_id, company_id, product_id, quantity, unit_price) values
+  ('00000000-0000-4000-8000-000000000e30', '00000000-0000-4000-8000-000000000d30', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000a4', 2, 1500);
+select results_eq($$ select setup_total, mrr from deals where id = '00000000-0000-4000-8000-000000000d30' $$, $$ values (30000::numeric, 3000::numeric) $$,
+  'item recorrente não apaga o setup digitado; MRR vem dos itens');
+select lives_ok($$ update deals set setup_total = 25000 where id = '00000000-0000-4000-8000-000000000d30' $$, 'setup sem itens de implantação continua editável');
+select throws_ok($$ update deals set mrr = 1 where id = '00000000-0000-4000-8000-000000000d30' $$, 'P0001', 'OXYN_TOTALS_FROM_ITEMS', 'MRR com itens recorrentes é bloqueado');
+delete from deal_items where id = '00000000-0000-4000-8000-000000000e30';
+select results_eq($$ select setup_total, mrr from deals where id = '00000000-0000-4000-8000-000000000d30' $$, $$ values (25000::numeric, 0::numeric) $$,
+  'remover o último item recorrente zera só o MRR');
+select lives_ok($$ update deals set mrr = 800 where id = '00000000-0000-4000-8000-000000000d30' $$, 'sem itens recorrentes, MRR volta a ser editável');
 
 -- D. campos obrigatórios -----------------------------------------------------
 insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id) values
@@ -223,6 +241,9 @@ insert into leads (id, company_id, owner_id, title, person_id, organization_id, 
   ('00000000-0000-4000-8000-000000000c05', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'tst-lead-titulo', null, null, null),
   ('00000000-0000-4000-8000-000000000c06', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'tst-lead-transicoes', null, null, null);
 update leads set deleted_at = now() where id = '00000000-0000-4000-8000-000000000c04';
+insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, position) values
+  ('00000000-0000-4000-8000-000000000d31', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'tst-neg-lixeira-pos', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2', 999999);
+update deals set deleted_at = now() where id = '00000000-0000-4000-8000-000000000d31';
 insert into record_labels (label_id, entity, record_id) values
   ('00000000-0000-4000-8000-0000000000f1', 'leads', '00000000-0000-4000-8000-000000000c01'), ('00000000-0000-4000-8000-0000000000f1', 'organizations', '00000000-0000-4000-8000-000000000b01'), ('00000000-0000-4000-8000-0000000000f1', 'persons', '00000000-0000-4000-8000-000000000a01');
 
@@ -250,6 +271,7 @@ select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c05', 
 select throws_ok($$ update leads set converted_deal_id = null where id = '00000000-0000-4000-8000-000000000c01' $$, 'P0001', 'OXYN_FORBIDDEN_FIELD', 'converted_deal_id não muda fora de convert_lead');
 select lives_ok($$ select set_config('tst.deal2', convert_lead('00000000-0000-4000-8000-000000000c05', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2', 'tst-titulo-custom')::text, true) $$, 'conversão com título próprio');
 select is((select title from deals where id = current_setting('tst.deal2')::uuid), 'tst-titulo-custom', 'usa p_title');
+select is((select position from deals where id = current_setting('tst.deal2')::uuid), 2048::numeric, 'conversão entra no fim da etapa, ignorando a lixeira');
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
 select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c02', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b1') $$, 'P0001', 'OXYN_REQUIRED_FIELDS', 'respeita campos obrigatórios da etapa');
 select is((select status from leads where id = '00000000-0000-4000-8000-000000000c02'), 'open', 'lead continua aberto após erro');
@@ -282,7 +304,10 @@ select lives_ok($$ update leads set status = 'archived' where id = '00000000-000
 select throws_ok($$ update leads set status = 'disqualified', disqualification_reason_id = '00000000-0000-4000-8000-0000000000a8' where id = '00000000-0000-4000-8000-000000000c06' $$, 'P0001', 'OXYN_INVALID_TRANSITION', 'archived para disqualified');
 select lives_ok($$ update leads set status = 'open' where id = '00000000-0000-4000-8000-000000000c06' $$, 'archived para open');
 select lives_ok($$ update leads set status = 'disqualified', disqualification_reason_id = '00000000-0000-4000-8000-0000000000a8' where id = '00000000-0000-4000-8000-000000000c06' $$, 'open para disqualified');
-select throws_ok($$ update leads set status = 'archived' where id = '00000000-0000-4000-8000-000000000c06' $$, 'P0001', 'OXYN_INVALID_TRANSITION', 'disqualified para archived');
+select lives_ok($$ update leads set status = 'archived' where id = '00000000-0000-4000-8000-000000000c06' $$, 'disqualified para archived');
+select is((select status from leads where id = '00000000-0000-4000-8000-000000000c06'), 'archived', 'lead desqualificado arquivado');
+select lives_ok($$ update leads set status = 'open' where id = '00000000-0000-4000-8000-000000000c06' $$, 'archived para open');
+update leads set status = 'disqualified', disqualification_reason_id = '00000000-0000-4000-8000-0000000000a8' where id = '00000000-0000-4000-8000-000000000c06';
 select lives_ok($$ update leads set status = 'open' where id = '00000000-0000-4000-8000-000000000c06' $$, 'disqualified para open');
 select throws_ok($$ update leads set status = 'open' where id = '00000000-0000-4000-8000-000000000c01' $$, 'P0001', 'OXYN_INVALID_TRANSITION', 'converted não reabre');
 
@@ -326,6 +351,11 @@ update stages set archived_at = now() where id = '00000000-0000-4000-8000-000000
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c2');
 select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c07', '00000000-0000-4000-8000-0000000000a2', '00000000-0000-4000-8000-0000000000b4') $$, 'P0001', 'OXYN_PIPELINE_ARCHIVED', 'funil arquivado não recebe conversão');
 select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c08', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b3') $$, 'P0001', 'OXYN_STAGE_ARCHIVED', 'etapa arquivada não recebe conversão');
+select pg_temp.as_pg();
+select throws_ok($$ insert into deals (company_id, owner_id, title, pipeline_id, stage_id) values ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'x', '00000000-0000-4000-8000-0000000000a2', '00000000-0000-4000-8000-0000000000b4') $$,
+  'P0001', 'OXYN_PIPELINE_ARCHIVED', 'funil arquivado não recebe negócio novo');
+select throws_ok($$ update deals set pipeline_id = '00000000-0000-4000-8000-0000000000a2', stage_id = '00000000-0000-4000-8000-0000000000b4' where id = '00000000-0000-4000-8000-000000000d14' $$,
+  'P0001', 'OXYN_PIPELINE_ARCHIVED', 'negócio não muda para funil arquivado');
 
 -- M. filtros por etiqueta são expandidos em linha (sem SET na função)
 select pg_temp.as_pg();

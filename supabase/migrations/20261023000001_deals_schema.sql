@@ -262,7 +262,8 @@ create function public.deal_item_kind() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if tg_op = 'INSERT' then
-    select kind into new.kind from public.products where id = new.product_id;
+    -- produto de outra empresa: kind fica nulo e guard_same_company levanta OXYN_CROSS_COMPANY
+    select kind into new.kind from public.products where id = new.product_id and company_id = new.company_id;
   elsif new.kind is distinct from old.kind then
     raise exception 'OXYN_FORBIDDEN_FIELD';
   end if;

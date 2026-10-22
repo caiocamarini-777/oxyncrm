@@ -54,7 +54,9 @@ create trigger deals_regenerate_schedule
 create function public.deal_item_product_active() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
-  if not coalesce((select active from public.products where id = new.product_id), true) then
+  -- produto de outra empresa: não opina; guard_same_company levanta OXYN_CROSS_COMPANY
+  if not coalesce((select active from public.products
+                   where id = new.product_id and company_id = new.company_id), true) then
     raise exception 'OXYN_PRODUCT_INACTIVE';
   end if;
   return new;
@@ -68,17 +70,26 @@ declare
   v_deal uuid := case when tg_op = 'DELETE' then old.deal_id else new.deal_id end;
   v_setup numeric;
   v_mrr numeric;
-  v_count bigint;
+  v_setup_items bigint;
+  v_mrr_items bigint;
+  v_set_setup boolean;
+  v_set_mrr boolean;
 begin
-  select coalesce(sum(total) filter (where kind = 'setup'), 0),
-         coalesce(sum(total) filter (where kind = 'recurring'), 0), count(*)
-    into v_setup, v_mrr, v_count
+  select coalesce(sum(total) filter (where kind = 'setup'), 0), count(*) filter (where kind = 'setup'),
+         coalesce(sum(total) filter (where kind = 'recurring'), 0), count(*) filter (where kind = 'recurring')
+    into v_setup, v_setup_items, v_mrr, v_mrr_items
   from public.deal_items where deal_id = v_deal;
-  if v_count > 0 or tg_op = 'DELETE' then
-    -- sem itens restantes, os totais que vinham deles voltam a zero (sempre válido para os CHECKs)
+  -- cada tipo é calculado só quando tem itens; um tipo sem itens mantém o valor digitado.
+  -- remover o último item de um tipo zera só aquele tipo (sempre válido para os CHECKs).
+  v_set_setup := v_setup_items > 0 or (tg_op = 'DELETE' and old.kind = 'setup');
+  v_set_mrr := v_mrr_items > 0 or (tg_op = 'DELETE' and old.kind = 'recurring');
+  if v_set_setup or v_set_mrr then
     perform set_config('oxyn.items_recalc', 'on', true);
-    update public.deals set setup_total = v_setup, mrr = v_mrr
-      where id = v_deal and (setup_total, mrr) is distinct from (v_setup, v_mrr);
+    update public.deals
+       set setup_total = case when v_set_setup then v_setup else setup_total end,
+           mrr = case when v_set_mrr then v_mrr else mrr end
+     where id = v_deal
+       and ((v_set_setup and setup_total is distinct from v_setup) or (v_set_mrr and mrr is distinct from v_mrr));
     perform set_config('oxyn.items_recalc', 'off', true);
   end if;
   return null;
@@ -89,9 +100,14 @@ create trigger deal_items_recalc after insert or update or delete on public.deal
 create function public.deals_totals_guard() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
-  if (new.setup_total is distinct from old.setup_total or new.mrr is distinct from old.mrr)
-     and not (coalesce(current_setting('oxyn.items_recalc', true), '') = 'on' and pg_trigger_depth() > 1)
-     and exists (select 1 from public.deal_items where deal_id = new.id) then
+  if coalesce(current_setting('oxyn.items_recalc', true), '') = 'on' and pg_trigger_depth() > 1 then
+    return new;
+  end if;
+  -- só o tipo que tem itens é calculado; o outro continua editável
+  if (new.setup_total is distinct from old.setup_total
+      and exists (select 1 from public.deal_items where deal_id = new.id and kind = 'setup'))
+     or (new.mrr is distinct from old.mrr
+      and exists (select 1 from public.deal_items where deal_id = new.id and kind = 'recurring')) then
     raise exception 'OXYN_TOTALS_FROM_ITEMS';
   end if;
   return new;
@@ -112,6 +128,12 @@ declare
 begin
   if tg_op = 'UPDATE' and new.stage_id is not distinct from old.stage_id then
     return new;
+  end if;
+  -- funil arquivado não recebe negócios (criação ou troca de funil)
+  if (tg_op = 'INSERT' or new.pipeline_id is distinct from old.pipeline_id)
+     and exists (select 1 from public.pipelines
+                 where id = new.pipeline_id and company_id = new.company_id and archived_at is not null) then
+    raise exception 'OXYN_PIPELINE_ARCHIVED';
   end if;
   -- etapa de outra empresa/funil: não lê os requisitos; guard_same_company levanta OXYN_CROSS_COMPANY
   select required_fields, archived_at is not null into req, v_archived from public.stages
@@ -395,6 +417,7 @@ begin
   end if;
   if new.status is distinct from old.status then
     if not ((old.status = 'open' and new.status in ('disqualified', 'archived'))
+         or (old.status = 'disqualified' and new.status = 'archived')
          or (old.status in ('disqualified', 'archived') and new.status = 'open')
          or (old.status = 'open' and new.status = 'converted' and converting)) then
       raise exception 'OXYN_INVALID_TRANSITION';
@@ -422,6 +445,7 @@ language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   l public.leads%rowtype;
   v_deal uuid;
+  v_position numeric;
 begin
   if auth.uid() is null then
     raise exception 'insufficient_privilege' using errcode = '42501';
@@ -435,7 +459,8 @@ begin
     raise exception 'insufficient_privilege' using errcode = '42501';
   end if;
   select * into l from public.leads where id = p_lead for update;
-  if exists (select 1 from public.pipelines where id = p_pipeline and archived_at is not null) then
+  if exists (select 1 from public.pipelines
+             where id = p_pipeline and company_id = l.company_id and archived_at is not null) then
     raise exception 'OXYN_PIPELINE_ARCHIVED';
   end if;
   if l.deleted_at is not null or l.status <> 'open' then
@@ -445,10 +470,14 @@ begin
     raise exception 'OXYN_OWNER_NOT_MEMBER';
   end if;
 
+  -- entra no fim da etapa (negócios na lixeira não contam)
+  select coalesce(max(position), 0) + 1024 into v_position
+  from public.deals where stage_id = p_stage and company_id = l.company_id and deleted_at is null;
+
   insert into public.deals (company_id, owner_id, title, pipeline_id, stage_id, person_id, organization_id,
-                            estimated_value, lead_id)
+                            estimated_value, lead_id, position)
   values (l.company_id, l.owner_id, coalesce(nullif(btrim(p_title), ''), l.title), p_pipeline, p_stage,
-          l.person_id, l.organization_id, l.estimated_value, l.id)
+          l.person_id, l.organization_id, l.estimated_value, l.id, v_position)
   returning id into v_deal;
 
   insert into public.record_labels (label_id, entity, record_id)
@@ -465,7 +494,9 @@ end $$;
 revoke execute on function public.convert_lead(uuid, uuid, uuid, text) from public, anon;
 grant execute on function public.convert_lead(uuid, uuid, uuid, text) to authenticated;
 
--- Filtros por etiqueta (EXISTS correlacionado: o PostgREST não expande a função em linha e a forma com IN + GROUP BY ficava linear por linha sob RLS) (security invoker: o RLS filtra; sem SET na função para o planner poder expandi-la em linha) ------------------------------------------------
+-- Filtros por etiqueta: semântica TODAS as etiquetas; array vazio ou nulo devolve tudo.
+-- Security invoker (o RLS filtra) e sem SET na função, para o planner poder expandi-la em linha.
+-- O filtro é um EXISTS correlacionado com HAVING, que fica barato por linha sob RLS.
 
 create function public.organizations_with_labels(p_label_ids uuid[]) returns setof public.organizations
 language sql stable security invoker as $$

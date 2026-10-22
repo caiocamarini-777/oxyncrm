@@ -103,7 +103,7 @@ create trigger guard_company_immutable before update on public.products
 create trigger guard_company_immutable before update on public.deal_items
   for each row execute function public.guard_company_immutable();
 
--- Vínculos imutáveis: etapa não muda de funil, item não muda de negócio.
+-- Vínculos imutáveis: etapa não muda de funil, item não muda de negócio nem de produto.
 create function public.guard_fk_immutable() returns trigger
 language plpgsql set search_path = public, pg_temp as $$
 begin
@@ -111,7 +111,7 @@ begin
     if new.pipeline_id is distinct from old.pipeline_id then
       raise exception 'OXYN_FORBIDDEN_FIELD';
     end if;
-  elsif new.deal_id is distinct from old.deal_id then
+  elsif new.deal_id is distinct from old.deal_id or new.product_id is distinct from old.product_id then
     raise exception 'OXYN_FORBIDDEN_FIELD';
   end if;
   return new;

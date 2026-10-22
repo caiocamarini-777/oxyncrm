@@ -39,3 +39,14 @@ export function formatPhone(v: string): string {
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return d;
 }
+
+/**
+ * Texto BRL ("1.500,25" / "1500.25") para número; vazio vira null; ilegível vira NaN.
+ * Com vírgula, o ponto é separador de milhar; sem vírgula, o ponto é decimal.
+ */
+export function parseBRL(raw: string): number | null {
+  const v = raw.trim();
+  const t = v.includes(",") ? v.replace(/\./g, "").replace(",", ".") : v;
+  if (t === "") return null;
+  return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : Number.NaN;
+}

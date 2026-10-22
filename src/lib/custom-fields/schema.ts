@@ -21,13 +21,14 @@ export const CUSTOM_FIELD_TYPE_LABELS: Record<CustomFieldType, string> = {
   user: "Usuário",
 };
 
-export const CUSTOM_FIELD_ENTITIES_PHASE2 = ["organizations", "persons", "leads"] as const;
+export const CUSTOM_FIELD_ENTITIES_PHASE2 = ["organizations", "persons", "leads", "deals"] as const;
 export type CustomFieldEntity = (typeof CUSTOM_FIELD_ENTITIES_PHASE2)[number];
 
 export const CUSTOM_FIELD_ENTITY_LABELS: Record<CustomFieldEntity, string> = {
   organizations: "Organizações",
   persons: "Pessoas",
   leads: "Leads",
+  deals: "Negócios",
 };
 
 export const LABEL_COLORS = ["teal", "blue", "green", "red", "gray", "purple"] as const;

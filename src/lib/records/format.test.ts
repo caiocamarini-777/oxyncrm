@@ -24,3 +24,15 @@ describe("format", () => {
     expect(normalizeEmail("  Ana@Exemplo.COM ")).toBe("ana@exemplo.com");
   });
 });
+
+import { parseBRL } from "./format";
+
+describe("parseBRL", () => {
+  it("interpreta formatos BRL", () => {
+    expect(parseBRL("1.500,25")).toBe(1500.25);
+    expect(parseBRL("1500,5")).toBe(1500.5);
+    expect(parseBRL("1500.25")).toBe(1500.25);
+    expect(parseBRL(" ")).toBeNull();
+    expect(parseBRL("abc")).toBeNaN();
+  });
+});

@@ -6,10 +6,10 @@ import { requireSuperAdmin } from "@/lib/auth/session";
 import { createServerClient } from "@/lib/supabase/server";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 
-export type ListKind = "source" | "reason";
+export type ListKind = "source" | "reason" | "lost_reason";
 
-const TABLES = { source: "lead_sources", reason: "disqualification_reasons" } as const;
-const PATHS = { source: "/configuracoes/origens", reason: "/configuracoes/motivos" } as const;
+const TABLES = { source: "lead_sources", reason: "disqualification_reasons", lost_reason: "lost_reasons" } as const;
+const PATHS = { source: "/configuracoes/origens", reason: "/configuracoes/motivos", lost_reason: "/configuracoes/motivos-perda" } as const;
 
 const nameSchema = z.string().trim().min(1, "Informe o nome.").max(80, "Use no máximo 80 caracteres.");
 
@@ -23,7 +23,7 @@ function dbFailure(err: { code?: string; message?: string }): ActionResult<never
 }
 
 function validKind(kind: string): kind is ListKind {
-  return kind === "source" || kind === "reason";
+  return kind === "source" || kind === "reason" || kind === "lost_reason";
 }
 
 export async function createListItem(

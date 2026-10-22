@@ -2,6 +2,8 @@ import "server-only";
 import type { CompanyScope } from "@/lib/companies/pure";
 import { ORGANIZATION_SORTS } from "@/lib/organizations/queries";
 import { ORGANIZATION_EXPORT_COLUMNS, exportOrganizations } from "@/lib/organizations/export";
+import { PERSON_SORTS } from "@/lib/persons/queries";
+import { PERSON_EXPORT_COLUMNS, exportPersons } from "@/lib/persons/export";
 import type { ListQuery, RecordEntity } from "./types";
 
 export type EntityExporter = {
@@ -30,5 +32,11 @@ export const EXPORTERS: Partial<Record<RecordEntity, EntityExporter>> = {
     allowedSorts: ORGANIZATION_SORTS,
     columns: ORGANIZATION_EXPORT_COLUMNS,
     fetchRows: exportOrganizations,
+  },
+  persons: {
+    filePrefix: "pessoas",
+    allowedSorts: PERSON_SORTS,
+    columns: PERSON_EXPORT_COLUMNS,
+    fetchRows: exportPersons,
   },
 };

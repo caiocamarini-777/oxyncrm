@@ -7,14 +7,16 @@ import { cn } from "@/lib/utils";
 /** Abas da área Contatos. */
 export function ContactsTabs({ scopeSlug }: { scopeSlug: string }) {
   const pathname = usePathname();
+  // A lista de pessoas é a própria raiz de /contatos; o detalhe fica em /contatos/pessoas/[id].
+  const base = `/${scopeSlug}/contatos`;
   const tabs = [
-    { label: "Pessoas", href: `/${scopeSlug}/contatos/pessoas` },
-    { label: "Organizações", href: `/${scopeSlug}/contatos/organizacoes` },
+    { label: "Pessoas", href: base, also: `${base}/pessoas` },
+    { label: "Organizações", href: `${base}/organizacoes`, also: `${base}/organizacoes` },
   ];
   return (
     <nav aria-label="Contatos" className="flex gap-1 border-b">
       {tabs.map((t) => {
-        const active = pathname === t.href || pathname.startsWith(`${t.href}/`);
+        const active = pathname === t.href || pathname.startsWith(`${t.also}/`);
         return (
           <Link
             key={t.href}

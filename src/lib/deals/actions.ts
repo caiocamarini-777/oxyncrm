@@ -202,8 +202,9 @@ export async function getDealEditSnapshot(id: string): Promise<DealResult<DealEd
  * Move para a etapa/posição. Falta de campos obrigatórios da etapa de destino volta como
  * `{ ok: false, missing }` (chaves de `required.ts`) junto com o texto traduzido.
  */
-export async function moveDeal(id: string, stageId: string, position: number): Promise<DealResult> {
-  if (!uuid.safeParse(id).success || !uuid.safeParse(stageId).success || !Number.isFinite(position)) return INVALID;
+export async function moveDeal(id: string, stageId: string, position?: number): Promise<DealResult> {
+  if (!uuid.safeParse(id).success || !uuid.safeParse(stageId).success) return INVALID;
+  if (position !== undefined && !Number.isFinite(position)) return INVALID;
   const profile = await getCurrentProfile();
   if (!profile) return { ok: false, error: NO_PERMISSION };
   const supabase = await createServerClient();
@@ -215,10 +216,25 @@ export async function moveDeal(id: string, stageId: string, position: number): P
   if (!stage.data || !deal.data || stage.data.company_id !== deal.data.company_id) {
     return { ok: false, error: "Etapa não encontrada." };
   }
+  // Sem posição: fim da etapa de destino (maior posição + 1024, ou 0 se vazia).
+  let target = position;
+  if (target === undefined) {
+    const last = await supabase
+      .from("deals")
+      .select("position")
+      .eq("stage_id", stageId)
+      .neq("id", id)
+      .is("deleted_at", null)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (last.error) return { ok: false, error: SAVE_FAILED };
+    target = last.data ? Number(last.data.position) + 1024 : 0;
+  }
   // A etapa pode ser de outro funil da mesma empresa: funil e etapa mudam juntos.
   const { data, error } = await supabase
     .from("deals")
-    .update({ pipeline_id: stage.data.pipeline_id, stage_id: stageId, position })
+    .update({ pipeline_id: stage.data.pipeline_id, stage_id: stageId, position: target })
     .eq("id", id)
     .is("deleted_at", null)
     .eq("status", "open")

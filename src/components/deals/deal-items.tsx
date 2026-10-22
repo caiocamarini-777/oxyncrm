@@ -94,10 +94,13 @@ export function DealItems({
         return;
       }
       router.refresh();
+      let undoing = false;
       toast.success("Produto removido.", {
         action: {
           label: "Desfazer",
           onClick: async () => {
+            if (undoing) return;
+            undoing = true;
             const back = await addDealItem(deal.id, {
               productId: item.productId,
               quantity: item.quantity,
@@ -105,7 +108,10 @@ export function DealItems({
               discount: item.discount,
             });
             if (back.ok) router.refresh();
-            else toast.error(back.error);
+            else {
+              undoing = false;
+              toast.error(back.error);
+            }
           },
         },
       });

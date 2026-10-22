@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { RequiredFieldsDialog } from "@/components/deals/required-fields-dialog";
 import type { CustomFieldDef } from "@/lib/custom-fields/schema";
 import { getDealEditSnapshot, moveDeal, type DealEditSnapshot } from "@/lib/deals/actions";
-import { endPosition } from "@/lib/deals/kanban";
 import type { AssignableOwner } from "@/lib/records/types";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +45,7 @@ export function StageBar({
   const [dialog, setDialog] = useState<{ snapshot: DealEditSnapshot; stage: StageBarStage; missing: string[] } | null>(null);
   const currentIndex = stages.findIndex((s) => s.id === currentStageId);
 
-  const move = (stageId: string) => moveDeal(dealId, stageId, endPosition());
+  const move = (stageId: string) => moveDeal(dealId, stageId);
 
   function go(stage: StageBarStage) {
     if (!canMove || pending || stage.id === currentStageId) return;

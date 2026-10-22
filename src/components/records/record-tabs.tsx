@@ -43,9 +43,18 @@ export function RecordTabs({
     { key: "notes", label: "Anotação" },
     ...(activity ? [{ key: "activity" as const, label: "Atividade" }] : []),
   ];
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const i = tabs.findIndex((t) => t.key === tab);
+    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+    setTab(next.key);
+    document.getElementById(`record-tab-${next.key}`)?.focus();
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      <div role="tablist" aria-label="Registro" className="flex gap-1 border-b">
+      <div role="tablist" onKeyDown={onKeyDown} aria-label="Registro" className="flex gap-1 border-b">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -53,6 +62,7 @@ export function RecordTabs({
             role="tab"
             id={`record-tab-${t.key}`}
             aria-selected={tab === t.key}
+            tabIndex={tab === t.key ? 0 : -1}
             aria-controls={`record-panel-${t.key}`}
             onClick={() => setTab(t.key)}
             className={cn(
@@ -69,6 +79,7 @@ export function RecordTabs({
       <div
         role="tabpanel"
         id="record-panel-notes"
+        aria-labelledby="record-tab-notes"
         hidden={tab !== "notes"}
         data-testid="notes-area"
       >
@@ -78,6 +89,7 @@ export function RecordTabs({
         <div
           role="tabpanel"
           id="record-panel-activity"
+          aria-labelledby="record-tab-activity"
           hidden={tab !== "activity"}
           data-testid="activity-area"
         >

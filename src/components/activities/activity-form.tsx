@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -76,6 +76,7 @@ export function ActivityForm({
   initial,
   parties,
   withDescription = true,
+  autoFocusFirst = false,
   submitLabel,
   cancelLabel,
   onCancel,
@@ -91,6 +92,8 @@ export function ActivityForm({
   /** Quais vínculos relacionados o usuário pode ajustar. */
   parties: ("person" | "organization")[];
   withDescription?: boolean;
+  /** Foca o primeiro campo (tipo) ao abrir. */
+  autoFocusFirst?: boolean;
   submitLabel: string;
   cancelLabel?: string;
   onCancel?: () => void;
@@ -110,6 +113,7 @@ export function ActivityForm({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const inFlight = useRef(false);
 
   const shownPerson = person === undefined ? (initial.person ?? null) : person;
   const shownOrg = organization === undefined ? (initial.organization ?? null) : organization;
@@ -127,7 +131,8 @@ export function ActivityForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!ready || saving) return;
+    if (!ready || inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
     setErrors({});
     setFormError(null);
@@ -149,6 +154,7 @@ export function ActivityForm({
         setFormError(res.error);
       }
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
   }
@@ -162,9 +168,10 @@ export function ActivityForm({
           Tipo
         </span>
         <div role="radiogroup" aria-labelledby={`${idPrefix}-type-label`} className="flex flex-wrap gap-2">
-          {types.map((t) => (
+          {types.map((t, i) => (
             <button
               key={t.id}
+              autoFocus={autoFocusFirst && i === 0}
               type="button"
               role="radio"
               aria-checked={t.id === typeId}

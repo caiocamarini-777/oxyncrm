@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -59,11 +59,14 @@ function CompleteBody({
   data,
   onClose,
   onChanged,
+  onBusy,
 }: {
   activity: ActivityRow;
   data: RecordActivityData;
   onClose: () => void;
   onChanged: () => void;
+  /** Marca "salvando" para o dialog ignorar fechamento (Esc, clique fora). */
+  onBusy: (busy: boolean) => void;
 }) {
   const reduce = useReducedMotion();
   const isMeeting = activity.type.isMeeting;
@@ -80,6 +83,7 @@ function CompleteBody({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rescheduled, setRescheduled] = useState(false);
+  const inFlight = useRef(false);
 
   const chosen = outcomes.find((o) => o.id === outcomeId);
   const booking = !isMeeting && Boolean(chosen?.booksMeeting);
@@ -87,6 +91,9 @@ function CompleteBody({
   const ready = (isMeeting ? meetingOutcome !== "" : outcomeId !== "") && (!booking || meetingReady);
 
   async function complete(next?: FormValues): Promise<FormResult> {
+    if (inFlight.current) return { ok: false, error: "" };
+    inFlight.current = true;
+    onBusy(true);
     setSaving(true);
     setError(null);
     try {
@@ -103,9 +110,10 @@ function CompleteBody({
       if (!res.ok) {
         if (res.code === "next_required") {
           setStage("next-required");
-          return { ok: false, error: "Agende a próxima atividade para concluir." };
+          // o aviso já está no quadro "Agende a próxima atividade"; sem texto repetido no formulário
+          return { ok: false, error: "" };
         }
-        setError(res.error);
+        if (!next) setError(res.error);
         return { ok: false, error: res.error, fieldErrors: res.fieldErrors };
       }
       toast.success("Atividade concluída.");
@@ -119,12 +127,17 @@ function CompleteBody({
       onClose();
       return { ok: true };
     } finally {
+      inFlight.current = false;
+      onBusy(false);
       setSaving(false);
     }
   }
 
   async function createSuggested(values: FormValues): Promise<FormResult> {
-    const res = await createActivity(data.companyId, toCreateInput(values, linksOf(activity)));
+    onBusy(true);
+    const res = await createActivity(data.companyId, toCreateInput(values, linksOf(activity))).finally(() => {
+      onBusy(false);
+    });
     if (!res.ok) return res;
     toast.success("Atividade criada.");
     onChanged();
@@ -163,6 +176,7 @@ function CompleteBody({
           initial={nextInitial}
           parties={[]}
           withDescription={false}
+          autoFocusFirst
           submitLabel="Agendar"
           cancelLabel="Agora não"
           onCancel={onClose}
@@ -282,7 +296,11 @@ function CompleteBody({
               parties={[]}
               withDescription={false}
               submitLabel="Concluir e agendar"
-              onSubmit={complete}
+              cancelLabel="Cancelar"
+              onCancel={onClose}
+              onSubmit={(v) =>
+                ready ? complete(v) : Promise.resolve({ ok: false, error: "Preencha o resultado e a reunião antes de concluir." })
+              }
             />
           </div>
         ) : null}
@@ -296,7 +314,7 @@ function CompleteBody({
 
       {stage === "form" ? (
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
             Cancelar
           </Button>
           <Button type="button" disabled={!ready || saving} onClick={() => void complete()}>
@@ -320,11 +338,12 @@ export function CompleteDialog({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const busy = useRef(false);
   return (
-    <Dialog open={activity !== null} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={activity !== null} onOpenChange={(o) => !o && !busy.current && onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         {activity ? (
-          <CompleteBody key={activity.id} activity={activity} data={data} onClose={onClose} onChanged={onChanged} />
+          <CompleteBody key={activity.id} activity={activity} data={data} onClose={onClose} onChanged={onChanged} onBusy={(b) => { busy.current = b; }} />
         ) : null}
       </DialogContent>
     </Dialog>

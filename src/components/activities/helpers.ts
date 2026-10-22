@@ -8,7 +8,7 @@ const HOUR = 3_600_000;
 
 /** Próxima hora cheia (opcionalmente alguns dias depois), no formato do campo de data e hora. */
 export function defaultDue(nowIso: string, addDays = 0): string {
-  const t = Math.ceil(new Date(nowIso).getTime() / HOUR) * HOUR + addDays * 24 * HOUR;
+  const t = Math.floor(new Date(nowIso).getTime() / HOUR) * HOUR + HOUR + addDays * 24 * HOUR;
   return toLocalInput(new Date(t));
 }
 

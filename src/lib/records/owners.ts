@@ -1,10 +1,11 @@
 import "server-only";
+import { cache } from "react";
 import { fail } from "./list-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import type { AssignableOwner } from "./types";
 
 /** Membros da empresa e admins gerais visíveis por RLS; ativos primeiro, depois por nome. */
-export async function listAssignableOwners(companyId: string): Promise<AssignableOwner[]> {
+export const listAssignableOwners = cache(async (companyId: string): Promise<AssignableOwner[]> => {
   const supabase = await createServerClient();
   const { data: members, error: membersError } = await supabase
     .from("memberships")
@@ -21,4 +22,4 @@ export async function listAssignableOwners(companyId: string): Promise<Assignabl
   return (data ?? [])
     .map((p) => ({ id: p.id, fullName: p.full_name, avatarUrl: p.avatar_url, active: p.active }))
     .sort((a, b) => Number(b.active) - Number(a.active) || a.fullName.localeCompare(b.fullName, "pt-BR"));
-}
+});

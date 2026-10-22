@@ -2,7 +2,10 @@ import { notFound } from "next/navigation";
 import { OrganizationEditPanel } from "@/components/organizations/organization-edit-panel";
 import { OrganizationPersons } from "@/components/organizations/organization-persons";
 import { RecordHeader } from "@/components/records/record-header";
+import { NoteComposer } from "@/components/records/note-composer";
 import { RecordTabs } from "@/components/records/record-tabs";
+import { Timeline } from "@/components/records/timeline";
+import { getTimeline } from "@/lib/timeline/queries";
 import { RecordLayout } from "@/components/records/record-layout";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
@@ -27,7 +30,8 @@ export default async function OrganizationPage({
   if (!organization) notFound();
   if (scope.kind === "company" && scope.company.id !== organization.companyId) notFound();
 
-  const [owners, labels, defs, permissions] = await Promise.all([
+  const [timeline, owners, labels, defs, permissions] = await Promise.all([
+    getTimeline("organizations", organization.id),
     listAssignableOwners(organization.companyId),
     listCompanyLabels(organization.companyId),
     listActiveCustomFieldDefs(organization.companyId, "organizations"),
@@ -64,7 +68,12 @@ export default async function OrganizationPage({
           <OrganizationPersons organization={organization} />
         </div>
       }
-      main={<RecordTabs />}
+      main={
+        <RecordTabs
+          notes={<NoteComposer entity="organizations" recordId={organization.id} />}
+          timeline={<Timeline items={timeline} />}
+        />
+      }
     />
   );
 }

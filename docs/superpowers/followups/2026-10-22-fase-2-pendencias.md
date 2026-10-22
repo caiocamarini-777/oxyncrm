@@ -54,3 +54,20 @@ Telas:
 
 Testes:
 - Lacunas de E2E: exportação com filtros e na visão Todas, salvar com aviso de duplicidade e a marca "(inativa)" no formulário de edição do lead.
+
+## Revisão final da fase 2
+
+Corrigido antes do merge:
+- Campos personalizados antigos (usuário desativado, opção removida) não bloqueiam mais a edição do registro: só os campos alterados são validados, no banco e no app.
+- "Excluir definitivamente" passou a usar a função `purge_record`, que exige admin geral e registro na lixeira e apaga também anotações, etiquetas e linha do tempo.
+- Leituras de responsáveis, etiquetas, campos e configurações não engolem mais erros.
+- `created_by` e `created_at` não podem ser alterados por usuários; anotações não podem mudar de registro.
+- Valor estimado do lead aceita "1.500,25".
+
+Ainda pendente (não bloqueia):
+- Verificar as migrations da fase 1 e da fase 2 aplicadas do zero num banco limpo e rodar `pnpm test:db` nele (o banco de dev recebeu ajustes manuais durante o desenvolvimento).
+- Filtro por etiqueta usa uma lista de ids na URL; precisa virar consulta no banco antes da importação do Pipedrive (fase 3.5).
+- Anotações fora da janela de 500 eventos somem da linha do tempo.
+- "1.500" sem vírgula é lido como 1,5.
+- A página de usuários (fase 1) ainda trata erro de leitura como lista vazia.
+- Status do lead só é protegido pelo app; a trava no banco entra com o funil de negócios (fase 3).

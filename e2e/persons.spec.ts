@@ -234,10 +234,10 @@ test("edita a pessoa e usuário padrão não vê pessoa de outro", async ({ brow
   await page.goto(`/${slugA}/contatos/pessoas/${rec.wa}`);
   await page.getByLabel("Cargo").fill("Analista");
   await page.getByLabel("LinkedIn").fill("https://example.com/in/x");
-  await page.getByRole("button", { name: "Salvar" }).click();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Use um endereço https:// do linkedin.com." })).toBeVisible();
   await page.getByLabel("LinkedIn").fill("https://www.linkedin.com/in/whats");
-  await page.getByRole("button", { name: "Salvar" }).click();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
   await expect.poll(async () => {
     const { data } = await admin().from("persons").select("job_title, linkedin_url").eq("id", rec.wa).single();
     return data;

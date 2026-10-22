@@ -48,3 +48,10 @@ Itens menores, sem risco de dados, que ficaram de fora de propósito:
 - Antes do merge: as migrações da fase 3 foram editadas no lugar durante o desenvolvimento. O banco de desenvolvimento deve ser recriado ou resetado para refletir exatamente os arquivos de `supabase/migrations/` (as alterações foram reaplicadas à mão, então pode haver deriva).
 - Em produção, aplicar as migrações do zero com `pnpm supabase db push --db-url "<URI do pooler de produção>"`, na ordem normal. Não há migração parcial a corrigir lá.
 - Conferir que a extensão pg_cron e a rotina `purge_trash` continuam agendadas em produção depois da aplicação.
+
+## Observações da última revisão
+
+- "Excluir etapa" conta os negócios ativos sob as permissões de quem exclui; um gestor que só enxerga os próprios negócios pode receber a mensagem de lixeira mesmo havendo negócios de outros na etapa (o banco continua impedindo a exclusão).
+- A regra de milhar do valor em reais faz "0.500" virar 500 e uma quantidade "1.500" virar 1500.
+- No modal de campos obrigatórios, um negócio com produtos mostra os totais do contrato como editáveis, mas o valor do tipo calculado pelos produtos é ignorado ao salvar.
+- Restaurar da lixeira um negócio de um funil arquivado ainda é permitido.

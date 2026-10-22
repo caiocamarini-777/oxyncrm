@@ -9,6 +9,7 @@ export type StageRow = {
   probability: number;
   rottingDays: number | null;
   requiredFields: string[];
+  archived: boolean;
 };
 
 export type PipelineRow = {
@@ -25,7 +26,7 @@ export async function listPipelinesWithStages(companyId: string): Promise<Pipeli
   const { data, error } = await supabase
     .from("pipelines")
     .select(
-      "id, name, next_activity_rule, card_value_field, archived_at, stages(id, name, probability, rotting_days, required_fields, position)",
+      "id, name, next_activity_rule, card_value_field, archived_at, stages(id, name, probability, rotting_days, required_fields, position, archived_at)",
     )
     .eq("company_id", companyId)
     .order("position")
@@ -45,6 +46,7 @@ export async function listPipelinesWithStages(companyId: string): Promise<Pipeli
         probability: s.probability,
         rottingDays: s.rotting_days,
         requiredFields: s.required_fields,
+        archived: s.archived_at !== null,
       })),
   }));
 }

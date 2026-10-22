@@ -36,11 +36,20 @@ export function DealCardBody({
   field,
   href,
   lifted = false,
+  activatorRef,
+  describedBy,
+  descriptionId,
 }: {
   deal: BoardDeal;
   field: CardValueField;
   href: string;
+  /** Cópia visual (card levantado ou espaço reservado): sem foco nem leitura. */
   lifted?: boolean;
+  /** Torna o link do título o ativador do arraste por teclado. */
+  activatorRef?: (node: HTMLElement | null) => void;
+  describedBy?: string;
+  /** Id do resumo para leitores de tela (organização, valor, esfriando). */
+  descriptionId?: string;
 }) {
   const value = cardValue(deal, field);
   const extra = deal.labels.length - 2;
@@ -58,10 +67,24 @@ export function DealCardBody({
           className="line-clamp-2 text-sm font-medium leading-snug hover:text-primary hover:underline"
           onClick={(e) => e.stopPropagation()}
           draggable={false}
+          ref={activatorRef}
+          aria-describedby={describedBy || undefined}
           tabIndex={lifted ? -1 : undefined}
+          aria-hidden={lifted || undefined}
         >
           {deal.title}
         </Link>
+        {descriptionId ? (
+          <span id={descriptionId} className="sr-only">
+            {[
+              deal.organization ? `Organização: ${deal.organization.name}.` : null,
+              `Valor: ${formatMoney(value)}.`,
+              deal.rotting ? "Esfriando." : null,
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          </span>
+        ) : null}
         {deal.organization ? <span className="truncate text-xs text-muted-foreground">{deal.organization.name}</span> : null}
       </div>
       {deal.rotting || deal.labels.length > 0 ? (

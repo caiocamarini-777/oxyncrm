@@ -17,12 +17,15 @@ export function LostDialog({
   dealTitle,
   reasons,
   onConfirm,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   dealTitle: string;
   reasons: LostReasonOption[];
   onConfirm: (input: LostInput) => Promise<DealResult>;
+  /** Para devolver o foco a quem abriu (o diálogo pode abrir sem um gatilho). */
+  onCloseAutoFocus?: (e: Event) => void;
 }) {
   const [reasonId, setReasonId] = useState("");
   const [note, setNote] = useState("");
@@ -54,7 +57,7 @@ export function LostDialog({
 
   return (
     <Dialog open={open} onOpenChange={change}>
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Marcar como perdido</DialogTitle>
           <DialogDescription>{dealTitle}</DialogDescription>

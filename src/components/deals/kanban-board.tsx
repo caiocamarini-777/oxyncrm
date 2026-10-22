@@ -45,6 +45,10 @@ type Origin = { snapshot: Columns; stageId: string; index: number };
 type RequiredState = { snapshot: DealEditSnapshot; stageId: string; stageName: string; missing: string[]; position: number };
 
 const REFRESH_MS = 30_000;
+/** Tempo do tremor (300 ms) com folga; depois o token é limpo para não repetir ao remontar. */
+const SHAKE_MS = 400;
+/** Espaço levanta e solta (Enter fica para o link do título abrir o detalhe). */
+const KEYBOARD_CODES = { start: ["Space"], cancel: ["Escape"], end: ["Space"] };
 const DROP_SPRING = { duration: 240, easing: "cubic-bezier(0.18, 0.89, 0.32, 1.18)" };
 
 const fromBoard = (b: Board): Columns => Object.fromEntries(b.stages.map((s) => [s.id, s.deals]));
@@ -172,7 +176,7 @@ export function KanbanBoard({
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor),
+    useSensor(KeyboardSensor, { keyboardCodes: KEYBOARD_CODES }),
   );
 
   const stageName = (id: string) => board.stages.find((s) => s.id === id)?.name ?? "";
@@ -180,7 +184,19 @@ export function KanbanBoard({
   const activeDeal = activeId ? findDeal(columns, activeId) : null;
 
   function bump(id: string) {
-    setShake({ id, token: Date.now() });
+    const token = Date.now();
+    setShake({ id, token });
+    setTimeout(() => setShake((s) => (s?.token === token ? null : s)), SHAKE_MS);
+  }
+
+  /** Devolve o foco ao card (link do título) quando um diálogo aberto a partir dele fecha. */
+  function focusCard(id: string) {
+    return (e: Event) => {
+      e.preventDefault();
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-deal-id="${id}"] [data-testid="deal-title"]`)?.focus();
+      });
+    };
   }
 
   function onDragStart(e: DragStartEvent) {
@@ -271,6 +287,9 @@ export function KanbanBoard({
     }
     if (now.stageId === o.stageId && now.index === o.index) return;
     const list = columns[now.stageId];
+    // Vizinhos visíveis: com filtros ativos ou coluna truncada (500 cards), negócios ocultos podem
+    // ficar entre eles e a ordem relativa a esses ocultos fica aproximada. Só a ordem é afetada;
+    // o próximo refresh mostra a ordem real do servidor.
     const position = positionBetween(list[now.index - 1]?.position ?? null, list[now.index + 1]?.position ?? null);
     const target = now.stageId;
     setColumns((c) => ({ ...c, [target]: c[target].map((d) => (d.id === id ? { ...d, position } : d)) }));
@@ -340,7 +359,7 @@ export function KanbanBoard({
         announcements,
         screenReaderInstructions: {
           draggable:
-            "Para mover o card, pressione Espaço ou Enter, use as setas para escolher a etapa e pressione Espaço ou Enter de novo. Esc cancela.",
+            "Para mover o card, pressione Espaço, use as setas para escolher a etapa e pressione Espaço de novo. Esc cancela. Enter abre o negócio.",
         },
       }}
     >
@@ -357,7 +376,7 @@ export function KanbanBoard({
               stageLimit={stageLimit}
               field={board.pipeline.cardValueField}
               dealHref={dealHref}
-              canDrag={canEdit}
+              canDrag={canEdit && !busy}
               reduced={reduced}
               shake={shake}
             />
@@ -387,6 +406,7 @@ export function KanbanBoard({
           dealTitle={lost.title}
           reasons={lostReasons}
           onConfirm={(input) => confirmLost(lost, input)}
+          onCloseAutoFocus={focusCard(lost.id)}
         />
       ) : null}
       {required ? (
@@ -401,6 +421,7 @@ export function KanbanBoard({
           owners={owners}
           onRetry={() => retryRequired(required)}
           onClose={() => setRequired(null)}
+          onCloseAutoFocus={focusCard(required.snapshot.id)}
         />
       ) : null}
     </DndContext>

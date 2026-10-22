@@ -30,6 +30,7 @@ export function RequiredFieldsDialog({
   owners = [],
   onRetry,
   onClose,
+  onCloseAutoFocus,
 }: {
   deal: DealEditSnapshot;
   stageName: string;
@@ -42,6 +43,8 @@ export function RequiredFieldsDialog({
   owners?: AssignableOwner[];
   onRetry: () => Promise<DealResult>;
   onClose: () => void;
+  /** Para devolver o foco a quem abriu (o diálogo pode abrir sem um gatilho). */
+  onCloseAutoFocus?: (e: Event) => void;
 }) {
   const [missing, setMissing] = useState(initialMissing);
   const [closeDate, setCloseDate] = useState(deal.expectedCloseDate ?? "");
@@ -118,7 +121,7 @@ export function RequiredFieldsDialog({
 
   return (
     <Dialog open onOpenChange={(o) => (o ? null : onClose())}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] overflow-y-auto" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Campos obrigatórios</DialogTitle>
           <DialogDescription>

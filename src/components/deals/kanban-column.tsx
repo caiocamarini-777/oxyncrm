@@ -37,6 +37,8 @@ function DraggableCard({
   const drag = useDraggable({ id: deal.id, data, disabled: !canDrag });
   const drop = useDroppable({ id: deal.id, data });
   const [scope, animate] = useAnimate<HTMLDivElement>();
+  const descId = `deal-desc-${deal.id}`;
+  const instructions = drag.attributes["aria-describedby"];
 
   const setRefs = useCallback(
     (node: HTMLDivElement | null) => {
@@ -58,29 +60,35 @@ function DraggableCard({
       transition={{ layout: LAYOUT_SPRING }}
       className="list-none"
     >
+      {/*
+        O contêiner recebe só os eventos de ponteiro (sem role/tabIndex): o único ponto de foco é o
+        link do título, que também ativa o arraste pelo teclado (Espaço) via setActivatorNodeRef.
+      */}
       <div
         ref={setRefs}
         data-testid="deal-card"
         data-deal-id={deal.id}
-        {...drag.attributes}
+        data-shaking={shakeToken ? "true" : "false"}
         {...drag.listeners}
-        aria-roledescription="card arrastável"
-        aria-label={deal.title}
         onClick={() => router.push(href)}
-        className={cn(
-          "rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          canDrag ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-pointer",
-        )}
+        className={cn("rounded-lg", canDrag ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-pointer")}
       >
         <div ref={scope}>
           {drag.isDragging ? (
             <div className="rounded-lg border-2 border-dashed border-primary/40 bg-primary/5">
               <div className="invisible">
-                <DealCardBody deal={deal} field={field} href={href} />
+                <DealCardBody deal={deal} field={field} href={href} lifted />
               </div>
             </div>
           ) : (
-            <DealCardBody deal={deal} field={field} href={href} />
+            <DealCardBody
+              deal={deal}
+              field={field}
+              href={href}
+              activatorRef={canDrag ? drag.setActivatorNodeRef : undefined}
+              describedBy={[descId, canDrag ? instructions : null].filter(Boolean).join(" ")}
+              descriptionId={descId}
+            />
           )}
         </div>
       </div>

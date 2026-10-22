@@ -207,7 +207,12 @@ test("campo obrigatório faltando abre o modal e completa o movimento", async ({
   await dialog.getByLabel("Data de fechamento esperada").fill("2026-12-15");
   await dialog.getByRole("button", { name: "Salvar e mover" }).click();
   await expect(dialog).toBeHidden();
-  await expect(card(column(page, "Proposta"), title)).toBeVisible();
+  const moved = card(column(page, "Proposta"), title);
+  await expect(moved).toBeVisible();
+  // O tremor da recusa não se repete quando o card remonta na etapa de destino.
+  await expect(moved).toHaveAttribute("data-shaking", "false");
+  // O foco volta para o card ao fechar o diálogo.
+  await expect(moved.getByTestId("deal-title")).toBeFocused();
   const d = await admin().from("deals").select("stage_id, expected_close_date").eq("id", deal.req).single();
   expect(d.data).toEqual({ stage_id: stage.proposta, expected_close_date: "2026-12-15" });
   await page.context().close();

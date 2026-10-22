@@ -83,7 +83,7 @@ export default async function DealsPage({
             permissions.create && pipeline ? (
               <CreateDealDialog
                 companyId={company.id}
-                pipelines={pipelines.map((p) => ({ id: p.id, name: p.name, stages: p.stages.map((s) => ({ id: s.id, name: s.name })) }))}
+                pipelines={pipelines.map((p) => ({ id: p.id, name: p.name, stages: p.stages.filter((s) => !s.archived).map((s) => ({ id: s.id, name: s.name })) }))}
                 defaultPipelineId={pipeline.id}
                 defs={defs}
                 owners={owners}

@@ -209,8 +209,10 @@ test("usuário padrão não vê organização de outro", async ({ browser }) => 
 test("404 igual para inexistente e sem acesso", async ({ browser }) => {
   const page = await newPage(browser, emails.bruno);
   const semAcesso = await page.goto(`/${slugA}/contatos/organizacoes/${orgs.ana}`);
+  await expect(page.getByText("This page could not be found.")).toBeVisible();
   const textoSemAcesso = await page.locator("body").innerText();
   const inexistente = await page.goto(`/${slugA}/contatos/organizacoes/00000000-0000-4000-8000-000000000000`);
+  await expect(page.getByText("This page could not be found.")).toBeVisible();
   const textoInexistente = await page.locator("body").innerText();
   expect(semAcesso?.status()).toBe(404);
   expect(inexistente?.status()).toBe(404);

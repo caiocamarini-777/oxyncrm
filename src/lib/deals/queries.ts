@@ -14,7 +14,7 @@ import {
 import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
 import { forecastBuckets, type ForecastBucket } from "./forecast";
 import { cardValue, isRotting } from "./kanban";
-import { DEAL_STATUSES, type DealStatus } from "./schema";
+import { dealStatusOf, type DealStatus } from "./schema";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("deals", what, error);
 
@@ -203,8 +203,7 @@ export async function fetchDealRows(
   if (companyIds) q = q.in("company_id", companyIds);
   if (query.pipeline) q = q.eq("pipeline_id", query.pipeline);
   if (query.stage && query.stage.length > 0) q = q.in("stage_id", query.stage);
-  const statuses = query.status.filter((s) => (DEAL_STATUSES as readonly string[]).includes(s));
-  if (statuses.length > 0) q = q.in("status", statuses);
+  q = q.eq("status", dealStatusOf(query));
   q = applyCommon(q, query, resolved);
   if (query.createdFrom) q = q.gte("created_at", startOfDay(query.createdFrom));
   if (query.createdTo) q = q.lte("created_at", endOfDay(query.createdTo));

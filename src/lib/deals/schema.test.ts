@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contractDatesNeeded, contractSchema, dealItemSchema, dealSchema, lostSchema } from "./schema";
+import { contractDatesNeeded, contractSchema, dealStatusOf, dealItemSchema, dealSchema, lostSchema } from "./schema";
 
 const msg = (r: { success: boolean; error?: { issues: { message: string }[] } }) => r.error?.issues[0].message;
 
@@ -71,5 +71,12 @@ describe("contractDatesNeeded", () => {
   it("setup precisa da primeira parcela", () => {
     expect(contractDatesNeeded(none, "setup")).toBe("setup");
     expect(contractDatesNeeded({ ...none, setupFirstDue: "2026-03" }, "setup")).toBeNull();
+  });
+});
+
+describe("dealStatusOf", () => {
+  it("primeiro status válido, padrão open", () => {
+    expect(dealStatusOf({ status: [] })).toBe("open");
+    expect(dealStatusOf({ status: ["x", "lost", "won"] })).toBe("lost");
   });
 });

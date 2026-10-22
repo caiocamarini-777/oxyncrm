@@ -4,6 +4,12 @@ import { parseBRL } from "@/lib/records/format";
 export const DEAL_STATUSES = ["open", "won", "lost"] as const;
 export type DealStatus = (typeof DEAL_STATUSES)[number];
 
+/** Aba ativa: primeiro `status` válido da URL; padrão `open`. */
+export function dealStatusOf(query: { status: string[] }): DealStatus {
+  const s = query.status.find((v): v is DealStatus => (DEAL_STATUSES as readonly string[]).includes(v));
+  return s ?? "open";
+}
+
 const optionalUuid = z
   .string()
   .uuid()

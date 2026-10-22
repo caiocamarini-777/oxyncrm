@@ -149,9 +149,18 @@ export async function moveDeal(id: string, stageId: string, position: number): P
   const profile = await getCurrentProfile();
   if (!profile) return { ok: false, error: NO_PERMISSION };
   const supabase = await createServerClient();
+  const [stage, deal] = await Promise.all([
+    supabase.from("stages").select("pipeline_id, company_id").eq("id", stageId).maybeSingle(),
+    supabase.from("deals").select("company_id").eq("id", id).is("deleted_at", null).maybeSingle(),
+  ]);
+  if (stage.error || deal.error) return { ok: false, error: SAVE_FAILED };
+  if (!stage.data || !deal.data || stage.data.company_id !== deal.data.company_id) {
+    return { ok: false, error: "Etapa não encontrada." };
+  }
+  // A etapa pode ser de outro funil da mesma empresa: funil e etapa mudam juntos.
   const { data, error } = await supabase
     .from("deals")
-    .update({ stage_id: stageId, position })
+    .update({ pipeline_id: stage.data.pipeline_id, stage_id: stageId, position })
     .eq("id", id)
     .is("deleted_at", null)
     .eq("status", "open")
@@ -237,14 +246,23 @@ async function itemCount(dealId: string): Promise<number | null> {
  */
 export async function updateContract(id: string, input: ContractInput): Promise<DealResult> {
   if (!uuid.safeParse(id).success) return INVALID;
-  const parsed = contractSchema.safeParse(input);
+  const items = await itemCount(id);
+  if (items === null) return { ok: false, error: SAVE_FAILED };
+  const supabase = await createServerClient();
+  let effective: ContractInput = input;
+  if (items > 0) {
+    // Totais vêm dos itens: as datas exigidas dependem dos valores reais do negócio.
+    const cur = await supabase.from("deals").select("setup_total, mrr").eq("id", id).is("deleted_at", null).maybeSingle();
+    if (cur.error) return { ok: false, error: SAVE_FAILED };
+    if (!cur.data) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+    effective = { ...input, setupTotal: Number(cur.data.setup_total), mrr: Number(cur.data.mrr) };
+  }
+  const parsed = contractSchema.safeParse(effective);
   if (!parsed.success) {
     const { field, message } = firstIssue(parsed.error, "setupTotal");
     return { ok: false, error: message, fieldErrors: { [field]: message } };
   }
   const c = parsed.data;
-  const items = await itemCount(id);
-  if (items === null) return { ok: false, error: SAVE_FAILED };
   const patch: Record<string, unknown> = {
     setup_installments: c.setupInstallments,
     setup_first_due: monthToDate(c.setupFirstDue),
@@ -255,11 +273,9 @@ export async function updateContract(id: string, input: ContractInput): Promise<
     patch.setup_total = c.setupTotal;
     patch.mrr = c.mrr;
   }
-  const supabase = await createServerClient();
   const { data, error } = await supabase.from("deals").update(patch).eq("id", id).is("deleted_at", null).select("id");
   if (error) {
-    // CHECK de datas obrigatórias quando os totais vêm de itens
-    if (error.code === "23514") return { ok: false, error: `${MSG_SETUP_DATE} ${MSG_MRR_DATES}`.trim() };
+    if (error.code === "23514") return { ok: false, error: "Não foi possível salvar as condições do contrato." };
     return dbFailure(error);
   }
   if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };

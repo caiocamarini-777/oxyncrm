@@ -32,7 +32,7 @@ export async function GET(
   }
   if (allowed.length === 0) return text(403, "Você não tem permissão para exportar.");
 
-  const query = parseListQuery(request.nextUrl.searchParams, exporter.allowedSorts);
+  const query = (exporter.parseQuery ?? parseListQuery)(request.nextUrl.searchParams, exporter.allowedSorts);
   const rows = await exporter.fetchRows(scope, query, allowed);
   const columns = scope.kind === "all" ? exporter.columns : exporter.columns.filter((c) => c.key !== "company");
   const csv = toCsv(columns, rows);

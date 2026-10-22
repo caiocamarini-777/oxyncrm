@@ -38,3 +38,13 @@ export function groupByStage<D extends { stageId: string }, S extends { id: stri
   for (const d of deals) by.get(d.stageId)?.push(d);
   return stages.map((stage) => ({ stage, deals: by.get(stage.id) ?? [] }));
 }
+
+/** Dias inteiros desde `iso` (nunca negativo). */
+export function daysSince(iso: string, now: number = Date.now()): number {
+  return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 86_400_000));
+}
+
+/** Posição que coloca o negócio no fim da etapa de destino (as demais ficam muito abaixo disso). */
+export function endPosition(now: number = Date.now()): number {
+  return now;
+}

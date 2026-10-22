@@ -594,3 +594,23 @@ export async function listActiveLostReasons(companyId: string): Promise<{ id: st
   if (error) fail("motivos de perda", error);
   return data ?? [];
 }
+
+export type ProductOption = { id: string; name: string; kind: "setup" | "recurring"; defaultPrice: number };
+
+/** Produtos ativos da empresa para o seletor de itens (inativos nunca aparecem). */
+export async function listActiveProducts(companyId: string): Promise<ProductOption[]> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, name, kind, default_price")
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .order("name");
+  if (error) fail("produtos", error);
+  return (data ?? []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    kind: p.kind as "setup" | "recurring",
+    defaultPrice: num(p.default_price),
+  }));
+}

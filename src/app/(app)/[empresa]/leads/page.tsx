@@ -5,6 +5,7 @@ import { LeadStatusTabs } from "@/components/leads/lead-status-tabs";
 import { LeadsTable } from "@/components/leads/leads-table";
 import { LeadsToolbar } from "@/components/leads/leads-toolbar";
 import { Pagination } from "@/components/records/pagination";
+import { TrashLink } from "@/components/records/trash-link";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { LEAD_SORTS, listLeadSources, listLeads } from "@/lib/leads/queries";
@@ -78,6 +79,7 @@ export default async function LeadsPage({
       canCreatePerson: c.personPermissions.create,
       canCreateOrganization: c.orgPermissions.create,
     }));
+  const canTrash = perCompany.some((c) => c.permissions.delete);
   const canExport = perCompany.some((c) => c.permissions.export);
   const scopeSlug = scope.kind === "all" ? "todas" : scope.company.slug;
 
@@ -98,6 +100,7 @@ export default async function LeadsPage({
         <LeadsTable rows={result.rows} total={result.total} query={query} allCompanies={scope.kind === "all"} />
         <Pagination total={result.total} page={query.page} />
       </Suspense>
+      {canTrash ? <TrashLink scopeSlug={scopeSlug} tab="leads" /> : null}
     </div>
   );
 }

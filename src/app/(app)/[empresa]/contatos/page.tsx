@@ -4,6 +4,7 @@ import type { CreatablePersonCompany } from "@/components/persons/create-person-
 import { PersonsTable } from "@/components/persons/persons-table";
 import { PersonsToolbar } from "@/components/persons/persons-toolbar";
 import { Pagination } from "@/components/records/pagination";
+import { TrashLink } from "@/components/records/trash-link";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { PERSON_SORTS, listPersons } from "@/lib/persons/queries";
@@ -70,6 +71,7 @@ export default async function PersonsPage({
       owners: c.owners,
       canCreateOrganization: c.orgPermissions.create,
     }));
+  const canTrash = perCompany.some((c) => c.permissions.delete);
   const canExport = perCompany.some((c) => c.permissions.export);
   const scopeSlug = scope.kind === "all" ? "todas" : scope.company.slug;
 
@@ -87,6 +89,7 @@ export default async function PersonsPage({
         <PersonsTable rows={result.rows} total={result.total} query={query} allCompanies={scope.kind === "all"} />
         <Pagination total={result.total} page={query.page} />
       </Suspense>
+      {canTrash ? <TrashLink scopeSlug={scopeSlug} tab="pessoas" /> : null}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { OrganizationsTable } from "@/components/organizations/organizations-tab
 import { OrganizationsToolbar } from "@/components/organizations/organizations-toolbar";
 import type { CreatableCompany } from "@/components/organizations/create-organization-dialog";
 import { Pagination } from "@/components/records/pagination";
+import { TrashLink } from "@/components/records/trash-link";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { ORGANIZATION_SORTS, listOrganizations } from "@/lib/organizations/queries";
@@ -64,6 +65,7 @@ export default async function OrganizationsPage({
   const creatable: CreatableCompany[] = perCompany
     .filter((c) => c.permissions.create)
     .map((c) => ({ company: c.company, defs: c.defs, owners: c.owners }));
+  const canTrash = perCompany.some((c) => c.permissions.delete);
   const canExport = perCompany.some((c) => c.permissions.export);
   const scopeSlug = scope.kind === "all" ? "todas" : scope.company.slug;
 
@@ -86,6 +88,7 @@ export default async function OrganizationsPage({
         />
         <Pagination total={result.total} page={query.page} />
       </Suspense>
+      {canTrash ? <TrashLink scopeSlug={scopeSlug} tab="organizacoes" /> : null}
     </div>
   );
 }

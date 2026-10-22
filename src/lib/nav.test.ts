@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_PHASE, NAV_ITEMS, isNavItemEnabled, navHref } from "./nav";
+import { CURRENT_PHASE, NAV_ITEMS, PALETTE_EXTRA_ITEMS, isNavItemEnabled, navHref } from "./nav";
 
 const get = (key: string) => NAV_ITEMS.find((i) => i.key === key)!;
 
@@ -20,5 +20,12 @@ describe("nav", () => {
   it("monta hrefs", () => {
     expect(navHref(get("leads"), "volt")).toBe("/volt/leads");
     expect(navHref(get("configuracoes"), "volt")).toBe("/configuracoes/empresas");
+  });
+  it("lixeira só na busca, com escopo de empresa", () => {
+    const item = PALETTE_EXTRA_ITEMS.find((i) => i.key === "lixeira")!;
+    expect(item.scoped).toBe(true);
+    expect(NAV_ITEMS.some((i) => i.key === "lixeira")).toBe(false);
+    expect(navHref(item, "volt")).toBe("/volt/lixeira");
+    expect(isNavItemEnabled(item, false)).toBe(true);
   });
 });

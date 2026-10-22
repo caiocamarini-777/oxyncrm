@@ -5,6 +5,7 @@ import {
   KanbanSquare,
   Mail,
   Settings,
+  Trash2,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -29,6 +30,11 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "email", label: "E-mail", icon: Mail, path: "/email", availableFromPhase: 5, scoped: true },
   { key: "relatorios", label: "Relatórios", icon: BarChart3, path: "/relatorios", availableFromPhase: 6, scoped: true },
   { key: "configuracoes", label: "Configurações", icon: Settings, path: "/configuracoes/empresas", availableFromPhase: 1, superAdminOnly: true, scoped: false },
+];
+
+/** Destinos que aparecem só na busca (não no menu lateral). */
+export const PALETTE_EXTRA_ITEMS: NavItem[] = [
+  { key: "lixeira", label: "Lixeira", icon: Trash2, path: "/lixeira", availableFromPhase: 2, scoped: true },
 ];
 
 export function navHref(item: NavItem, scopeSlug: string): string {

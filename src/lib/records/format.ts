@@ -7,6 +7,9 @@ const dateFmt = new Intl.DateTimeFormat("pt-BR", {
   timeZone: "America/Sao_Paulo",
 });
 
+/** Meses abreviados (jan a dez) para rótulos como "mar/2026". */
+export const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"] as const;
+
 const moneyFmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
 /** dd/mm/aaaa. Datas puras (aaaa-mm-dd) não sofrem deslocamento de fuso. */
@@ -55,11 +58,16 @@ export function formatPhone(v: string): string {
 
 /**
  * Texto BRL ("1.500,25" / "1500.25") para número; vazio vira null; ilegível vira NaN.
- * Com vírgula, o ponto é separador de milhar; sem vírgula, o ponto é decimal.
+ * Com vírgula, o ponto é separador de milhar. Sem vírgula, pontos em grupos de três
+ * ("30.000", "1.234.567") também são milhar; nos outros casos ("1.5", "1500.25") o ponto é decimal.
  */
 export function parseBRL(raw: string): number | null {
   const v = raw.trim();
-  const t = v.includes(",") ? v.replace(/\./g, "").replace(",", ".") : v;
+  const t = v.includes(",")
+    ? v.replace(/\./g, "").replace(",", ".")
+    : /^-?\d{1,3}(\.\d{3})+$/.test(v)
+      ? v.replace(/\./g, "")
+      : v;
   if (t === "") return null;
   return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : Number.NaN;
 }

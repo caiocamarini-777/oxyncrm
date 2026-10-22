@@ -3,11 +3,12 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { DEAL_PRODUCTS_ID } from "@/components/deals/deal-items";
 import { RequiredFieldsDialog } from "@/components/deals/required-fields-dialog";
 import type { CustomFieldDef } from "@/lib/custom-fields/schema";
 import { getDealEditSnapshot, moveDeal, type DealEditSnapshot } from "@/lib/deals/actions";
 import type { AssignableOwner } from "@/lib/records/types";
-import { cn } from "@/lib/utils";
+import { cn } from "cn";
 
 export type StageBarStage = { id: string; name: string };
 
@@ -109,6 +110,7 @@ export function StageBar({
           missing={dialog.missing}
           companyId={companyId}
           dealHref={dealHref}
+          productsTargetId={DEAL_PRODUCTS_ID}
           defs={defs}
           owners={owners}
           onRetry={() => move(dialog.stage.id)}

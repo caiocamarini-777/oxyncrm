@@ -57,6 +57,8 @@ test.beforeAll(async () => {
   for (const s of stages.data) stage[s.name] = s.id;
   const req = await a.from("stages").update({ required_fields: ["expected_close_date", "estimated_value"] }).eq("id", stage.Proposta);
   if (req.error) throw req.error;
+  const reqProducts = await a.from("stages").update({ required_fields: ["products"] }).eq("id", stage.Fechamento);
+  if (reqProducts.error) throw reqProducts.error;
 
   product.setup = await insert("products", { company_id: companyId, name: `Implantação ${stamp}`, kind: "setup", default_price: 6000 });
   product.mrr = await insert("products", { company_id: companyId, name: `Plataforma ${stamp}`, kind: "recurring", default_price: 1500 });
@@ -66,6 +68,8 @@ test.beforeAll(async () => {
   await mkDeal("itens");
   await mkDeal("etapas");
   await mkDeal("status");
+  await mkDeal("tipos");
+  await mkDeal("produtos");
   await mkDeal("ganho", {
     mrr: 1000,
     mrr_start: "2026-01-01",
@@ -176,6 +180,58 @@ test("com produtos os totais vêm dos itens", async ({ browser }) => {
   await page.getByRole("button", { name: "Desfazer" }).click();
   await expect(page.getByTestId("item-row")).toHaveCount(2);
   await expect(page.getByTestId("items-setup")).toHaveText(/R\$\s*5\.500,00/);
+  await page.context().close();
+});
+
+test("setup digitado sobrevive ao primeiro produto recorrente; só o MRR fica calculado", async ({ browser }) => {
+  const page = await newPage(browser);
+  const dlg = page.getByRole("dialog");
+  await open(page, "tipos");
+
+  // "30.000" sem vírgula é trinta mil (pontos em grupos de três são milhar).
+  await page.getByLabel("Setup total (R$)").fill("30.000");
+  await page.getByLabel("Mês da 1ª parcela").fill("2026-03");
+  await expect(page.getByTestId("contract-total")).toHaveText(/R\$\s*30\.000,00/);
+  await page.getByRole("button", { name: "Salvar contrato" }).click();
+  await expect(page.getByTestId("revenue-table-total")).toContainText(/R\$\s*30\.000,00/);
+
+  await page.getByRole("button", { name: "Adicionar produto" }).click();
+  await dlg.getByLabel("Produto", { exact: true }).selectOption({ label: `Plataforma ${stamp} (Recorrente)` });
+  await dlg.getByLabel("Início do MRR").fill("2026-04");
+  await dlg.getByLabel("Duração (meses)").fill("2");
+  await dlg.getByRole("button", { name: "Adicionar", exact: true }).click();
+  await expect(page.getByTestId("item-row")).toHaveCount(1);
+
+  // Setup continua o digitado e editável; MRR vem do produto e é somente leitura.
+  await expect(page.getByLabel("Setup total (R$)")).toHaveValue("30000");
+  await expect(page.getByLabel("Setup total (R$)")).not.toHaveAttribute("readonly", "");
+  await expect(page.getByLabel("MRR (R$)", { exact: true })).toHaveValue("1500");
+  await expect(page.getByLabel("MRR (R$)", { exact: true })).toHaveAttribute("readonly", "");
+  await expect(page.getByText("Calculado a partir dos produtos")).toHaveCount(1);
+  await expect(page.getByTestId("contract-total")).toHaveText(/R\$\s*33\.000,00/);
+  const db = await admin().from("deals").select("setup_total, mrr").eq("id", deal.tipos).single();
+  expect(db.data).toEqual({ setup_total: 30000, mrr: 1500 });
+
+  // O setup ainda pode ser editado à mão.
+  await page.getByLabel("Setup total (R$)").fill("25000");
+  await page.getByRole("button", { name: "Salvar contrato" }).click();
+  await expect(page.getByTestId("contract-total")).toHaveText(/R\$\s*28\.000,00/);
+  await expect.poll(async () => (await admin().from("deals").select("setup_total").eq("id", deal.tipos).single()).data?.setup_total).toBe(25000);
+  await page.context().close();
+});
+
+test("etapa que exige produtos: Adicionar produtos leva ao cartão Produtos", async ({ browser }) => {
+  const page = await newPage(browser);
+  await open(page, "produtos");
+  await page.getByRole("button", { name: "Fechamento", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Campos obrigatórios" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Adicionar produtos" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(new RegExp(`/negocios/${deal.produtos}$`));
+  const products = page.getByRole("region", { name: "Produtos" });
+  await expect(products).toBeFocused();
+  await expect(products).toBeInViewport();
   await page.context().close();
 });
 

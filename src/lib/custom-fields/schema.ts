@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isUuid } from "@/lib/uuid";
 
 export const CUSTOM_FIELD_TYPES = [
   "text",
@@ -108,7 +109,6 @@ export const customFieldUpdateSchema = z
     }
   });
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function validDate(s: string): boolean {
@@ -132,7 +132,7 @@ function valueOk(def: CustomFieldDef, v: unknown, memberIds: string[]): boolean 
     case "multiselect":
       return Array.isArray(v) && v.every((e) => typeof e === "string" && def.options.includes(e));
     case "user":
-      return typeof v === "string" && UUID_RE.test(v) && memberIds.includes(v.toLowerCase());
+      return isUuid(v) && memberIds.includes(v.toLowerCase());
   }
 }
 

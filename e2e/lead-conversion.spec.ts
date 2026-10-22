@@ -20,6 +20,9 @@ let leadId = "";
 let labelId = "";
 let dealId = "";
 let proposalStage = "";
+let readerId = "";
+const readerEmail = `tst-e2e-cv-leitor-${stamp}@oxyn.test`;
+const readerRole = `tst-e2e-cv-leitor-${stamp}`;
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(180_000);
@@ -78,7 +81,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   for (const id of [companyId, bulkCompanyId]) if (id) await admin().from("companies").delete().eq("id", id);
-  if (userId) await deleteTestUser(userId).catch(() => {});
+  await admin().from("roles").delete().eq("name", readerRole);
+  for (const id of [userId, readerId]) if (id) await deleteTestUser(id).catch(() => {});
 });
 
 test("converter lead cria negócio com pessoa, organização, valor e etiquetas", async ({ browser }) => {
@@ -190,4 +194,42 @@ test("filtro por etiqueta continua funcionando nas listas", async ({ browser }) 
     await expect(page.getByText(`1151 a ${N} de ${N}`)).toBeVisible();
   }
   await page.context().close();
+});
+
+test("sem permissão de criar negócios, o lead não mostra Converter em negócio", async ({ browser }) => {
+  const a = admin();
+  readerId = await createTestUser({ email: readerEmail, password, fullName: "Leo Sem Criar" });
+  const role = await a
+    .from("roles")
+    .insert({
+      name: readerRole,
+      permissions: {
+        visibility: { leads: "own", deals: "own", persons: "own", organizations: "own", activities: "own" },
+        actions: { create: false, edit: true, delete: false, export: false, reassign_owner: false },
+        settings: {
+          manage_pipelines: false,
+          manage_custom_fields: false,
+          manage_products: false,
+          view_reports: false,
+          create_dashboards: false,
+          share_dashboards: false,
+        },
+      },
+    })
+    .select("id")
+    .single();
+  if (role.error) throw role.error;
+  const m = await a.from("memberships").insert({ user_id: readerId, company_id: companyId, role_id: role.data.id });
+  if (m.error) throw m.error;
+  const lead = await insert("leads", { company_id: companyId, owner_id: readerId, title: `Lead Leitor ${stamp}` });
+
+  const ctx = await browser.newContext({ baseURL: "http://localhost:3000" });
+  const page = await ctx.newPage();
+  await login(page, readerEmail, password);
+  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
+  await page.goto(`/${slug}/leads/${lead}`);
+  await expect(page.getByTestId("lead-status")).toHaveText("Aberto");
+  await expect(page.getByRole("button", { name: "Desqualificar" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Converter em negócio" })).toHaveCount(0);
+  await ctx.close();
 });

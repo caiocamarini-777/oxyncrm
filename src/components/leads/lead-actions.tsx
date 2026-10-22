@@ -25,6 +25,7 @@ export function LeadActions({
   status,
   reasons,
   canEdit,
+  canConvert,
   leadTitle,
   empresa,
   pipelines,
@@ -38,6 +39,8 @@ export function LeadActions({
   status: string;
   reasons: { id: string; name: string }[];
   canEdit: boolean;
+  /** Editar o lead e criar negócios na empresa. */
+  canConvert: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -76,7 +79,7 @@ export function LeadActions({
       </Badge>
       {canEdit ? (
         <>
-          {status === "open" ? (
+          {status === "open" && canConvert ? (
             <ConvertLeadDialog
               leadId={leadId}
               leadTitle={leadTitle}

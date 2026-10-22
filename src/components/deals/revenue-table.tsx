@@ -1,6 +1,4 @@
-import { formatMoney } from "@/lib/records/format";
-
-const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+import { formatMoney, MONTHS } from "@/lib/records/format";
 
 /** "2026-03" para "mar/2026". */
 export function formatMonth(ym: string): string {

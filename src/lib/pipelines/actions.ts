@@ -176,7 +176,21 @@ export async function deleteStage(id: string): Promise<ActionResult> {
   const supabase = await createServerClient();
   const { error } = await supabase.from("stages").delete().eq("id", id);
   if (error) {
-    if (error.code === "23503") return { ok: false, error: "Mova os negócios desta etapa antes de excluí-la." };
+    if (error.code === "23503") {
+      // Só negócios na lixeira prendem a etapa: a mensagem diz onde eles estão.
+      const active = await supabase
+        .from("deals")
+        .select("id", { count: "exact", head: true })
+        .eq("stage_id", id)
+        .is("deleted_at", null);
+      if (!active.error && (active.count ?? 0) === 0) {
+        return {
+          ok: false,
+          error: "Há negócios na lixeira nesta etapa. Esvazie a lixeira ou restaure-os antes de excluir.",
+        };
+      }
+      return { ok: false, error: "Mova os negócios desta etapa antes de excluí-la." };
+    }
     return { ok: false, error: translateDbError(error) };
   }
   revalidatePath(PATH);

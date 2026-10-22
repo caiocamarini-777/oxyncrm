@@ -12,6 +12,7 @@ import {
   type LabelRef,
 } from "@/lib/records/list-helpers";
 import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
+import { isUuid } from "@/lib/uuid";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("organizations", what, error);
 
@@ -155,7 +156,7 @@ export async function listOrganizations(
 }
 
 export async function getOrganization(id: string): Promise<OrganizationDetail | null> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  if (!isUuid(id)) return null;
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("organizations")

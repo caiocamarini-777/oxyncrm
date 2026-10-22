@@ -22,6 +22,9 @@ type Draft = { productId: string; quantity: string; unitPrice: string; discount:
 
 const EMPTY: Draft = { productId: "", quantity: "1", unitPrice: "", discount: "", mrrStart: "", contractMonths: "", setupFirstDue: "" };
 
+/** Id do cartão Produtos (o diálogo de obrigatórios leva o foco até ele). */
+export const DEAL_PRODUCTS_ID = "produtos";
+
 /** Produtos do negócio: tabela de itens, totais Setup e MRR, e inclusão/edição/remoção. */
 export function DealItems({
   deal,
@@ -119,9 +122,17 @@ export function DealItems({
   }
 
   return (
-    <Card>
+    <Card
+      id={DEAL_PRODUCTS_ID}
+      role="region"
+      tabIndex={-1}
+      aria-labelledby={`${DEAL_PRODUCTS_ID}-title`}
+      className="scroll-mt-4 outline-none focus:ring-2 focus:ring-primary"
+    >
       <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="font-heading text-xs uppercase tracking-wide text-muted-foreground">Produtos</CardTitle>
+        <CardTitle id={`${DEAL_PRODUCTS_ID}-title`} className="font-heading text-xs uppercase tracking-wide text-muted-foreground">
+          Produtos
+        </CardTitle>
         {canEdit ? (
           <Button type="button" size="sm" variant="outline" onClick={() => open(null)}>
             <Plus /> Adicionar produto

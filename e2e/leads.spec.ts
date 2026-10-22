@@ -168,6 +168,18 @@ test("desqualificar exige motivo e move para a aba Desqualificados", async ({ br
   await page.context().close();
 });
 
+test("lead desqualificado pode ser arquivado", async ({ browser }) => {
+  const page = await newPage(browser);
+  await page.goto(`/${slugA}/leads/${rec.disq}`);
+  await expect(page.getByTestId("lead-status")).toHaveText("Desqualificado");
+  await page.getByRole("button", { name: "Arquivar" }).click();
+  await expect(page.getByText("Lead arquivado.")).toBeVisible();
+  await expect(page.getByTestId("lead-status")).toHaveText("Arquivado");
+  const d = await admin().from("leads").select("status").eq("id", rec.disq).single();
+  expect(d.data?.status).toBe("archived");
+  await page.context().close();
+});
+
 test("reabrir lead", async ({ browser }) => {
   const page = await newPage(browser);
   await page.goto(`/${slugA}/leads/${rec.reopen}`);

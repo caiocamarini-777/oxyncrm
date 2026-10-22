@@ -1,25 +1,26 @@
 "use client";
 
-import { useMemo, useState, useTransition, type ReactNode } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { ContractFields, contractValuesFrom, type ContractValues } from "@/components/deals/contract-fields";
 import { RevenueTable } from "@/components/deals/revenue-table";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { updateContract } from "@/lib/deals/actions";
 import type { DealDetail } from "@/lib/deals/queries";
 import { buildRevenueSchedule, contractValue } from "@/lib/deals/revenue";
 import { formatMoney, parseBRL } from "@/lib/records/format";
 
-const money = (v: number) => (v === 0 ? "" : String(v).replace(".", ","));
 const amount = (raw: string) => {
   const n = parseBRL(raw);
   return n === null || Number.isNaN(n) ? 0 : n;
 };
 
-/** Condições do contrato com prévia do cronograma antes de salvar. Com produtos, setup e MRR vêm dos itens. */
+/**
+ * Condições do contrato com prévia do cronograma antes de salvar. Cada total vem dos produtos só
+ * quando há itens daquele tipo (setup dos itens de implantação, MRR dos recorrentes).
+ */
 export function ContractForm({
   deal,
   canEdit,
@@ -31,16 +32,23 @@ export function ContractForm({
   canEdit: boolean;
 }) {
   const router = useRouter();
-  const fromItems = deal.items.length > 0;
-  const initial = useMemo(
+  const fromItems = useMemo(
     () => ({
-      setupTotal: money(deal.setupTotal),
-      setupInstallments: String(deal.setupInstallments || 1),
-      setupFirstDue: deal.setupFirstDue ?? "",
-      mrr: money(deal.mrr),
-      mrrStart: deal.mrrStart ?? "",
-      contractMonths: deal.contractMonths === null ? "" : String(deal.contractMonths),
+      setup: deal.items.some((i) => i.kind === "setup"),
+      mrr: deal.items.some((i) => i.kind === "recurring"),
     }),
+    [deal.items],
+  );
+  const initial = useMemo(
+    () =>
+      contractValuesFrom({
+        setupTotal: deal.setupTotal,
+        setupInstallments: deal.setupInstallments,
+        setupFirstDue: deal.setupFirstDue,
+        mrr: deal.mrr,
+        mrrStart: deal.mrrStart,
+        contractMonths: deal.contractMonths,
+      }),
     [deal.setupTotal, deal.setupInstallments, deal.setupFirstDue, deal.mrr, deal.mrrStart, deal.contractMonths],
   );
   const [form, setForm] = useState(initial);
@@ -54,8 +62,8 @@ export function ContractForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const setupTotal = fromItems ? deal.setupTotal : amount(form.setupTotal);
-  const mrr = fromItems ? deal.mrr : amount(form.mrr);
+  const setupTotal = fromItems.setup ? deal.setupTotal : amount(form.setupTotal);
+  const mrr = fromItems.mrr ? deal.mrr : amount(form.mrr);
   const { total, preview } = useMemo(() => {
     const months = form.contractMonths === "" ? null : Number(form.contractMonths);
     const live = {
@@ -70,8 +78,7 @@ export function ContractForm({
   }, [setupTotal, mrr, form.setupInstallments, form.setupFirstDue, form.mrrStart, form.contractMonths]);
   const dirty = (Object.keys(initial) as (keyof typeof initial)[]).some((k) => form[k] !== initial[k]);
 
-  const set = (k: keyof typeof initial) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
+  const set = (k: keyof ContractValues, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,41 +104,7 @@ export function ContractForm({
       <CardContent>
         <form onSubmit={submit} noValidate className="flex flex-col gap-3">
           <fieldset disabled={!canEdit || pending} className="flex min-w-0 flex-col gap-3">
-            <div className="grid grid-cols-2 gap-3">
-              <Field id="contract-setup" label="Setup total (R$)" error={errors.setupTotal} hint={fromItems ? "Calculado a partir dos produtos" : undefined}>
-                <Input
-                  id="contract-setup"
-                  inputMode="decimal"
-                  placeholder="0,00"
-                  value={fromItems ? money(deal.setupTotal) : form.setupTotal}
-                  readOnly={fromItems}
-                  onChange={set("setupTotal")}
-                />
-              </Field>
-              <Field id="contract-installments" label="Parcelas" error={errors.setupInstallments}>
-                <Input id="contract-installments" type="number" min={1} max={60} value={form.setupInstallments} onChange={set("setupInstallments")} />
-              </Field>
-              <Field id="contract-first-due" label="Mês da 1ª parcela" error={errors.setupFirstDue}>
-                <Input id="contract-first-due" type="month" value={form.setupFirstDue} onChange={set("setupFirstDue")} />
-              </Field>
-              <span />
-              <Field id="contract-mrr" label="MRR (R$)" error={errors.mrr} hint={fromItems ? "Calculado a partir dos produtos" : undefined}>
-                <Input
-                  id="contract-mrr"
-                  inputMode="decimal"
-                  placeholder="0,00"
-                  value={fromItems ? money(deal.mrr) : form.mrr}
-                  readOnly={fromItems}
-                  onChange={set("mrr")}
-                />
-              </Field>
-              <Field id="contract-mrr-start" label="Início do MRR" error={errors.mrrStart}>
-                <Input id="contract-mrr-start" type="month" value={form.mrrStart} onChange={set("mrrStart")} />
-              </Field>
-              <Field id="contract-months" label="Duração (meses)" error={errors.contractMonths}>
-                <Input id="contract-months" type="number" min={1} max={120} value={form.contractMonths} onChange={set("contractMonths")} />
-              </Field>
-            </div>
+            <ContractFields idPrefix="contract" values={form} onChange={set} errors={errors} fromItems={fromItems} />
           </fieldset>
           <p className="flex items-baseline justify-between border-t pt-2 text-sm">
             <span className="text-muted-foreground">Valor total do contrato</span>
@@ -160,20 +133,5 @@ export function ContractForm({
         </form>
       </CardContent>
     </Card>
-  );
-}
-
-function Field({ id, label, error, hint, children }: { id: string; label: string; error?: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
-      {children}
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </div>
   );
 }

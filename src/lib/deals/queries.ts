@@ -16,6 +16,7 @@ import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
 import { forecastBuckets, type ForecastBucket } from "./forecast";
 import { cardValue, isRotting } from "./kanban";
 import { dealStatusOf, type DealStatus } from "./schema";
+import { isUuid } from "@/lib/uuid";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("deals", what, error);
 
@@ -390,7 +391,7 @@ async function resolveLink(
 }
 
 export async function getDeal(id: string): Promise<DealDetail | null> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  if (!isUuid(id)) return null;
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("deals")

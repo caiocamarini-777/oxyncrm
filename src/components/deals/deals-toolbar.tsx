@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Columns3, LineChart, List, Search, Snowflake } from "lucide-react";
 import { CompanyPicker } from "@/components/records/company-picker";
-import { MultiSelect, type MultiOption } from "@/components/records/multi-select";
+import { LABEL_FILTER, MultiSelect, type MultiOption } from "@/components/records/multi-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Toggle } from "@/components/ui/toggle";
@@ -151,7 +151,10 @@ export function DealsToolbar({
         ) : null}
         <MultiSelect label="Responsável" options={options.owners} value={params.getAll("owner")} onChange={(v) => setMulti("owner", v)} />
         <MultiSelect label="Equipe" options={options.teams} value={params.getAll("team")} onChange={(v) => setMulti("team", v)} />
-        <MultiSelect label="Etiqueta" options={options.labels} value={params.getAll("label")} onChange={(v) => setMulti("label", v)} />
+        <MultiSelect
+          label={LABEL_FILTER.label}
+          hint={LABEL_FILTER.hint}
+          options={options.labels} value={params.getAll("label")} onChange={(v) => setMulti("label", v)} />
         <Toggle
           variant="outline"
           size="sm"

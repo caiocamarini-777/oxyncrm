@@ -17,6 +17,7 @@ import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("persons", what, error);
 import type { ContactEntry } from "./schema";
+import { isUuid } from "@/lib/uuid";
 
 export const PERSON_SORTS = ["full_name", "job_title", "created_at"];
 
@@ -158,7 +159,7 @@ async function resolveOrganization(orgId: string | null): Promise<PersonOrganiza
 }
 
 export async function getPerson(id: string): Promise<PersonDetail | null> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  if (!isUuid(id)) return null;
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("persons")

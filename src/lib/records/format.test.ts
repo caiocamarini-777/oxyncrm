@@ -43,4 +43,18 @@ describe("parseBRL", () => {
     expect(parseBRL(" ")).toBeNull();
     expect(parseBRL("abc")).toBeNaN();
   });
+
+  it("sem vírgula, pontos em grupos de três são milhar", () => {
+    expect(parseBRL("30.000")).toBe(30000);
+    expect(parseBRL("1.500")).toBe(1500);
+    expect(parseBRL("1.234.567")).toBe(1234567);
+    expect(parseBRL("-1.500")).toBe(-1500);
+  });
+
+  it("sem vírgula, outros pontos continuam decimais", () => {
+    expect(parseBRL("1.5")).toBe(1.5);
+    expect(parseBRL("1500.25")).toBe(1500.25);
+    expect(parseBRL("12.50")).toBe(12.5);
+    expect(parseBRL("1.2345")).toBe(1.2345);
+  });
 });

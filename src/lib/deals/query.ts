@@ -1,9 +1,9 @@
 import { parseListQuery } from "@/lib/records/query";
 import type { DealListQuery } from "./queries";
+import { isUuid } from "@/lib/uuid";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const uuids = (params: URLSearchParams, key: string) => [
-  ...new Set(params.getAll(key).map((v) => v.trim()).filter((v) => UUID.test(v))),
+  ...new Set(params.getAll(key).map((v) => v.trim()).filter(isUuid)),
 ];
 
 /** `parseListQuery` + funil, etapas, equipes e esfriando; ids que não são uuid são descartados. */
@@ -13,9 +13,7 @@ export function parseDealListQuery(params: URLSearchParams, allowedSorts: string
   const pipeline = (params.get("pipeline") ?? params.get("funil"))?.trim() ?? "";
   return {
     ...base,
-    owner: base.owner.filter((v) => UUID.test(v)),
-    label: base.label.filter((v) => UUID.test(v)),
-    pipeline: UUID.test(pipeline) ? pipeline : null,
+    pipeline: isUuid(pipeline) ? pipeline : null,
     stage: uuids(params, "stage"),
     team: uuids(params, "team"),
     rotting: params.get("rotting") === "1",

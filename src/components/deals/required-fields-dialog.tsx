@@ -1,20 +1,19 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { ContractFields, contractValuesFrom, Field, moneyText } from "@/components/deals/contract-fields";
 import { PartyCombobox, type PartyValue } from "@/components/leads/party-combobox";
 import { CustomFieldInput } from "@/components/records/custom-field";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import type { CustomFieldDef } from "@/lib/custom-fields/schema";
 import { updateContract, updateDeal, type DealEditSnapshot, type DealResult } from "@/lib/deals/actions";
 import { requiredFieldLabel } from "@/lib/deals/required";
 import type { AssignableOwner } from "@/lib/records/types";
 
 const BASIC = ["expected_close_date", "person_id", "organization_id", "estimated_value"];
-const money = (v: number | null) => (v === null || v === 0 ? "" : String(v).replace(".", ","));
 
 /**
  * Pede só os campos obrigatórios que faltam para entrar na etapa, grava e repete o movimento
@@ -31,6 +30,7 @@ export function RequiredFieldsDialog({
   onRetry,
   onClose,
   onCloseAutoFocus,
+  productsTargetId,
 }: {
   deal: DealEditSnapshot;
   stageName: string;
@@ -45,7 +45,10 @@ export function RequiredFieldsDialog({
   onClose: () => void;
   /** Para devolver o foco a quem abriu (o diálogo pode abrir sem um gatilho). */
   onCloseAutoFocus?: (e: Event) => void;
+  /** Na própria página do negócio: id do cartão Produtos, que recebe o foco em vez de navegar. */
+  productsTargetId?: string;
 }) {
+  const toProducts = useRef(false);
   const [missing, setMissing] = useState(initialMissing);
   const [closeDate, setCloseDate] = useState(deal.expectedCloseDate ?? "");
   const [person, setPerson] = useState<PartyValue | null>(
@@ -54,15 +57,8 @@ export function RequiredFieldsDialog({
   const [organization, setOrganization] = useState<PartyValue | null>(
     deal.organizationId ? { id: deal.organizationId, name: deal.organizationName ?? "" } : null,
   );
-  const [estimated, setEstimated] = useState(money(deal.estimatedValue));
-  const [contract, setContract] = useState({
-    setupTotal: money(deal.setupTotal),
-    setupInstallments: String(deal.setupInstallments || 1),
-    setupFirstDue: deal.setupFirstDue ?? "",
-    mrr: money(deal.mrr),
-    mrrStart: deal.mrrStart ?? "",
-    contractMonths: deal.contractMonths === null ? "" : String(deal.contractMonths),
-  });
+  const [estimated, setEstimated] = useState(moneyText(deal.estimatedValue));
+  const [contract, setContract] = useState(() => contractValuesFrom(deal));
   const [custom, setCustom] = useState<Record<string, unknown>>(() => {
     const out: Record<string, unknown> = {};
     for (const k of initialMissing) if (k.startsWith("cf:")) out[k.slice(3)] = deal.customFields[k.slice(3)] ?? null;
@@ -121,7 +117,19 @@ export function RequiredFieldsDialog({
 
   return (
     <Dialog open onOpenChange={(o) => (o ? null : onClose())}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto" onCloseAutoFocus={onCloseAutoFocus}>
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto"
+        onCloseAutoFocus={(e) => {
+          const target = toProducts.current && productsTargetId ? document.getElementById(productsTargetId) : null;
+          if (target) {
+            e.preventDefault();
+            target.scrollIntoView({ block: "start", behavior: "auto" });
+            target.focus({ preventScroll: true });
+            return;
+          }
+          onCloseAutoFocus?.(e);
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Campos obrigatórios</DialogTitle>
           <DialogDescription>
@@ -168,72 +176,34 @@ export function RequiredFieldsDialog({
                 <p className="text-xs text-muted-foreground">
                   Informe o setup com o mês da 1ª parcela, ou o MRR com o mês de início e a duração.
                 </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field id="req-setup" label="Setup (R$)" error={errors.setupTotal}>
-                    <Input
-                      id="req-setup"
-                      inputMode="decimal"
-                      placeholder="0,00"
-                      value={contract.setupTotal}
-                      onChange={(e) => setContract((c) => ({ ...c, setupTotal: e.target.value }))}
-                    />
-                  </Field>
-                  <Field id="req-installments" label="Parcelas" error={errors.setupInstallments}>
-                    <Input
-                      id="req-installments"
-                      type="number"
-                      min={1}
-                      max={60}
-                      value={contract.setupInstallments}
-                      onChange={(e) => setContract((c) => ({ ...c, setupInstallments: e.target.value }))}
-                    />
-                  </Field>
-                  <Field id="req-first-due" label="Mês da 1ª parcela" error={errors.setupFirstDue}>
-                    <Input
-                      id="req-first-due"
-                      type="month"
-                      value={contract.setupFirstDue}
-                      onChange={(e) => setContract((c) => ({ ...c, setupFirstDue: e.target.value }))}
-                    />
-                  </Field>
-                  <span />
-                  <Field id="req-mrr" label="MRR (R$)" error={errors.mrr}>
-                    <Input
-                      id="req-mrr"
-                      inputMode="decimal"
-                      placeholder="0,00"
-                      value={contract.mrr}
-                      onChange={(e) => setContract((c) => ({ ...c, mrr: e.target.value }))}
-                    />
-                  </Field>
-                  <Field id="req-mrr-start" label="Início do MRR" error={errors.mrrStart}>
-                    <Input
-                      id="req-mrr-start"
-                      type="month"
-                      value={contract.mrrStart}
-                      onChange={(e) => setContract((c) => ({ ...c, mrrStart: e.target.value }))}
-                    />
-                  </Field>
-                  <Field id="req-months" label="Duração (meses)" error={errors.contractMonths}>
-                    <Input
-                      id="req-months"
-                      type="number"
-                      min={1}
-                      max={120}
-                      value={contract.contractMonths}
-                      onChange={(e) => setContract((c) => ({ ...c, contractMonths: e.target.value }))}
-                    />
-                  </Field>
-                </div>
+                <ContractFields
+                  idPrefix="req"
+                  values={contract}
+                  onChange={(k, v) => setContract((c) => ({ ...c, [k]: v }))}
+                  errors={errors}
+                />
               </fieldset>
             ) : null}
             {has("products") ? (
               <div className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
                 <span className="font-medium">{requiredFieldLabel("products")}</span>
                 <span className="text-muted-foreground">Esta etapa exige ao menos um produto no negócio.</span>
-                <Link href={dealHref} className="self-start text-primary underline-offset-4 hover:underline">
-                  Adicionar produtos
-                </Link>
+                {productsTargetId ? (
+                  <button
+                    type="button"
+                    className="self-start text-primary underline-offset-4 hover:underline"
+                    onClick={() => {
+                      toProducts.current = true;
+                      onClose();
+                    }}
+                  >
+                    Adicionar produtos
+                  </button>
+                ) : (
+                  <Link href={dealHref} className="self-start text-primary underline-offset-4 hover:underline">
+                    Adicionar produtos
+                  </Link>
+                )}
               </div>
             ) : null}
             {cfKeys.map((key) => {
@@ -267,19 +237,5 @@ export function RequiredFieldsDialog({
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function Field({ id, label, error, children }: { id: string; label: string; error?: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
-      {children}
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </div>
   );
 }

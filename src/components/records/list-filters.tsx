@@ -6,7 +6,7 @@ import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { RecordEntity } from "@/lib/records/types";
-import { MultiSelect, type MultiOption } from "./multi-select";
+import { LABEL_FILTER, MultiSelect, type MultiOption } from "./multi-select";
 
 export type ListFilterOptions = {
   owners: MultiOption[];
@@ -94,7 +94,8 @@ export function ListFilters({
         onChange={(v) => setMulti("owner", v)}
       />
       <MultiSelect
-        label="Etiqueta"
+        label={LABEL_FILTER.label}
+        hint={LABEL_FILTER.hint}
         options={options.labels}
         value={params.getAll("label")}
         onChange={(v) => setMulti("label", v)}

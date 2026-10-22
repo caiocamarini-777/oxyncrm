@@ -1,3 +1,5 @@
+import { MONTHS } from "@/lib/records/format";
+
 export type ForecastDeal = {
   status: string;
   /** "YYYY-MM-DD" */
@@ -15,8 +17,6 @@ export type ForecastBucket<D> = {
   weighted: number;
   deals: D[];
 };
-
-const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
 /** Mês atual "YYYY-MM" em America/Sao_Paulo (UTC-3). */
 export function currentMonth(now: Date): string {

@@ -28,12 +28,13 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
   if (!lead) notFound();
   if (scope.kind === "company" && scope.company.id !== lead.companyId) notFound();
 
-  const [timeline, owners, labels, defs, permissions, sources, reasons, pipelineRows, dealDefs] = await Promise.all([
+  const [timeline, owners, labels, defs, permissions, dealPermissions, sources, reasons, pipelineRows, dealDefs] = await Promise.all([
     getTimeline("leads", lead.id),
     listAssignableOwners(lead.companyId),
     listCompanyLabels(lead.companyId),
     listActiveCustomFieldDefs(lead.companyId, "leads"),
     getEntityPermissions(lead.companyId, "leads"),
+    getEntityPermissions(lead.companyId, "deals"),
     listLeadSources(lead.companyId),
     listDisqualificationReasons(lead.companyId),
     listPipelinesWithStages(lead.companyId),
@@ -60,6 +61,7 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
               status={lead.status}
               reasons={reasons}
               canEdit={permissions.edit}
+              canConvert={permissions.edit && dealPermissions.create}
               leadTitle={lead.title}
               empresa={empresa}
               pipelines={pipelines}

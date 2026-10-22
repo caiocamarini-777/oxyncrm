@@ -65,6 +65,7 @@ export async function createDeal(companyId: string, input: DealInput): Promise<D
     .from("deals")
     .select("position")
     .eq("stage_id", d.stageId)
+    .is("deleted_at", null)
     .order("position", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -308,28 +309,38 @@ export async function reopenDeal(id: string): Promise<DealResult> {
   return setStatus(id, ["won", "lost"], { status: "open" }, "Só negócios ganhos ou perdidos podem ser reabertos.");
 }
 
-async function itemCount(dealId: string): Promise<number | null> {
+/** Tipos de item presentes no negócio (cada tipo com itens tem o total calculado pelo banco). */
+async function itemKinds(dealId: string): Promise<{ setup: boolean; mrr: boolean } | null> {
   const supabase = await createServerClient();
-  const { count, error } = await supabase.from("deal_items").select("id", { count: "exact", head: true }).eq("deal_id", dealId);
-  return error ? null : (count ?? 0);
+  const [setup, mrr] = await Promise.all(
+    (["setup", "recurring"] as const).map((kind) =>
+      supabase.from("deal_items").select("id", { count: "exact", head: true }).eq("deal_id", dealId).eq("kind", kind),
+    ),
+  );
+  if (setup.error || mrr.error) return null;
+  return { setup: (setup.count ?? 0) > 0, mrr: (mrr.count ?? 0) > 0 };
 }
 
 /**
- * Condições do contrato. Com produtos no negócio, os totais vêm dos itens: só datas e parcelas
- * são gravadas (os valores enviados são ignorados).
+ * Condições do contrato. O total de um tipo com produtos (setup dos itens de implantação, MRR dos
+ * recorrentes) vem dos itens e o valor enviado é ignorado; o tipo sem itens continua digitado.
  */
 export async function updateContract(id: string, input: ContractInput): Promise<DealResult> {
   if (!uuid.safeParse(id).success) return INVALID;
-  const items = await itemCount(id);
-  if (items === null) return { ok: false, error: SAVE_FAILED };
+  const kinds = await itemKinds(id);
+  if (kinds === null) return { ok: false, error: SAVE_FAILED };
   const supabase = await createServerClient();
   let effective: ContractInput = input;
-  if (items > 0) {
-    // Totais vêm dos itens: as datas exigidas dependem dos valores reais do negócio.
+  if (kinds.setup || kinds.mrr) {
+    // As datas exigidas dependem dos valores reais do tipo calculado.
     const cur = await supabase.from("deals").select("setup_total, mrr").eq("id", id).is("deleted_at", null).maybeSingle();
     if (cur.error) return { ok: false, error: SAVE_FAILED };
     if (!cur.data) return { ok: false, error: "Registro não encontrado ou sem permissão." };
-    effective = { ...input, setupTotal: Number(cur.data.setup_total), mrr: Number(cur.data.mrr) };
+    effective = {
+      ...input,
+      ...(kinds.setup ? { setupTotal: Number(cur.data.setup_total) } : {}),
+      ...(kinds.mrr ? { mrr: Number(cur.data.mrr) } : {}),
+    };
   }
   const parsed = contractSchema.safeParse(effective);
   if (!parsed.success) {
@@ -343,10 +354,8 @@ export async function updateContract(id: string, input: ContractInput): Promise<
     mrr_start: monthToDate(c.mrrStart),
     contract_months: c.contractMonths,
   };
-  if (items === 0) {
-    patch.setup_total = c.setupTotal;
-    patch.mrr = c.mrr;
-  }
+  if (!kinds.setup) patch.setup_total = c.setupTotal;
+  if (!kinds.mrr) patch.mrr = c.mrr;
   const { data, error } = await supabase.from("deals").update(patch).eq("id", id).is("deleted_at", null).select("id");
   if (error) {
     if (error.code === "23514") return { ok: false, error: "Não foi possível salvar as condições do contrato." };

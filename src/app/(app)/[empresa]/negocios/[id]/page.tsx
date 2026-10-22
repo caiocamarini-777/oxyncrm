@@ -45,6 +45,15 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
 
   const daysInStage = daysSince(deal.stageEnteredAt);
   const stages = deal.stages.filter((s) => !s.archived || s.id === deal.stageId).map((s) => ({ id: s.id, name: s.name }));
+  // Recomeça o formulário de dados quando o servidor devolve outros valores (ex.: diálogo de obrigatórios).
+  const formKey = JSON.stringify([
+    deal.title,
+    deal.personId,
+    deal.organizationId,
+    deal.estimatedValue,
+    deal.expectedCloseDate,
+    deal.customFields,
+  ]);
   const dealHref = `/${empresa}/negocios/${deal.id}`;
 
   return (
@@ -110,7 +119,7 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
       }
       details={
         <div className="flex flex-col gap-4">
-          <DealForm deal={deal} defs={defs} owners={owners} canEdit={permissions.edit} />
+          <DealForm key={formKey} deal={deal} defs={defs} owners={owners} canEdit={permissions.edit} />
           <DealItems deal={deal} products={products} canEdit={permissions.edit} />
           <ContractForm deal={deal} canEdit={permissions.edit} />
           <Card>

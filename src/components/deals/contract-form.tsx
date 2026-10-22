@@ -56,22 +56,19 @@ export function ContractForm({
 
   const setupTotal = fromItems ? deal.setupTotal : amount(form.setupTotal);
   const mrr = fromItems ? deal.mrr : amount(form.mrr);
-  const months = form.contractMonths === "" ? null : Number(form.contractMonths);
-  const live = {
-    setupTotal,
-    setupInstallments: Number(form.setupInstallments) || 1,
-    setupFirstDue: form.setupFirstDue || null,
-    mrr,
-    mrrStart: form.mrrStart || null,
-    contractMonths: months !== null && Number.isFinite(months) ? months : null,
-  };
-  const total = contractValue(live);
+  const { total, preview } = useMemo(() => {
+    const months = form.contractMonths === "" ? null : Number(form.contractMonths);
+    const live = {
+      setupTotal,
+      setupInstallments: Number(form.setupInstallments) || 1,
+      setupFirstDue: form.setupFirstDue || null,
+      mrr,
+      mrrStart: form.mrrStart || null,
+      contractMonths: months !== null && Number.isFinite(months) ? months : null,
+    };
+    return { total: contractValue(live), preview: buildRevenueSchedule(live) };
+  }, [setupTotal, mrr, form.setupInstallments, form.setupFirstDue, form.mrrStart, form.contractMonths]);
   const dirty = (Object.keys(initial) as (keyof typeof initial)[]).some((k) => form[k] !== initial[k]);
-  const preview = useMemo(
-    () => buildRevenueSchedule(live),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [setupTotal, mrr, form.setupInstallments, form.setupFirstDue, form.mrrStart, form.contractMonths],
-  );
 
   const set = (k: keyof typeof initial) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));

@@ -55,7 +55,7 @@ test.beforeAll(async () => {
   const stages = await a.from("stages").select("id, name").eq("pipeline_id", pipelineId);
   if (stages.error) throw stages.error;
   for (const s of stages.data) stage[s.name] = s.id;
-  const req = await a.from("stages").update({ required_fields: ["expected_close_date"] }).eq("id", stage.Proposta);
+  const req = await a.from("stages").update({ required_fields: ["expected_close_date", "estimated_value"] }).eq("id", stage.Proposta);
   if (req.error) throw req.error;
 
   product.setup = await insert("products", { company_id: companyId, name: `Implantação ${stamp}`, kind: "setup", default_price: 6000 });
@@ -172,6 +172,10 @@ test("com produtos os totais vêm dos itens", async ({ browser }) => {
   await page.getByRole("button", { name: `Remover Implantação ${stamp}` }).click();
   await expect(page.getByTestId("item-row")).toHaveCount(1);
   await expect(page.getByTestId("items-setup")).toHaveText(/R\$\s*0,00/);
+  // Desfazer devolve o item com os mesmos valores.
+  await page.getByRole("button", { name: "Desfazer" }).click();
+  await expect(page.getByTestId("item-row")).toHaveCount(2);
+  await expect(page.getByTestId("items-setup")).toHaveText(/R\$\s*5\.500,00/);
   await page.context().close();
 });
 
@@ -196,12 +200,16 @@ test("barra de etapas move e pede campos obrigatórios", async ({ browser }) => 
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("Data de fechamento esperada")).toBeVisible();
   await dialog.getByLabel("Data de fechamento esperada").fill("2026-12-15");
+  await dialog.getByLabel("Valor estimado (R$)").fill("12345,67");
   await dialog.getByRole("button", { name: "Salvar e mover" }).click();
   await expect(dialog).toBeHidden();
   await expect(seg("Proposta")).toHaveAttribute("aria-current", "step");
   const saved = await admin().from("deals").select("stage_id, expected_close_date").eq("id", deal.etapas).single();
   expect(saved.data).toMatchObject({ stage_id: stage.Proposta, expected_close_date: "2026-12-15" });
 
+  // O cartão Dados mostra o que o diálogo gravou (sem valores antigos).
+  await expect(page.getByLabel("Data de fechamento esperada")).toHaveValue("2026-12-15");
+  await expect(page.getByLabel("Valor estimado (R$)")).toHaveValue("12345,67");
   await expect(page.getByTestId("timeline-event").filter({ hasText: "Moveu de Qualificação para Reunião" })).toBeVisible();
   await expect(page.getByTestId("timeline-event").filter({ hasText: "Moveu de Reunião para Proposta" })).toBeVisible();
   await page.context().close();

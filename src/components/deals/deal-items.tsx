@@ -93,8 +93,22 @@ export function DealItems({
         toast.error(res.error);
         return;
       }
-      toast.success("Produto removido.");
       router.refresh();
+      toast.success("Produto removido.", {
+        action: {
+          label: "Desfazer",
+          onClick: async () => {
+            const back = await addDealItem(deal.id, {
+              productId: item.productId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              discount: item.discount,
+            });
+            if (back.ok) router.refresh();
+            else toast.error(back.error);
+          },
+        },
+      });
     });
   }
 

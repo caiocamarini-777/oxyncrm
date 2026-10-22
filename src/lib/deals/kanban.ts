@@ -44,7 +44,11 @@ export function daysSince(iso: string, now: number = Date.now()): number {
   return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 86_400_000));
 }
 
-/** Posição que coloca o negócio no fim da etapa de destino (as demais ficam muito abaixo disso). */
+/**
+ * Posição que coloca o negócio no fim da etapa de destino. Seguro porque as posições do quadro
+ * são pequenas (incrementos de 1024 ou pontos médios) e o timestamp em ms (~1,7e12) é sempre
+ * maior; `position` é numeric sem limite de escala.
+ */
 export function endPosition(now: number = Date.now()): number {
   return now;
 }

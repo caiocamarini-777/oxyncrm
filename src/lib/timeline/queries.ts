@@ -43,11 +43,15 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
   const ids = new Set<string>();
   const reasonIds = new Set<string>();
   const stageIds = new Set<string>();
+  const activityIds = new Set<string>();
   for (const e of events.data) {
     if (e.actor_id) ids.add(e.actor_id);
     const d = (e.data ?? {}) as Record<string, unknown>;
     for (const k of ["from", "to"]) if (e.kind === "owner_changed" && typeof d[k] === "string") ids.add(d[k] as string);
     if (typeof d.reason_id === "string") reasonIds.add(d.reason_id);
+    if ((e.kind === "activity_scheduled" || e.kind === "activity_completed") && typeof d.activity_id === "string") {
+      activityIds.add(d.activity_id);
+    }
     if (e.kind === "stage_changed") {
       for (const k of ["from", "to"]) if (typeof d[k] === "string") stageIds.add(d[k] as string);
     }
@@ -72,6 +76,19 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     const { data, error } = await supabase.from("stages").select("id, name").in("id", [...stageIds]);
     if (error) fail("etapas", error);
     for (const r of data) names[r.id] = r.name;
+  }
+  if (activityIds.size > 0) {
+    // assunto e tipo atuais da atividade (o evento guarda só o id); sem acesso, o texto usa "atividade"
+    const { data, error } = await supabase
+      .from("activities")
+      .select("id, subject, type:activity_types(name)")
+      .in("id", [...activityIds]);
+    if (error) fail("atividades", error);
+    for (const a of (data ?? []) as unknown as { id: string; subject: string; type: { name: string } | { name: string }[] | null }[]) {
+      names[a.id] = a.subject;
+      const t = Array.isArray(a.type) ? a.type[0] : a.type;
+      if (t) names[`type:${a.id}`] = t.name;
+    }
   }
 
   const noteMap = new Map(notes.data.map((n) => [n.id, n]));

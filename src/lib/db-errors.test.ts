@@ -30,6 +30,14 @@ describe("translateDbError", () => {
     ["OXYN_LAST_MEETING_TYPE", "Mantenha ao menos um tipo de reunião ativo."],
     ["OXYN_LAST_BOOKING_OUTCOME", "Mantenha ao menos um resultado que agenda reunião."],
     ["OXYN_LEGACY_CHANNEL", "O canal de importação não pode ser ativado."],
+    ["OXYN_ALREADY_DONE", "Esta atividade já foi concluída."],
+    ["OXYN_NOT_DONE", "Esta atividade não está concluída."],
+    ["OXYN_OUTCOME_REQUIRED", "Informe o resultado da atividade."],
+    ["OXYN_MEETING_REQUIRED", "Agende a reunião para concluir com este resultado."],
+    ["OXYN_NEXT_ACTIVITY_REQUIRED", "Agende a próxima atividade para concluir."],
+    ["OXYN_LINK_FORBIDDEN", "Você não tem acesso a um dos registros vinculados."],
+    ["OXYN_INVALID_INPUT", "Dados inválidos. Confira os campos e tente novamente."],
+    ["OXYN_FORBIDDEN", "Você não tem permissão para esta ação."],
   ])("%s", (code, text) => expect(translateDbError({ message: `x ${code}` })).toBe(text));
   it("genérico", () =>
     expect(translateDbError({ code: "XX000" })).toBe("Não foi possível concluir. Tente novamente."));

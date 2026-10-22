@@ -1,5 +1,5 @@
 begin;
-select plan(23);
+select plan(25);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -128,6 +128,13 @@ select is((select count(*) from notifications where activity_id = pg_temp.u(320)
 select is((select count(*) from notifications where activity_id in (pg_temp.u(321), pg_temp.u(322))), 0::bigint, 'legado e dono sem vínculo não geram lembrete');
 select ok((select bool_and(proconfig is null) from pg_proc where proname in ('next_activity_for', 'deals_with_overdue_activity') and pronamespace = 'public'::regnamespace),
   'consultas sem set search_path (inlináveis)');
+
+select pg_temp.as_user(pg_temp.u(11));
+select throws_ok($$ select chain_insert_activity(pg_temp.u(301), 'meeting', '{"subject":"x","due_at":"2030-01-01T10:00:00Z"}'::jsonb) $$,
+  'P0001', 'OXYN_FORBIDDEN', 'chain_insert_activity direto via RPC é barrado');
+select throws_ok($$ select set_config('oxyn.completing', pg_temp.u(999)::text, true), chain_insert_activity(pg_temp.u(301), 'meeting', '{"subject":"x","due_at":"2030-01-01T10:00:00Z"}'::jsonb) $$,
+  'P0001', 'OXYN_FORBIDDEN', 'flag de outra atividade não libera chain_insert_activity');
+select pg_temp.as_pg();
 
 select * from finish();
 rollback;

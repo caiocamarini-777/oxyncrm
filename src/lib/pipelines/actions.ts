@@ -159,19 +159,12 @@ export async function reorderStages(pipelineId: string, stageIds: string[]): Pro
     return { ok: false, error: "Dados inválidos." };
   }
   const supabase = await createServerClient();
-  const { data: rows, error: listError } = await supabase
-    .from("stages")
-    .select("id, position")
-    .eq("pipeline_id", pipelineId);
-  if (listError) return { ok: false, error: translateDbError(listError) };
-  const current = new Map((rows ?? []).map((r) => [r.id, r.position]));
-  if (stageIds.length !== current.size || new Set(stageIds).size !== stageIds.length || !stageIds.every((s) => current.has(s))) {
-    return { ok: false, error: "A lista de etapas mudou. Recarregue a página." };
-  }
-  for (const [index, id] of stageIds.entries()) {
-    if (current.get(id) === index) continue;
-    const { error } = await supabase.from("stages").update({ position: index }).eq("id", id);
-    if (error) return { ok: false, error: translateDbError(error) };
+  const { error } = await supabase.rpc("reorder_stages", { p_pipeline: pipelineId, p_stage_ids: stageIds });
+  if (error) {
+    if (error.message.includes("OXYN_STAGES_MISMATCH")) {
+      return { ok: false, error: "A lista de etapas mudou. Recarregue a página." };
+    }
+    return { ok: false, error: translateDbError(error) };
   }
   revalidatePath(PATH);
   return { ok: true, data: undefined };

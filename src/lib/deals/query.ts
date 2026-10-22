@@ -9,7 +9,8 @@ const uuids = (params: URLSearchParams, key: string) => [
 /** `parseListQuery` + funil, etapas, equipes e esfriando; ids que não são uuid são descartados. */
 export function parseDealListQuery(params: URLSearchParams, allowedSorts: string[]): Required<DealListQuery> {
   const base = parseListQuery(params, allowedSorts);
-  const pipeline = params.get("pipeline")?.trim() ?? "";
+  // `funil` é o parâmetro do seletor da tela; `pipeline` continua aceito.
+  const pipeline = (params.get("pipeline") ?? params.get("funil"))?.trim() ?? "";
   return {
     ...base,
     owner: base.owner.filter((v) => UUID.test(v)),

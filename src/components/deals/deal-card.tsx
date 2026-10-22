@@ -10,6 +10,12 @@ import { formatMoney } from "@/lib/records/format";
 
 export type CardValueField = "total" | "mrr" | "setup";
 
+/** O que o card precisa; o quadro (BoardDeal) e a previsão (ForecastRow) satisfazem. */
+export type CardDeal = Pick<
+  BoardDeal,
+  "id" | "title" | "organization" | "rotting" | "labels" | "ownerName" | "ownerAvatarUrl" | "contractValue" | "estimatedValue" | "mrr" | "setupTotal"
+>;
+
 function initials(name: string) {
   return (
     name
@@ -40,7 +46,7 @@ export function DealCardBody({
   describedBy,
   descriptionId,
 }: {
-  deal: BoardDeal;
+  deal: CardDeal;
   field: CardValueField;
   href: string;
   /** Cópia visual (card levantado ou espaço reservado): sem foco nem leitura. */

@@ -13,9 +13,9 @@ import type { CompanySummary } from "@/lib/companies/pure";
 import type { DealView } from "@/lib/deals/query";
 
 
-const FILTER_KEYS = ["q", "owner", "team", "label", "rotting", "page"];
+const FILTER_KEYS = ["q", "owner", "team", "label", "rotting", "stage", "page"];
 
-export type DealFilterOptions = { owners: MultiOption[]; teams: MultiOption[]; labels: MultiOption[] };
+export type DealFilterOptions = { owners: MultiOption[]; teams: MultiOption[]; labels: MultiOption[]; stages?: MultiOption[] };
 
 /** Funil, visão (Kanban / Lista / Forecast), filtros e ações; tudo no estado da URL. */
 export function DealsToolbar({
@@ -24,17 +24,23 @@ export function DealsToolbar({
   view,
   options,
   actions,
+  allCompanies = false,
+  companies = [],
 }: {
   pipelines: { id: string; name: string }[];
   pipelineId: string | null;
   view: DealView;
   options: DealFilterOptions;
   actions?: ReactNode;
+  /** Visão "Todas as empresas": só a lista; Kanban e Forecast pedem a empresa. */
+  allCompanies?: boolean;
+  companies?: CompanySummary[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const [q, setQ] = useState(params.get("q") ?? "");
+  const [choosing, setChoosing] = useState<DealView | null>(null);
   const first = useRef(true);
 
   function push(next: URLSearchParams) {
@@ -80,13 +86,20 @@ export function DealsToolbar({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          {pipelines.length > 0 ? (
+          {pipelines.length > 0 && !allCompanies ? (
             <select
               aria-label="Funil"
               value={pipelineId ?? ""}
-              onChange={(e) => set("funil", e.target.value)}
+              onChange={(e) => {
+                const next = new URLSearchParams(params.toString());
+                next.delete("stage");
+                if (e.target.value) next.set("funil", e.target.value);
+                else next.delete("funil");
+                push(next);
+              }}
               className="h-8 max-w-64 rounded-md border border-input bg-background px-2 text-sm font-medium"
             >
+              {view === "lista" ? <option value="">Todos os funis</option> : null}
               {pipelines.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -101,7 +114,18 @@ export function DealsToolbar({
             value={view}
             aria-label="Visão"
             onValueChange={(v) => {
-              if (v) set("visao", v === "kanban" ? null : v);
+              if (!v) return;
+              if (allCompanies && v !== "lista") {
+                setChoosing(v as DealView);
+                return;
+              }
+              setChoosing(null);
+              const next = new URLSearchParams(params.toString());
+              if (v === "kanban") next.delete("visao");
+              else next.set("visao", v);
+              if (v === "forecast") next.delete("status");
+              next.delete("stage");
+              push(next);
             }}
           >
             <ToggleGroupItem value="kanban" aria-label="Kanban">
@@ -122,6 +146,9 @@ export function DealsToolbar({
           <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar" aria-label="Buscar" className="h-8 w-56 pl-8" />
         </div>
+        {options.stages && options.stages.length > 0 && view === "lista" ? (
+          <MultiSelect label="Etapa" options={options.stages} value={params.getAll("stage")} onChange={(v) => setMulti("stage", v)} />
+        ) : null}
         <MultiSelect label="Responsável" options={options.owners} value={params.getAll("owner")} onChange={(v) => setMulti("owner", v)} />
         <MultiSelect label="Equipe" options={options.teams} value={params.getAll("team")} onChange={(v) => setMulti("team", v)} />
         <MultiSelect label="Etiqueta" options={options.labels} value={params.getAll("label")} onChange={(v) => setMulti("label", v)} />
@@ -139,17 +166,23 @@ export function DealsToolbar({
           </Button>
         ) : null}
       </div>
+      {choosing ? <KanbanCompanyChooser companies={companies} view={choosing} /> : null}
     </div>
   );
 }
 
-/** Visão "Todas as empresas": o kanban é por empresa, então pede a empresa. */
-export function KanbanCompanyChooser({ companies }: { companies: CompanySummary[] }) {
+/** Visão "Todas as empresas": Kanban e Forecast são por empresa, então pedem a empresa. */
+export function KanbanCompanyChooser({ companies, view }: { companies: CompanySummary[]; view: DealView }) {
   const router = useRouter();
+  const target = view === "forecast" ? "?visao=forecast" : "";
   return (
     <div className="flex max-w-md flex-col gap-3 rounded-xl border p-4">
-      <p className="text-sm">O kanban mostra um funil por vez. Escolha a empresa para abrir o quadro:</p>
-      <CompanyPicker entity="deals" companies={companies} onSelect={(c) => router.push(`/${c.slug}/negocios`)} />
+      <p className="text-sm">
+        {view === "forecast"
+          ? "O forecast mostra um funil por vez. Escolha a empresa:"
+          : "O kanban mostra um funil por vez. Escolha a empresa para abrir o quadro:"}
+      </p>
+      <CompanyPicker entity="deals" companies={companies} onSelect={(c) => router.push(`/${c.slug}/negocios${target}`)} />
     </div>
   );
 }

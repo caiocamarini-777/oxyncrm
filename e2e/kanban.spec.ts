@@ -317,6 +317,7 @@ test("visão Todas as empresas pede a empresa para abrir o kanban", async ({ bro
   const page = await newPage(browser);
   await page.goto("/todas/negocios");
   await expect(page.getByRole("heading", { level: 1, name: "Negócios" })).toBeVisible();
+  await page.getByRole("radio", { name: "Kanban" }).click();
   await page.getByRole("button", { name: companyName, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/${slug}/negocios`));
   await expect(page.getByTestId("kanban-column").first()).toBeVisible();

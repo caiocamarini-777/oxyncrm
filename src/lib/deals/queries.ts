@@ -20,7 +20,7 @@ const fail = (what: string, error: { message: string; code?: string }) => failFo
 
 export const DEAL_SORTS = ["title", "contract_value", "expected_close_date", "stage_entered_at", "created_at"];
 export const BOARD_STAGE_LIMIT = 500;
-const FORECAST_LIMIT = 5000;
+export const FORECAST_LIMIT = 5000;
 
 /** Filtros da lista além dos comuns: funil, etapas, equipes e esfriando. */
 export type DealListQuery = ListQuery & {
@@ -501,6 +501,14 @@ export type ForecastRow = {
   expectedCloseDate: string | null;
   /** Valor total (contrato ou estimado). */
   value: number;
+  contractValue: number;
+  estimatedValue: number | null;
+  mrr: number;
+  setupTotal: number;
+  rotting: boolean;
+  labels: LabelRef[];
+  organization: { id: string; name: string } | null;
+  ownerAvatarUrl: string | null;
   probability: number;
   stageName: string;
   ownerName: string;
@@ -513,45 +521,62 @@ export async function getForecast(
   pipelineId: string,
   filters: DealBoardFilters = {},
   now: Date = new Date(),
-): Promise<ForecastBucket<ForecastRow>[]> {
+): Promise<{ buckets: ForecastBucket<ForecastRow>[]; truncated: boolean }> {
   const resolved = await resolveCommon(filters, { companyId, pipelineId });
-  if (!resolved) return forecastBuckets<ForecastRow>([], now);
+  if (!resolved) return { buckets: forecastBuckets<ForecastRow>([], now), truncated: false };
   let q = (await dealsSource(filters.label))
     .select(
-      "id, title, status, estimated_value, contract_value, expected_close_date, owner:profiles!owner_id(full_name), organization:organizations(name, deleted_at), stage:stages(name, probability)",
+      "id, title, status, estimated_value, contract_value, expected_close_date, stage_entered_at, owner:profiles!owner_id(full_name, avatar_url), organization:organizations(id, name, deleted_at), stage:stages(name, probability, rotting_days)",
     )
     .is("deleted_at", null)
     .eq("company_id", companyId)
     .eq("pipeline_id", pipelineId)
     .eq("status", "open");
   q = applyCommon(q, filters, resolved);
-  const { data, error } = await q.order("expected_close_date", { nullsFirst: false }).order("id").range(0, FORECAST_LIMIT - 1);
+  const { data, error } = await q.order("expected_close_date", { nullsFirst: false }).order("id").range(0, FORECAST_LIMIT);
   if (error) fail("previsão", error);
-  const rows = ((data ?? []) as unknown as {
+  const all = (data ?? []) as unknown[];
+  const truncated = all.length > FORECAST_LIMIT;
+  const labelsBy = await loadRecordLabels(
+    "deals",
+    all.slice(0, FORECAST_LIMIT).map((r) => (r as { id: string }).id),
+  );
+  const rows = (all.slice(0, FORECAST_LIMIT) as unknown as {
     id: string; title: string; status: string; estimated_value: number | string | null;
-    contract_value: number | string; expected_close_date: string | null;
-    owner: Rel<{ full_name: string }>;
-    organization: Rel<{ name: string; deleted_at: string | null }>;
-    stage: Rel<{ name: string; probability: number }>;
+    contract_value: number | string; expected_close_date: string | null; stage_entered_at: string;
+    owner: Rel<{ full_name: string; avatar_url: string | null }>;
+    organization: Rel<{ id: string; name: string; deleted_at: string | null }>;
+    stage: Rel<{ name: string; probability: number; rotting_days: number | null }>;
   }[]).map((r): ForecastRow => {
     const org = one(r.organization);
     const stage = one(r.stage);
+    const contractValue = num(r.contract_value);
+    const estimatedValue = r.estimated_value === null ? null : num(r.estimated_value);
     return {
       id: r.id,
       title: r.title,
       status: r.status,
       expectedCloseDate: r.expected_close_date,
-      value: cardValue(
-        { contractValue: num(r.contract_value), estimatedValue: r.estimated_value === null ? null : num(r.estimated_value), mrr: 0, setupTotal: 0 },
-        "total",
+      value: cardValue({ contractValue, estimatedValue, mrr: 0, setupTotal: 0 }, "total"),
+      contractValue,
+      estimatedValue,
+      mrr: 0,
+      setupTotal: 0,
+      rotting: isRotting(
+        { status: r.status, stageEnteredAt: r.stage_entered_at },
+        { rottingDays: stage?.rotting_days ?? null },
+        now,
       ),
+      labels: labelsBy.get(r.id) ?? [],
+      organization: org && !org.deleted_at ? { id: org.id, name: org.name } : null,
+      ownerAvatarUrl: one(r.owner)?.avatar_url ?? null,
       probability: stage?.probability ?? 0,
       stageName: stage?.name ?? "",
       ownerName: one(r.owner)?.full_name ?? "",
       organizationName: org && !org.deleted_at ? org.name : null,
     };
   });
-  return forecastBuckets(rows, now);
+  return { buckets: forecastBuckets(rows, now), truncated };
 }
 
 // Motivos de perda ---------------------------------------------------------------------------------

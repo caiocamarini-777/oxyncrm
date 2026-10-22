@@ -17,6 +17,9 @@ describe("parseDealListQuery", () => {
     expect(q.rotting).toBe(true);
     expect(q.status).toEqual(["won"]);
   });
+  it("aceita funil como alias de pipeline", () => {
+    expect(parseDealListQuery(new URLSearchParams(`funil=${A}`), []).pipeline).toBe(A);
+  });
   it("padrões", () => {
     const q = parseDealListQuery(new URLSearchParams("pipeline=abc&rotting=0"), []);
     expect(q.pipeline).toBeNull();

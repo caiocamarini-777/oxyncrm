@@ -1,6 +1,7 @@
 import "server-only";
 import type { z } from "zod";
 import { validateCustomFieldValues } from "@/lib/custom-fields/schema";
+import { changedCustomFieldValues } from "./custom-fields-diff";
 import { listActiveCustomFieldDefs } from "./lookups";
 import { listAssignableOwners } from "./owners";
 import type { RecordEntity } from "./types";
@@ -23,11 +24,14 @@ export async function checkCustomFields(
   companyId: string,
   entity: RecordEntity,
   values: Record<string, unknown>,
+  /** Valores já gravados (edição): só as chaves alteradas são validadas. */
+  current?: Record<string, unknown> | null,
 ): Promise<{ ok: true } | { ok: false; error: string; key: string }> {
   const [defs, owners] = await Promise.all([
     listActiveCustomFieldDefs(companyId, entity),
     listAssignableOwners(companyId),
   ]);
-  const res = validateCustomFieldValues(defs, values, owners.map((o) => o.id));
+  const toCheck = current === undefined ? values : changedCustomFieldValues(values, current);
+  const res = validateCustomFieldValues(defs, toCheck, owners.map((o) => o.id));
   return res.ok ? res : { ok: false, error: res.message, key: res.key };
 }

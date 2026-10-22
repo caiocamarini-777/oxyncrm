@@ -18,9 +18,14 @@ export function one<T>(v: Rel<T>): T | null {
 }
 
 /** Registra no servidor e interrompe: falha de consulta não pode virar "sem resultados". */
-export function fail(entity: RecordEntity, what: string, error: { message: string; code?: string }): never {
+export function fail(
+  entity: RecordEntity | "configurações",
+  what: string,
+  error: { message: string; code?: string },
+): never {
   console.error(`[${entity}] ${what}:`, error.code, error.message);
-  throw new Error(`Falha ao carregar ${PLURAL[entity]} (${what}).`);
+  const label = entity === "configurações" ? entity : PLURAL[entity];
+  throw new Error(`Falha ao carregar ${label} (${what}).`);
 }
 
 /** Remove caracteres que quebram a sintaxe do filtro `or` do PostgREST. */

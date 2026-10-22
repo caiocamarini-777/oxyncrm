@@ -3,7 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Label } from "@/components/ui/label";
 
-export function CompanyPicker({
+export function SettingsCompanyPicker({
   companies,
   selected,
 }: {

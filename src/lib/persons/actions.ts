@@ -7,6 +7,7 @@ import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import type { DuplicateMatch } from "@/lib/records/duplicates";
 import { normalizePhone } from "@/lib/records/format";
 import { checkCustomFields, firstIssue } from "@/lib/records/action-helpers";
+import { safeTerm } from "@/lib/records/list-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import { personSchema, type PersonInput } from "./schema";
 
@@ -73,7 +74,12 @@ export async function updatePerson(id: string, input: PersonInput): Promise<Acti
     return { ok: false, error: "Não foi possível salvar agora. Tente novamente." };
   }
   if (!current) return { ok: false, error: "Registro não encontrado ou sem permissão." };
-  const cf = await checkCustomFields(current.company_id, "persons", d.customFields);
+  const cf = await checkCustomFields(
+    current.company_id,
+    "persons",
+    d.customFields,
+    (current.custom_fields ?? {}) as Record<string, unknown>,
+  );
   if (!cf.ok) return { ok: false, error: cf.error, fieldErrors: { [`cf-${cf.key}`]: cf.error } };
 
   const merged = { ...((current.custom_fields ?? {}) as Record<string, unknown>), ...d.customFields };
@@ -134,7 +140,7 @@ export async function searchOrganizations(
   term: string,
 ): Promise<ActionResult<{ id: string; name: string }[]>> {
   if (!uuid.safeParse(companyId).success) return { ok: false, error: "Dados inválidos." };
-  const t = term.replace(/[,()*%\\"]/g, " ").replace(/\s+/g, " ").trim();
+  const t = safeTerm(term);
   const supabase = await createServerClient();
   let q = supabase
     .from("organizations")

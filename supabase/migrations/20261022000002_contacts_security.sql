@@ -138,6 +138,9 @@ begin
     raise exception 'OXYN_COMPANY_IMMUTABLE';
   end if;
   if auth.uid() is not null then
+    if new.created_by is distinct from old.created_by or new.created_at is distinct from old.created_at then
+      raise exception 'OXYN_FORBIDDEN_FIELD';
+    end if;
     if new.owner_id is distinct from old.owner_id
        and not public.has_company_action(new.company_id, 'reassign_owner') then
       raise exception 'OXYN_REASSIGN_FORBIDDEN';
@@ -162,8 +165,26 @@ end $$;
 create function public.validate_custom_fields_trg() returns trigger
 language plpgsql set search_path = public, pg_temp as $$
 begin
-  if tg_op = 'INSERT' or new.custom_fields is distinct from old.custom_fields then
-    perform public.validate_custom_fields(new.company_id, tg_table_name, new.custom_fields);
+  declare changed jsonb;
+  begin
+    if tg_op = 'INSERT' or jsonb_typeof(new.custom_fields) <> 'object' then
+      perform public.validate_custom_fields(new.company_id, tg_table_name, new.custom_fields);
+    elsif new.custom_fields is distinct from old.custom_fields then
+      -- Só as chaves alteradas: valores antigos (usuário inativo, opção removida) não travam a edição.
+      select coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) into changed
+        from jsonb_each(new.custom_fields) e
+        where old.custom_fields -> e.key is distinct from e.value;
+      perform public.validate_custom_fields(new.company_id, tg_table_name, changed);
+    end if;
+  end;
+  return new;
+end $$;
+
+create function public.guard_note_update() returns trigger
+language plpgsql set search_path = public, pg_temp as $$
+begin
+  if new.entity is distinct from old.entity or new.record_id is distinct from old.record_id then
+    raise exception 'OXYN_FORBIDDEN_FIELD';
   end if;
   return new;
 end $$;
@@ -192,6 +213,8 @@ create trigger guard_company_immutable before update on public.custom_field_defs
   for each row execute function public.guard_company_immutable();
 create trigger guard_company_immutable before update on public.notes
   for each row execute function public.guard_company_immutable();
+create trigger guard_note_update before update on public.notes
+  for each row execute function public.guard_note_update();
 
 -- Execute ------------------------------------------------------------------
 
@@ -207,7 +230,7 @@ grant execute on function
   public.has_company_action(uuid, text), public.validate_custom_fields(uuid, text, jsonb)
   to authenticated;
 revoke execute on function
-  public.guard_record_update(), public.guard_company_immutable(), public.validate_custom_fields_trg()
+  public.guard_record_update(), public.guard_company_immutable(), public.validate_custom_fields_trg(), public.guard_note_update()
   from public, anon, authenticated;
 
 -- Policies: organizations, persons, leads ---------------------------------

@@ -180,6 +180,24 @@ grant execute on function public.global_search(text, uuid, int) to authenticated
 
 -- Lixeira -------------------------------------------------------------------
 
+-- Remove registros e tudo que depende deles (etiquetas, notas, timeline). Uso interno.
+create function public.purge_records_internal(p_entity text, p_ids uuid[]) returns int
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare n int;
+begin
+  if p_entity not in ('leads', 'persons', 'organizations') then
+    raise exception 'OXYN_INVALID_ENTITY';
+  end if;
+  if cardinality(p_ids) = 0 then return 0; end if;
+  delete from public.record_labels where entity = p_entity and record_id = any (p_ids);
+  delete from public.notes where entity = p_entity and record_id = any (p_ids);
+  execute format('delete from public.%I where id = any ($1)', p_entity) using p_ids;
+  get diagnostics n = row_count;
+  delete from public.timeline_events where entity = p_entity and record_id = any (p_ids);
+  return n;
+end $$;
+revoke execute on function public.purge_records_internal(text, uuid[]) from public, anon, authenticated, service_role;
+
 create function public.purge_trash() returns int
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
@@ -191,18 +209,36 @@ declare
 begin
   foreach ent in array array['leads', 'persons', 'organizations'] loop
     execute format('select coalesce(array_agg(id), ''{}'') from public.%I where deleted_at < $1', ent) into ids using cutoff;
-    if cardinality(ids) = 0 then continue; end if;
-    delete from public.record_labels where entity = ent and record_id = any (ids);
-    delete from public.notes where entity = ent and record_id = any (ids);
-    execute format('delete from public.%I where id = any ($1)', ent) using ids;
-    get diagnostics n = row_count;
-    total := total + n;
-    delete from public.timeline_events where entity = ent and record_id = any (ids);
+    total := total + public.purge_records_internal(ent, ids);
   end loop;
   delete from public.notes where deleted_at < cutoff;
   get diagnostics n = row_count;
   return total + n;
 end $$;
+
+-- Exclusão definitiva de um registro que já está na lixeira (só admin geral).
+create function public.purge_record(p_entity text, p_id uuid) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare trashed timestamptz; cnt bigint;
+begin
+  if not public.is_super_admin() then
+    raise exception 'insufficient_privilege' using errcode = '42501';
+  end if;
+  if p_entity not in ('leads', 'persons', 'organizations') then
+    raise exception 'OXYN_INVALID_ENTITY';
+  end if;
+  execute format('select count(*), max(deleted_at) from public.%I where id = $1', p_entity)
+    into cnt, trashed using p_id;
+  if cnt = 0 then
+    raise exception 'OXYN_NOT_FOUND';
+  end if;
+  if trashed is null then
+    raise exception 'OXYN_TRASH_FORBIDDEN';
+  end if;
+  perform public.purge_records_internal(p_entity, array[p_id]);
+end $$;
+revoke execute on function public.purge_record(text, uuid) from public, anon;
+grant execute on function public.purge_record(text, uuid) to authenticated;
 revoke execute on function public.purge_trash() from public, anon, authenticated, service_role;
 
 do $$

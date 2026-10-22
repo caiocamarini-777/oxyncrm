@@ -7,6 +7,7 @@ import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { createOrganization } from "@/lib/organizations/actions";
 import { createPerson } from "@/lib/persons/actions";
 import { checkCustomFields, firstIssue } from "@/lib/records/action-helpers";
+import { safeTerm } from "@/lib/records/list-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import { disqualifySchema, leadSchema, type DisqualifyInput, type LeadInput } from "./schema";
 
@@ -113,7 +114,12 @@ export async function updateLead(id: string, input: LeadInput): Promise<ActionRe
     return { ok: false, error: "Não foi possível salvar agora. Tente novamente." };
   }
   if (!current) return { ok: false, error: "Registro não encontrado ou sem permissão." };
-  const cf = await checkCustomFields(current.company_id, "leads", d.customFields);
+  const cf = await checkCustomFields(
+    current.company_id,
+    "leads",
+    d.customFields,
+    (current.custom_fields ?? {}) as Record<string, unknown>,
+  );
   if (!cf.ok) return { ok: false, error: cf.error, fieldErrors: { [`cf-${cf.key}`]: cf.error } };
 
   const merged = { ...((current.custom_fields ?? {}) as Record<string, unknown>), ...d.customFields };
@@ -224,7 +230,7 @@ export async function searchPersonsByName(
   term: string,
 ): Promise<ActionResult<{ id: string; name: string }[]>> {
   if (!uuid.safeParse(companyId).success) return { ok: false, error: "Dados inválidos." };
-  const t = term.replace(/[,()*%\\"]/g, " ").replace(/\s+/g, " ").trim();
+  const t = safeTerm(term);
   const supabase = await createServerClient();
   let q = supabase
     .from("persons")

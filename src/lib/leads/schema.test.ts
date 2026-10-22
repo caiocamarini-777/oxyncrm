@@ -26,6 +26,10 @@ describe("leadSchema", () => {
     expect(leadSchema.safeParse({ title: "L", estimatedValue: -1 }).success).toBe(false);
     expect(leadSchema.parse({ title: "L", estimatedValue: 10.5 }).estimatedValue).toBe(10.5);
     expect(leadSchema.parse({ title: "L", estimatedValue: "1500.25" }).estimatedValue).toBe(1500.25);
+    expect(leadSchema.parse({ title: "L", estimatedValue: "1.500,25" }).estimatedValue).toBe(1500.25);
+    expect(leadSchema.parse({ title: "L", estimatedValue: "1500,5" }).estimatedValue).toBe(1500.5);
+    expect(leadSchema.parse({ title: "L", estimatedValue: "1.234.567,8" }).estimatedValue).toBe(1234567.8);
+    expect(leadSchema.safeParse({ title: "L", estimatedValue: "1,5,5" }).success).toBe(false);
     expect(leadSchema.parse({ title: "L", estimatedValue: "" }).estimatedValue).toBeNull();
   });
 });

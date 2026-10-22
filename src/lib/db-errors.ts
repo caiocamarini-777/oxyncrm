@@ -15,6 +15,7 @@ export function translateDbError(err: { code?: string; message?: string }): stri
   if (msg.includes("OXYN_OWNER_NOT_MEMBER")) return "Essa pessoa não tem acesso a esta empresa.";
   if (msg.includes("OXYN_REASSIGN_FORBIDDEN")) return "Você não pode trocar o responsável.";
   if (msg.includes("OXYN_TRASH_FORBIDDEN")) return "Você não pode mover para a lixeira.";
+  if (msg.includes("OXYN_NOT_FOUND")) return "Registro não encontrado.";
   if (msg.includes("OXYN_COMPANY_IMMUTABLE")) return "Não é possível mudar a empresa do registro.";
   if (msg.includes("OXYN_INVALID_CUSTOM_FIELD")) return "Valor inválido no campo personalizado.";
   if (msg.includes("OXYN_CROSS_COMPANY")) return "Os registros ligados precisam ser da mesma empresa.";

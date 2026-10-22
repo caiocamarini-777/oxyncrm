@@ -53,7 +53,7 @@ export async function restoreFromTrash(entity: RecordEntity, id: string): Promis
   return setDeletedAt(entity, id, null);
 }
 
-/** Exclusão definitiva: só admin geral (RLS). */
+/** Exclusão definitiva: só admin geral e só registro na lixeira (RPC purge_record apaga também notas, etiquetas e timeline). */
 export async function purgeRecord(entity: RecordEntity, id: string): Promise<ActionResult> {
   if (!valid(entity, id)) return INVALID;
   const profile = await getCurrentProfile();
@@ -61,10 +61,12 @@ export async function purgeRecord(entity: RecordEntity, id: string): Promise<Act
     return { ok: false, error: "Só o administrador geral pode excluir definitivamente." };
   }
   const supabase = await createServerClient();
-  const { data, error } = await supabase.from(entity).delete().eq("id", id).select("id");
-  if (error) return { ok: false, error: translateDbError(error) };
-  if (!data || data.length === 0) {
-    return { ok: false, error: "Não foi possível excluir: registro não encontrado ou sem permissão." };
+  const { error } = await supabase.rpc("purge_record", { p_entity: entity, p_id: id });
+  if (error) {
+    if (error.message.includes("OXYN_TRASH_FORBIDDEN")) {
+      return { ok: false, error: "Só é possível excluir definitivamente registros que estão na lixeira." };
+    }
+    return { ok: false, error: translateDbError(error) };
   }
   revalidatePath("/", "layout");
   return { ok: true, data: undefined };

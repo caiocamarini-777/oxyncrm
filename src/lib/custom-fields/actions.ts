@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireSuperAdmin } from "@/lib/auth/session";
+import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import {
@@ -15,11 +16,6 @@ import {
 
 const PATH = "/configuracoes/campos";
 
-function firstIssue(err: z.ZodError): { field: string; message: string } {
-  const issue = err.issues[0];
-  return { field: String(issue.path[0] ?? "label"), message: issue.message };
-}
-
 export async function createCustomField(
   companyId: string,
   entity: CustomFieldEntity,
@@ -31,7 +27,7 @@ export async function createCustomField(
   }
   const parsed = customFieldDefSchema.safeParse(input);
   if (!parsed.success) {
-    const { field, message } = firstIssue(parsed.error);
+    const { field, message } = firstIssue(parsed.error, "label");
     return { ok: false, error: message, fieldErrors: { [field]: message } };
   }
   const supabase = await createServerClient();
@@ -67,7 +63,7 @@ export async function updateCustomField(
   await requireSuperAdmin();
   const parsed = customFieldUpdateSchema.safeParse(input);
   if (!parsed.success) {
-    const { field, message } = firstIssue(parsed.error);
+    const { field, message } = firstIssue(parsed.error, "label");
     return { ok: false, error: message, fieldErrors: { [field]: message } };
   }
   const supabase = await createServerClient();

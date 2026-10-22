@@ -72,7 +72,12 @@ export async function updateOrganization(id: string, input: OrganizationInput): 
     return { ok: false, error: "Não foi possível salvar agora. Tente novamente." };
   }
   if (!current) return { ok: false, error: "Registro não encontrado ou sem permissão." };
-  const cf = await checkCustomFields(current.company_id, "organizations", d.customFields);
+  const cf = await checkCustomFields(
+    current.company_id,
+    "organizations",
+    d.customFields,
+    (current.custom_fields ?? {}) as Record<string, unknown>,
+  );
   if (!cf.ok) return { ok: false, error: cf.error, fieldErrors: { [`cf-${cf.key}`]: cf.error } };
 
   const merged = { ...((current.custom_fields ?? {}) as Record<string, unknown>), ...d.customFields };

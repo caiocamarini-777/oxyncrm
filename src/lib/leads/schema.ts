@@ -15,7 +15,9 @@ const estimatedValue = z
   .preprocess((v) => {
     if (v === undefined || v === null) return null;
     if (typeof v === "string") {
-      const t = v.trim().replace(",", ".");
+      const raw = v.trim();
+      // Com vírgula, o ponto é separador de milhar ("1.500,25"); sem vírgula, o ponto é decimal.
+      const t = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw;
       if (t === "") return null;
       return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : Number.NaN;
     }

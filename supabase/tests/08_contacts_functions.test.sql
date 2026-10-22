@@ -1,5 +1,5 @@
 begin;
-select plan(41);
+select plan(52);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -170,6 +170,32 @@ select is((select count(*) from timeline_events where record_id in ('00000000-00
 select is((select count(*) from persons where id = '00000000-0000-4000-8000-000000000a22'), 1::bigint, 'registro de 29 dias mantido');
 select ok(not has_function_privilege('service_role', 'public.purge_trash()', 'execute'), 'service_role sem execute');
 select is((select count(*) from cron.job where jobname = 'oxyn-purge-trash'), 1::bigint, 'job agendado');
+
+-- purge_record
+select pg_temp.as_pg();
+insert into persons (id, company_id, owner_id, full_name) values
+  ('00000000-0000-4000-8000-000000000a41', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'Viva'),
+  ('00000000-0000-4000-8000-000000000a42', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'Lixeira');
+update persons set deleted_at = now() where id = '00000000-0000-4000-8000-000000000a42';
+insert into notes (company_id, entity, record_id, body, created_by) values
+  ('00000000-0000-4000-8000-0000000000d1', 'persons', '00000000-0000-4000-8000-000000000a42', 'n', '00000000-0000-4000-8000-0000000000c2');
+insert into record_labels (label_id, entity, record_id) values ('00000000-0000-4000-8000-000000000d01', 'persons', '00000000-0000-4000-8000-000000000a42');
+select ok(
+  (select count(*) from timeline_events where record_id = '00000000-0000-4000-8000-000000000a42') > 0,
+  'registro na lixeira tem timeline');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c3');
+select throws_ok($$ select purge_record('persons', '00000000-0000-4000-8000-000000000a42') $$, '42501', null, 'não admin não executa purge_record');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');
+select throws_ok($$ select purge_record('persons', '00000000-0000-4000-8000-000000000a41') $$, 'P0001', 'OXYN_TRASH_FORBIDDEN', 'registro fora da lixeira não é apagado');
+select throws_ok($$ select purge_record('persons', '00000000-0000-4000-8000-000000000999') $$, 'P0001', 'OXYN_NOT_FOUND', 'registro inexistente');
+select throws_ok($$ select purge_record('profiles', '00000000-0000-4000-8000-000000000a42') $$, 'P0001', 'OXYN_INVALID_ENTITY', 'entidade inválida');
+select lives_ok($$ select purge_record('persons', '00000000-0000-4000-8000-000000000a42') $$, 'admin apaga registro da lixeira');
+select pg_temp.as_pg();
+select is((select count(*) from persons where id = '00000000-0000-4000-8000-000000000a42'), 0::bigint, 'registro apagado');
+select is((select count(*) from notes where record_id = '00000000-0000-4000-8000-000000000a42'), 0::bigint, 'notas apagadas');
+select is((select count(*) from record_labels where record_id = '00000000-0000-4000-8000-000000000a42'), 0::bigint, 'etiquetas apagadas');
+select is((select count(*) from timeline_events where record_id = '00000000-0000-4000-8000-000000000a42'), 0::bigint, 'timeline apagada');
+select is((select count(*) from persons where id = '00000000-0000-4000-8000-000000000a41'), 1::bigint, 'registro vivo intacto');
 
 select * from finish();
 rollback;

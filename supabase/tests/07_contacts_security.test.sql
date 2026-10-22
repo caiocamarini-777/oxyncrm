@@ -1,5 +1,5 @@
 begin;
-select plan(80);
+select plan(89);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -238,6 +238,36 @@ select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
 select lives_ok($$ update organizations set custom_fields = '{"porte":"Médio"}' where id = '00000000-0000-4000-8000-000000000b03' $$,
   'definição arquivada mantém valor válido');
 
+-- valores antigos inválidos não travam edição de outros campos
+select pg_temp.as_pg();
+alter table organizations disable trigger validate_custom_fields_trg;
+update organizations set custom_fields = '{"resp":"00000000-0000-4000-8000-0000000000c2","porte":"Antigo","obs":"a"}'
+  where id = '00000000-0000-4000-8000-000000000b03';
+alter table organizations enable trigger validate_custom_fields_trg;
+update profiles set active = false where id in ('00000000-0000-4000-8000-0000000000c2', '00000000-0000-4000-8000-0000000000c6');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
+select lives_ok($$ update organizations set custom_fields = '{"resp":"00000000-0000-4000-8000-0000000000c2","porte":"Antigo","obs":"b"}' where id = '00000000-0000-4000-8000-000000000b03' $$,
+  'editar outro campo com usuário inativo e opção removida armazenados');
+select lives_ok($$ update organizations set custom_fields = '{"resp":"00000000-0000-4000-8000-0000000000c2","porte":"Antigo"}' where id = '00000000-0000-4000-8000-000000000b03' $$,
+  'remover um campo não revalida os demais');
+select throws_ok($$ update organizations set custom_fields = '{"resp":"00000000-0000-4000-8000-0000000000c6","porte":"Antigo"}' where id = '00000000-0000-4000-8000-000000000b03' $$,
+  'P0001', 'OXYN_INVALID_CUSTOM_FIELD', 'trocar o usuário para outro inativo continua falhando');
+select throws_ok($$ update organizations set custom_fields = '{"resp":"00000000-0000-4000-8000-0000000000c2","porte":"Outro"}' where id = '00000000-0000-4000-8000-000000000b03' $$,
+  'P0001', 'OXYN_INVALID_CUSTOM_FIELD', 'trocar a opção para uma inexistente continua falhando');
+select pg_temp.as_pg();
+update profiles set active = true where id in ('00000000-0000-4000-8000-0000000000c2', '00000000-0000-4000-8000-0000000000c6');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
+
+-- created_by / created_at imutáveis
+select throws_ok($$ update organizations set created_by = '00000000-0000-4000-8000-0000000000c3' where id = '00000000-0000-4000-8000-000000000b03' $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'created_by é imutável');
+select throws_ok($$ update leads set created_at = now() - interval '1 year' where id = '00000000-0000-4000-8000-000000000c03' $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'created_at é imutável');
+select pg_temp.as_pg();
+select lives_ok($$ update persons set created_at = created_at - interval '1 day' where id = '00000000-0000-4000-8000-000000000a03' $$,
+  'service/migração (sem auth.uid) pode corrigir created_at');
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
+
 -- bruno depois da reatribuição
 select pg_temp.as_pg();
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c3');
@@ -283,6 +313,14 @@ select pg_temp.as_pg();
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');
 select is(pg_temp.affected($q$delete from leads where id = '00000000-0000-4000-8000-000000000c03'$q$),
   1::bigint, 'admin exclui definitivamente');
+select pg_temp.as_pg();
+
+-- notas: entity e record_id imutáveis
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');
+select throws_ok($$ update notes set record_id = '00000000-0000-4000-8000-000000000b02' where id = '00000000-0000-4000-8000-000000000e01' $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'nota não muda de registro');
+select throws_ok($$ update notes set entity = 'persons' where id = '00000000-0000-4000-8000-000000000e01' $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'nota não muda de entidade');
 select pg_temp.as_pg();
 
 -- privilégios

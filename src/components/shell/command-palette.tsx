@@ -18,6 +18,7 @@ import { searchRecords, type SearchResult } from "@/lib/search/actions";
 
 const GROUPS = [
   { entity: "leads", heading: "Leads" },
+  { entity: "deals", heading: "Negócios" },
   { entity: "persons", heading: "Pessoas" },
   { entity: "organizations", heading: "Organizações" },
 ] as const;

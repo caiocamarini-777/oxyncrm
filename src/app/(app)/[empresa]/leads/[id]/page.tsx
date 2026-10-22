@@ -9,6 +9,7 @@ import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
+import { listPipelinesWithStages } from "@/lib/pipelines/queries";
 import { getLead, listDisqualificationReasons, listLeadSources } from "@/lib/leads/queries";
 import { listActiveCustomFieldDefs, listCompanyLabels } from "@/lib/records/lookups";
 import { listAssignableOwners } from "@/lib/records/owners";
@@ -27,7 +28,7 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
   if (!lead) notFound();
   if (scope.kind === "company" && scope.company.id !== lead.companyId) notFound();
 
-  const [timeline, owners, labels, defs, permissions, sources, reasons] = await Promise.all([
+  const [timeline, owners, labels, defs, permissions, sources, reasons, pipelineRows, dealDefs] = await Promise.all([
     getTimeline("leads", lead.id),
     listAssignableOwners(lead.companyId),
     listCompanyLabels(lead.companyId),
@@ -35,7 +36,13 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
     getEntityPermissions(lead.companyId, "leads"),
     listLeadSources(lead.companyId),
     listDisqualificationReasons(lead.companyId),
+    listPipelinesWithStages(lead.companyId),
+    listActiveCustomFieldDefs(lead.companyId, "deals"),
   ]);
+  const pipelines = pipelineRows
+    .filter((p) => !p.archived)
+    .map((p) => ({ id: p.id, name: p.name, stages: p.stages.filter((s) => !s.archived).map((s) => ({ id: s.id, name: s.name })) }))
+    .filter((p) => p.stages.length > 0);
 
   return (
     <RecordLayout
@@ -48,7 +55,16 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
             trashDescription: "O lead some das listas e pode ser restaurado pela lixeira por 30 dias.",
           }}
           actions={
-            <LeadActions leadId={lead.id} status={lead.status} reasons={reasons} canEdit={permissions.edit} />
+            <LeadActions
+              leadId={lead.id}
+              status={lead.status}
+              reasons={reasons}
+              canEdit={permissions.edit}
+              leadTitle={lead.title}
+              empresa={empresa}
+              pipelines={pipelines}
+              dealDefs={dealDefs}
+            />
           }
           id={lead.id}
           companyId={lead.companyId}

@@ -465,43 +465,39 @@ end $$;
 revoke execute on function public.convert_lead(uuid, uuid, uuid, text) from public, anon;
 grant execute on function public.convert_lead(uuid, uuid, uuid, text) to authenticated;
 
--- Filtros por etiqueta (security invoker: o RLS filtra; sem SET na função para o planner poder expandi-la em linha) ------------------------------------------------
+-- Filtros por etiqueta (EXISTS correlacionado: o PostgREST não expande a função em linha e a forma com IN + GROUP BY ficava linear por linha sob RLS) (security invoker: o RLS filtra; sem SET na função para o planner poder expandi-la em linha) ------------------------------------------------
 
 create function public.organizations_with_labels(p_label_ids uuid[]) returns setof public.organizations
 language sql stable security invoker as $$
   select t.* from public.organizations t
   where coalesce(cardinality(p_label_ids), 0) = 0
-     or t.id in (select rl.record_id from public.record_labels rl
-                 where rl.entity = 'organizations' and rl.label_id = any (p_label_ids)
-                 group by rl.record_id
-                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
+     or exists (select 1 from public.record_labels rl
+                where rl.entity = 'organizations' and rl.record_id = t.id and rl.label_id = any (p_label_ids)
+                having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 create function public.persons_with_labels(p_label_ids uuid[]) returns setof public.persons
 language sql stable security invoker as $$
   select t.* from public.persons t
   where coalesce(cardinality(p_label_ids), 0) = 0
-     or t.id in (select rl.record_id from public.record_labels rl
-                 where rl.entity = 'persons' and rl.label_id = any (p_label_ids)
-                 group by rl.record_id
-                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
+     or exists (select 1 from public.record_labels rl
+                where rl.entity = 'persons' and rl.record_id = t.id and rl.label_id = any (p_label_ids)
+                having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 create function public.leads_with_labels(p_label_ids uuid[]) returns setof public.leads
 language sql stable security invoker as $$
   select t.* from public.leads t
   where coalesce(cardinality(p_label_ids), 0) = 0
-     or t.id in (select rl.record_id from public.record_labels rl
-                 where rl.entity = 'leads' and rl.label_id = any (p_label_ids)
-                 group by rl.record_id
-                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
+     or exists (select 1 from public.record_labels rl
+                where rl.entity = 'leads' and rl.record_id = t.id and rl.label_id = any (p_label_ids)
+                having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 create function public.deals_with_labels(p_label_ids uuid[]) returns setof public.deals
 language sql stable security invoker as $$
   select t.* from public.deals t
   where coalesce(cardinality(p_label_ids), 0) = 0
-     or t.id in (select rl.record_id from public.record_labels rl
-                 where rl.entity = 'deals' and rl.label_id = any (p_label_ids)
-                 group by rl.record_id
-                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
+     or exists (select 1 from public.record_labels rl
+                where rl.entity = 'deals' and rl.record_id = t.id and rl.label_id = any (p_label_ids)
+                having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 revoke execute on function public.organizations_with_labels(uuid[]), public.persons_with_labels(uuid[]),
   public.leads_with_labels(uuid[]), public.deals_with_labels(uuid[]) from public, anon;

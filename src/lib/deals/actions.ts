@@ -503,7 +503,12 @@ export async function convertLead(
     p_stage: input.stageId,
     p_title: title === "" ? null : title,
   });
-  if (error) return dbFailure(error);
+  if (error) {
+    if (error.message?.includes("OXYN_INVALID_TRANSITION")) {
+      return { ok: false, error: "Este lead já foi convertido ou não está aberto." };
+    }
+    return dbFailure(error);
+  }
   touched();
   return { ok: true, data: { dealId: data as string } };
 }

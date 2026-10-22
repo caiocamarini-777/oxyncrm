@@ -4,6 +4,7 @@ import { StatusTabs } from "@/components/records/status-tabs";
 
 const TABS = [
   { status: "open", label: "Abertos" },
+  { status: "converted", label: "Convertidos" },
   { status: "disqualified", label: "Desqualificados" },
   { status: "archived", label: "Arquivados" },
 ];

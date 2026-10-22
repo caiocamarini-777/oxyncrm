@@ -4,7 +4,7 @@ import type { CompanyScope } from "@/lib/companies/pure";
 import {
   endOfDay,
   fail as failFor,
-  idsByLabels as idsByLabelsFor,
+  listSource,
   loadRecordLabels,
   one,
   safeTerm,
@@ -20,8 +20,8 @@ const fail = (what: string, error: { message: string; code?: string }) => failFo
 export const LEAD_SORTS = ["title", "estimated_value", "created_at"];
 
 /** Aba ativa: primeiro `status` válido da URL; padrão `open`. */
-export function leadStatusOf(query: ListQuery): LeadStatus {
-  const s = query.status.find((v): v is LeadStatus => (LEAD_STATUSES as readonly string[]).includes(v));
+export function leadStatusOf(query: ListQuery): LeadStatus | "converted" {
+  const s = query.status.find((v): v is LeadStatus | "converted" => v === "converted" || (LEAD_STATUSES as readonly string[]).includes(v));
   return s ?? "open";
 }
 
@@ -31,7 +31,7 @@ export type LeadRow = {
   companySlug: string;
   companyName: string;
   title: string;
-  status: LeadStatus;
+  status: LeadStatus | "converted";
   /** Só quando o usuário consegue ler a pessoa/organização. */
   person: { id: string; name: string } | null;
   organization: { id: string; name: string } | null;
@@ -63,6 +63,8 @@ export type LeadDetail = {
   person: LeadLink | null;
   organizationId: string | null;
   organization: LeadLink | null;
+  /** Negócio da conversão (só em leads convertidos). */
+  convertedDeal: LeadLink | null;
   estimatedValue: number | null;
   reasonName: string | null;
   disqualificationNote: string | null;
@@ -79,7 +81,7 @@ type RawRow = {
   id: string;
   company_id: string;
   title: string;
-  status: LeadStatus;
+  status: LeadStatus | "converted";
   estimated_value: number | string | null;
   owner_id: string;
   created_at: string;
@@ -97,12 +99,8 @@ export async function fetchLeadRows(
   range: { from: number; to: number },
   companyIds?: string[],
 ): Promise<{ rows: LeadRow[]; total: number }> {
-  const labelIds = await idsByLabelsFor("leads", query.label);
-  if (labelIds && labelIds.length === 0) return { rows: [], total: 0 };
-
   const supabase = await createServerClient();
-  let q = supabase
-    .from("leads")
+  let q = listSource(supabase, "leads", query.label)
     .select(LIST_SELECT, { count: "exact" })
     .is("deleted_at", null)
     .eq("status", leadStatusOf(query));
@@ -110,7 +108,6 @@ export async function fetchLeadRows(
   if (companyIds) q = q.in("company_id", companyIds);
   if (query.owner.length > 0) q = q.in("owner_id", query.owner);
   if (query.source.length > 0) q = q.in("source_id", query.source);
-  if (labelIds) q = q.in("id", labelIds);
   if (query.createdFrom) q = q.gte("created_at", startOfDay(query.createdFrom));
   if (query.createdTo) q = q.lte("created_at", endOfDay(query.createdTo));
   const term = safeTerm(query.q);
@@ -154,9 +151,9 @@ export async function listLeads(scope: CompanyScope, query: ListQuery): Promise<
 }
 
 async function resolveLink(
-  table: "persons" | "organizations",
+  table: "persons" | "organizations" | "deals",
   id: string | null,
-  nameCol: "full_name" | "name",
+  nameCol: "full_name" | "name" | "title",
 ): Promise<LeadLink | null> {
   if (!id) return null;
   const supabase = await createServerClient();
@@ -178,17 +175,18 @@ export async function getLead(id: string): Promise<LeadDetail | null> {
   const { data, error } = await supabase
     .from("leads")
     .select(
-      "id, company_id, title, status, source_id, person_id, organization_id, estimated_value, disqualification_note, owner_id, custom_fields, created_at, company:companies(name, slug), source:lead_sources(name, active), reason:disqualification_reasons(name)",
+      "id, company_id, title, status, source_id, person_id, organization_id, estimated_value, disqualification_note, converted_deal_id, owner_id, custom_fields, created_at, company:companies(name, slug), source:lead_sources(name, active), reason:disqualification_reasons(name)",
     )
     .eq("id", id)
     .is("deleted_at", null)
     .maybeSingle();
   if (error) fail("detalhe", error);
   if (!data) return null;
-  const [labels, person, organization] = await Promise.all([
+  const [labels, person, organization, convertedDeal] = await Promise.all([
     supabase.from("record_labels").select("label_id").eq("entity", "leads").eq("record_id", id),
     resolveLink("persons", data.person_id, "full_name"),
     resolveLink("organizations", data.organization_id, "name"),
+    resolveLink("deals", data.converted_deal_id, "title"),
   ]);
   if (labels.error) fail("etiquetas do detalhe", labels.error);
   const company = one(data.company as Rel<{ name: string; slug: string }>);
@@ -207,6 +205,7 @@ export async function getLead(id: string): Promise<LeadDetail | null> {
     person,
     organizationId: data.organization_id,
     organization,
+    convertedDeal,
     estimatedValue: data.estimated_value === null ? null : Number(data.estimated_value),
     reasonName: one(data.reason as Rel<{ name: string }>)?.name ?? null,
     disqualificationNote: data.disqualification_note,

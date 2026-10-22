@@ -4,7 +4,7 @@ import type { CompanyScope } from "@/lib/companies/pure";
 import {
   endOfDay,
   fail as failFor,
-  idsByLabels as idsByLabelsFor,
+  listSource,
   loadRecordLabels,
   one,
   safeTerm,
@@ -87,18 +87,13 @@ export async function fetchOrganizationRows(
   range: { from: number; to: number },
   companyIds?: string[],
 ): Promise<{ rows: OrganizationRow[]; total: number }> {
-  const labelIds = await idsByLabelsFor("organizations", query.label);
-  if (labelIds && labelIds.length === 0) return { rows: [], total: 0 };
-
   const supabase = await createServerClient();
-  let q = supabase
-    .from("organizations")
+  let q = listSource(supabase, "organizations", query.label)
     .select(LIST_SELECT, { count: "exact" })
     .is("deleted_at", null);
   if (scope.kind === "company") q = q.eq("company_id", scope.company.id);
   if (companyIds) q = q.in("company_id", companyIds);
   if (query.owner.length > 0) q = q.in("owner_id", query.owner);
-  if (labelIds) q = q.in("id", labelIds);
   if (query.createdFrom) q = q.gte("created_at", startOfDay(query.createdFrom));
   if (query.createdTo) q = q.lte("created_at", endOfDay(query.createdTo));
   const term = safeTerm(query.q);

@@ -144,7 +144,7 @@ test("desqualificar exige motivo e move para a aba Desqualificados", async ({ br
   const title = `Lead Desq ${stamp}`;
   await page.goto(`/${slugA}/leads/${rec.disq}`);
   await expect(page.getByTestId("lead-status")).toHaveText("Aberto");
-  await expect(page.getByRole("button", { name: "Converter em negócio" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Converter em negócio" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Reabrir" })).toHaveCount(0);
   await page.getByRole("button", { name: "Desqualificar" }).click();
   await page.getByRole("button", { name: "Confirmar desqualificação" }).click();

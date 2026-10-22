@@ -4,6 +4,7 @@ import type { CompanyScope } from "@/lib/companies/pure";
 import {
   endOfDay,
   fail as failFor,
+  listSource,
   loadRecordLabels,
   one,
   safeTerm,
@@ -175,14 +176,6 @@ function applyCommon<T extends Filterable<T>>(
   return q;
 }
 
-/** `deals` ou o filtro por etiqueta (todas as etiquetas escolhidas; o RLS continua valendo). */
-async function dealsSource(label: string[] | undefined) {
-  const supabase = await createServerClient();
-  return (label && label.length > 0
-    ? supabase.rpc("deals_with_labels", { p_label_ids: label }, { count: "exact" })
-    : supabase.from("deals")) as unknown as ReturnType<typeof supabase.from>;
-}
-
 export async function fetchDealRows(
   scope: CompanyScope,
   query: DealListQuery,
@@ -196,7 +189,8 @@ export async function fetchDealRows(
   });
   if (!resolved) return { rows: [], total: 0 };
 
-  let q = (await dealsSource(query.label))
+  const supabase = await createServerClient();
+  let q = listSource(supabase, "deals", query.label)
     .select(LIST_SELECT, { count: "exact" })
     .is("deleted_at", null);
   if (scope.kind === "company") q = q.eq("company_id", scope.company.id);
@@ -295,7 +289,7 @@ export async function getBoard(
         requiredFields: s.required_fields,
       };
       if (!resolved) return { ...base, count: 0, truncated: false, deals: [] };
-      let q = (await dealsSource(labelsFilter))
+      let q = listSource(supabase, "deals", labelsFilter)
         .select(BOARD_SELECT, { count: "exact" })
         .is("deleted_at", null)
         .eq("company_id", companyId)
@@ -524,7 +518,8 @@ export async function getForecast(
 ): Promise<{ buckets: ForecastBucket<ForecastRow>[]; truncated: boolean }> {
   const resolved = await resolveCommon(filters, { companyId, pipelineId });
   if (!resolved) return { buckets: forecastBuckets<ForecastRow>([], now), truncated: false };
-  let q = (await dealsSource(filters.label))
+  const supabase = await createServerClient();
+  let q = listSource(supabase, "deals", filters.label)
     .select(
       "id, title, status, estimated_value, contract_value, expected_close_date, stage_entered_at, owner:profiles!owner_id(full_name, avatar_url), organization:organizations(id, name, deleted_at), stage:stages(name, probability, rotting_days)",
     )

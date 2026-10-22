@@ -157,7 +157,7 @@ test("SDR cria organização, pessoa e lead com etiqueta, campo e anotação, e 
   await expect(page).toHaveURL(/\/leads\/[0-9a-f-]{36}$/);
   leadId = page.url().split("/").pop()!;
 
-  await page.getByRole("button", { name: "Etiquetas (todas)", exact: true }).click();
+  await page.getByRole("button", { name: "Etiqueta", exact: true }).click();
   await page.getByRole("menuitem", { name: labelName }).click();
   await expect(page.getByText(labelName)).toBeVisible();
 

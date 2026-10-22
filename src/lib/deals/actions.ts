@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { translateDbError } from "@/lib/db-errors";
 import { checkCustomFields, firstIssue } from "@/lib/records/action-helpers";
+import { one, type Rel } from "@/lib/records/list-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import { parseMissingFields } from "./required";
 import {
@@ -138,6 +139,63 @@ export async function updateDeal(id: string, input: DealInput): Promise<DealResu
   }
   touched();
   return { ok: true, data: undefined };
+}
+
+/** Dados que o formulário de campos obrigatórios precisa para regravar o negócio sem perder nada. */
+export type DealEditSnapshot = {
+  id: string;
+  title: string;
+  personId: string | null;
+  personName: string | null;
+  organizationId: string | null;
+  organizationName: string | null;
+  estimatedValue: number | null;
+  expectedCloseDate: string | null;
+  setupTotal: number;
+  setupInstallments: number;
+  /** "YYYY-MM" */
+  setupFirstDue: string | null;
+  mrr: number;
+  /** "YYYY-MM" */
+  mrrStart: string | null;
+  contractMonths: number | null;
+  customFields: Record<string, unknown>;
+};
+
+/** Leitura (com RLS) dos campos editáveis, usada antes de abrir o diálogo de obrigatórios. */
+export async function getDealEditSnapshot(id: string): Promise<DealResult<DealEditSnapshot>> {
+  if (!uuid.safeParse(id).success) return INVALID;
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from("deals")
+    .select(
+      "id, title, person_id, organization_id, estimated_value, expected_close_date, setup_total, setup_installments, setup_first_due, mrr, mrr_start, contract_months, custom_fields, person:persons(full_name), organization:organizations(name)",
+    )
+    .eq("id", id)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) return { ok: false, error: SAVE_FAILED };
+  if (!data) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  return {
+    ok: true,
+    data: {
+      id: data.id,
+      title: data.title,
+      personId: data.person_id,
+      personName: one(data.person as Rel<{ full_name: string }>)?.full_name ?? null,
+      organizationId: data.organization_id,
+      organizationName: one(data.organization as Rel<{ name: string }>)?.name ?? null,
+      estimatedValue: data.estimated_value === null ? null : Number(data.estimated_value),
+      expectedCloseDate: data.expected_close_date,
+      setupTotal: Number(data.setup_total),
+      setupInstallments: data.setup_installments,
+      setupFirstDue: dateToMonth(data.setup_first_due),
+      mrr: Number(data.mrr),
+      mrrStart: dateToMonth(data.mrr_start),
+      contractMonths: data.contract_months,
+      customFields: (data.custom_fields ?? {}) as Record<string, unknown>,
+    },
+  };
 }
 
 /**

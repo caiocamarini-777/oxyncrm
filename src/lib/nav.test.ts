@@ -4,12 +4,13 @@ import { CURRENT_PHASE, NAV_ITEMS, PALETTE_EXTRA_ITEMS, isNavItemEnabled, navHre
 const get = (key: string) => NAV_ITEMS.find((i) => i.key === key)!;
 
 describe("nav", () => {
-  it("fase atual é 2", () => expect(CURRENT_PHASE).toBe(2));
+  it("fase atual é 3", () => expect(CURRENT_PHASE).toBe(3));
   it("itens de fases futuras ficam desabilitados", () => {
-    expect(isNavItemEnabled(get("negocios"), true)).toBe(false);
     expect(isNavItemEnabled(get("atividades"), true)).toBe(false);
+    expect(isNavItemEnabled(get("email"), true)).toBe(false);
   });
-  it("itens da fase 2 ficam habilitados", () => {
+  it("itens até a fase 3 ficam habilitados", () => {
+    expect(isNavItemEnabled(get("negocios"), false)).toBe(true);
     expect(isNavItemEnabled(get("leads"), false)).toBe(true);
     expect(isNavItemEnabled(get("contatos"), false)).toBe(true);
   });

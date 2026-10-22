@@ -20,3 +20,11 @@ export function parseDealListQuery(params: URLSearchParams, allowedSorts: string
     rotting: params.get("rotting") === "1",
   };
 }
+
+export const DEAL_VIEWS = ["kanban", "lista", "forecast"] as const;
+export type DealView = (typeof DEAL_VIEWS)[number];
+
+/** `?visao=`: kanban (padrão), lista ou forecast. */
+export function parseDealView(raw: string | null): DealView {
+  return (DEAL_VIEWS as readonly string[]).includes(raw ?? "") ? (raw as DealView) : "kanban";
+}

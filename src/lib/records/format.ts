@@ -24,6 +24,19 @@ export function formatMoney(value: number | null): string {
   return value === null || value === undefined ? "" : moneyFmt.format(value);
 }
 
+const compactFmt = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+  notation: "compact",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+});
+
+/** BRL compacto para somas ("R$ 125 mil", "R$ 1,5 mi"); abaixo de mil, sem centavos. */
+export function formatMoneyCompact(value: number): string {
+  return compactFmt.format(Math.abs(value) < 1000 ? Math.round(value) : value);
+}
+
 export function normalizeEmail(v: string): string {
   return v.trim().toLowerCase();
 }

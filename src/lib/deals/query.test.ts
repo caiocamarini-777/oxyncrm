@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDealListQuery } from "./query";
+import { parseDealListQuery, parseDealView } from "./query";
 
 const A = "11111111-1111-4111-8111-111111111111";
 
@@ -21,5 +21,14 @@ describe("parseDealListQuery", () => {
     const q = parseDealListQuery(new URLSearchParams("pipeline=abc&rotting=0"), []);
     expect(q.pipeline).toBeNull();
     expect(q.rotting).toBe(false);
+  });
+});
+
+describe("parseDealView", () => {
+  it("kanban é o padrão; aceita lista e forecast", () => {
+    expect(parseDealView(null)).toBe("kanban");
+    expect(parseDealView("xyz")).toBe("kanban");
+    expect(parseDealView("lista")).toBe("lista");
+    expect(parseDealView("forecast")).toBe("forecast");
   });
 });

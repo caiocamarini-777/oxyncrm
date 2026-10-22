@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatMoney, formatPhone, normalizeEmail, normalizePhone } from "./format";
+import { formatDate, formatMoney, formatMoneyCompact, formatPhone, normalizeEmail, normalizePhone } from "./format";
 
 describe("format", () => {
   it("formatDate", () => {
     expect(formatDate("2026-10-21T10:00:00Z")).toBe("21/10/2026");
     expect(formatDate("2026-10-21")).toBe("21/10/2026");
     expect(formatDate(null)).toBe("");
+  });
+  it("formatMoneyCompact", () => {
+    const f = (v: number) => formatMoneyCompact(v).replace(/\u00a0/g, " ");
+    expect(f(0)).toBe("R$ 0");
+    expect(f(950.4)).toBe("R$ 950");
+    expect(f(3500)).toBe("R$ 3,5 mil");
+    expect(f(125000)).toBe("R$ 125 mil");
+    expect(f(1_500_000)).toBe("R$ 1,5 mi");
   });
   it("formatMoney", () => {
     expect(formatMoney(1234.5).replace(/ /g, " ")).toBe("R$ 1.234,50");

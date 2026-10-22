@@ -553,3 +553,19 @@ export async function getForecast(
   });
   return forecastBuckets(rows, now);
 }
+
+// Motivos de perda ---------------------------------------------------------------------------------
+
+/** Motivos ativos da empresa, na ordem configurada (formulário de perda). */
+export async function listActiveLostReasons(companyId: string): Promise<{ id: string; name: string }[]> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from("lost_reasons")
+    .select("id, name")
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .order("position")
+    .order("name");
+  if (error) fail("motivos de perda", error);
+  return data ?? [];
+}

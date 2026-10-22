@@ -68,6 +68,9 @@ const activityBase = z.object({
   organizationId: optionalUuid,
 });
 
+/** Edição: vínculos ausentes ficam como estão; a regra "ao menos um" vale sobre o resultado mesclado. */
+export const activityEditSchema = activityBase;
+
 export const activitySchema = activityBase.refine(
   (a) => Boolean(a.leadId || a.dealId || a.personId || a.organizationId),
   { message: MSG_LINK, path: ["links"] },

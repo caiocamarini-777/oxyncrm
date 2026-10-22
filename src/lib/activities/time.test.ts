@@ -10,6 +10,10 @@ describe("toUtc / toLocalInput", () => {
   it("rejeita formato inválido", () => {
     expect(() => toUtc("23/10/2026 10:00")).toThrow();
   });
+  it("rejeita datas impossíveis", () => {
+    expect(() => toUtc("2026-02-31T10:00")).toThrow();
+    expect(() => toUtc("2026-10-23T25:00")).toThrow();
+  });
 });
 
 describe("dayKey", () => {

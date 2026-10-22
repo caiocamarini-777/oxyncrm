@@ -6,8 +6,11 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
+import { completeFailure, type CompleteCode } from "./complete-map";
+import { buildActivityPatch } from "./patch";
 import {
   activitySchema,
+  activityEditSchema,
   completeSchema,
   type ActivityData,
   type ActivityInput,
@@ -62,7 +65,7 @@ export async function updateActivity(id: string, input: ActivityInput): Promise<
   if (!uuid.safeParse(id).success) return INVALID;
   const profile = await getCurrentProfile();
   if (!profile) return { ok: false, error: NO_PERMISSION };
-  const parsed = activitySchema.safeParse(input);
+  const parsed = activityEditSchema.safeParse(input);
   if (!parsed.success) {
     const { field, message } = firstIssue(parsed.error, "subject");
     return { ok: false, error: message, fieldErrors: { [field]: message } };
@@ -71,7 +74,7 @@ export async function updateActivity(id: string, input: ActivityInput): Promise<
   const supabase = await createServerClient();
   const { data: current, error: readError } = await supabase
     .from("activities")
-    .select("owner_id, done, type_id")
+    .select("owner_id, done, lead_id, deal_id, person_id, organization_id")
     .eq("id", id)
     .is("deleted_at", null)
     .maybeSingle();
@@ -80,30 +83,30 @@ export async function updateActivity(id: string, input: ActivityInput): Promise<
     return { ok: false, error: "Não foi possível salvar agora. Tente novamente." };
   }
   if (!current) return { ok: false, error: "Registro não encontrado ou sem permissão." };
-  const patch: Record<string, unknown> = fields(d);
-  if (current.done) delete patch.type_id; // o tipo de uma atividade concluída não muda
-  const { data, error } = await supabase.from("activities").update(patch).eq("id", id).select("id");
-  if (error) return { ok: false, error: translateDbError(error) };
-  if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  const built = buildActivityPatch(d, input, current);
+  if (!built.ok) return { ok: false, error: built.error, fieldErrors: { links: built.error } };
+  // Troca de responsável primeiro: se falhar, nada foi salvo pela metade.
   if (d.ownerId && d.ownerId !== current.owner_id) {
     const res = await supabase.rpc("reassign_record", { p_entity: "activities", p_id: id, p_owner: d.ownerId });
     if (res.error) return { ok: false, error: translateDbError(res.error) };
   }
+  const { data, error } = await supabase
+    .from("activities")
+    .update(built.patch)
+    .eq("id", id)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) return { ok: false, error: translateDbError(error) };
+  if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
   touched();
   return { ok: true, data: undefined };
 }
 
-export type CompleteCode = "next_required" | "meeting_required" | "outcome_required";
+export type { CompleteCode };
 export type CompleteOk = { meetingId: string | null; nextId: string | null; rule: "off" | "suggest" | "require" | null };
 export type CompleteResult =
   | { ok: true; data: CompleteOk }
   | { ok: false; error: string; fieldErrors?: Record<string, string>; code?: CompleteCode; rule?: "require" };
-
-const CODES: [string, CompleteCode][] = [
-  ["OXYN_NEXT_ACTIVITY_REQUIRED", "next_required"],
-  ["OXYN_MEETING_REQUIRED", "meeting_required"],
-  ["OXYN_OUTCOME_REQUIRED", "outcome_required"],
-];
 
 /**
  * Conclui via RPC `complete_activity`. `next.ownerId` só segue quando o usuário escolheu outro
@@ -125,6 +128,13 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
     };
   }
   const d = parsed.data;
+  const supabase = await createServerClient();
+  let nextOwner = d.next?.ownerId;
+  if (nextOwner) {
+    // dono igual ao da atividade de origem: omitir (informar exige a permissão de reatribuir)
+    const { data: src } = await supabase.from("activities").select("owner_id").eq("id", id).maybeSingle();
+    if (src?.owner_id === nextOwner) nextOwner = undefined;
+  }
   const next = d.next
     ? {
         type_id: d.next.typeId,
@@ -133,14 +143,13 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
         due_at: d.next.dueAt,
         duration_minutes: d.next.durationMinutes,
         reminder_minutes: d.next.reminderMinutes,
-        ...(d.next.ownerId ? { owner_id: d.next.ownerId } : {}),
+        ...(nextOwner ? { owner_id: nextOwner } : {}),
       }
     : null;
   const meeting = d.meeting
     ? { subject: d.meeting.subject, due_at: d.meeting.dueAt, ...(d.meeting.typeId ? { type_id: d.meeting.typeId } : {}) }
     : null;
 
-  const supabase = await createServerClient();
   const { data, error } = await supabase.rpc("complete_activity", {
     p_id: id,
     p_outcome_id: d.isMeeting ? null : (d.outcomeId ?? null),
@@ -150,13 +159,7 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
     p_next: next,
   });
   if (error) {
-    const hit = CODES.find(([c]) => error.message?.includes(c));
-    return {
-      ok: false,
-      error: translateDbError(error),
-      ...(hit ? { code: hit[1] } : {}),
-      ...(hit?.[1] === "next_required" ? { rule: "require" as const } : {}),
-    };
+    return completeFailure(error);
   }
   const r = (data ?? {}) as { meeting_id?: string | null; next_id?: string | null; rule?: CompleteOk["rule"] };
   touched();

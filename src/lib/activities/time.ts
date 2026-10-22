@@ -38,12 +38,12 @@ export function toUtc(localIso: string): string {
   let t = wall - offsetAt(wall);
   t = wall - offsetAt(t);
   const out = new Date(t);
-  if (Number.isNaN(out.getTime())) throw new Error("Data e hora inválidas.");
+  if (Number.isNaN(out.getTime()) || toLocalInput(out) !== localIso) throw new Error("Data e hora inválidas.");
   return out.toISOString();
 }
 
 /** ISO em UTC para o valor de `<input type="datetime-local">` em São Paulo. */
-export function toLocalInput(utcIso: string): string {
+export function toLocalInput(utcIso: string | Date): string {
   const p = partsOf(toDate(utcIso));
   return `${pad(p.y, 4)}-${pad(p.mo)}-${pad(p.d)}T${pad(p.h)}:${pad(p.mi)}`;
 }

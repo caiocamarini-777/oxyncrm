@@ -9,6 +9,10 @@ const ITEMS = [
   { href: "/configuracoes/usuarios", label: "Usuários" },
   { href: "/configuracoes/papeis", label: "Papéis" },
   { href: "/configuracoes/equipes", label: "Equipes" },
+  { href: "/configuracoes/campos", label: "Campos" },
+  { href: "/configuracoes/etiquetas", label: "Etiquetas" },
+  { href: "/configuracoes/origens", label: "Origens de lead" },
+  { href: "/configuracoes/motivos", label: "Motivos de desqualificação" },
 ];
 
 export function SettingsNav() {

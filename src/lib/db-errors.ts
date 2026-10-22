@@ -12,6 +12,13 @@ export function translateDbError(err: { code?: string; message?: string }): stri
     return "O papel padrão do sistema não pode ser excluído nem renomeado.";
   if (msg.includes("OXYN_FORBIDDEN_FIELD"))
     return "Você não tem permissão para alterar este campo.";
+  if (msg.includes("OXYN_OWNER_NOT_MEMBER")) return "Essa pessoa não tem acesso a esta empresa.";
+  if (msg.includes("OXYN_REASSIGN_FORBIDDEN")) return "Você não pode trocar o responsável.";
+  if (msg.includes("OXYN_TRASH_FORBIDDEN")) return "Você não pode mover para a lixeira.";
+  if (msg.includes("OXYN_NOT_FOUND")) return "Registro não encontrado.";
+  if (msg.includes("OXYN_COMPANY_IMMUTABLE")) return "Não é possível mudar a empresa do registro.";
+  if (msg.includes("OXYN_INVALID_CUSTOM_FIELD")) return "Valor inválido no campo personalizado.";
+  if (msg.includes("OXYN_CROSS_COMPANY")) return "Os registros ligados precisam ser da mesma empresa.";
   switch (err.code) {
     case "23505":
       return "Já existe um registro com esse valor.";

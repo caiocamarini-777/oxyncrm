@@ -74,7 +74,8 @@ begin
          coalesce(sum(total) filter (where kind = 'recurring'), 0), count(*)
     into v_setup, v_mrr, v_count
   from public.deal_items where deal_id = v_deal;
-  if v_count > 0 then
+  if v_count > 0 or tg_op = 'DELETE' then
+    -- sem itens restantes, os totais que vinham deles voltam a zero (sempre válido para os CHECKs)
     perform set_config('oxyn.items_recalc', 'on', true);
     update public.deals set setup_total = v_setup, mrr = v_mrr
       where id = v_deal and (setup_total, mrr) is distinct from (v_setup, v_mrr);
@@ -89,7 +90,7 @@ create function public.deals_totals_guard() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if (new.setup_total is distinct from old.setup_total or new.mrr is distinct from old.mrr)
-     and coalesce(current_setting('oxyn.items_recalc', true), '') <> 'on'
+     and not (coalesce(current_setting('oxyn.items_recalc', true), '') = 'on' and pg_trigger_depth() > 1)
      and exists (select 1 from public.deal_items where deal_id = new.id) then
     raise exception 'OXYN_TOTALS_FROM_ITEMS';
   end if;
@@ -107,11 +108,20 @@ declare
   k text;
   ok boolean;
   missing text[] := '{}';
+  v_archived boolean;
 begin
   if tg_op = 'UPDATE' and new.stage_id is not distinct from old.stage_id then
     return new;
   end if;
-  select required_fields into req from public.stages where id = new.stage_id;
+  -- etapa de outra empresa/funil: não lê os requisitos; guard_same_company levanta OXYN_CROSS_COMPANY
+  select required_fields, archived_at is not null into req, v_archived from public.stages
+    where id = new.stage_id and company_id = new.company_id and pipeline_id = new.pipeline_id;
+  if not found then
+    return new;
+  end if;
+  if v_archived then
+    raise exception 'OXYN_STAGE_ARCHIVED';
+  end if;
   if req is null or cardinality(req) = 0 then
     return new;
   end if;
@@ -157,12 +167,16 @@ create trigger deals_required_fields before insert or update of stage_id on publ
 create function public.deals_stage_entry() returns trigger
 language plpgsql set search_path = public, pg_temp as $$
 begin
-  if new.stage_id is distinct from old.stage_id then
+  if tg_op = 'INSERT' then
+    new.stage_entered_at := now();
+  elsif new.stage_id is distinct from old.stage_id then
     new.stage_entered_at := clock_timestamp();
+  else
+    new.stage_entered_at := old.stage_entered_at;
   end if;
   return new;
 end $$;
-create trigger deals_stage_entry before update of stage_id on public.deals
+create trigger deals_stage_entry before insert or update on public.deals
   for each row execute function public.deals_stage_entry();
 
 create function public.deals_stage_history() returns trigger
@@ -186,9 +200,8 @@ create trigger deals_stage_history after insert or update of stage_id on public.
 create function public.deals_status_fields() returns trigger
 language plpgsql set search_path = public, pg_temp as $$
 begin
-  if tg_op = 'UPDATE' then
-    if new.status is not distinct from old.status then return new; end if;
-  elsif new.status = 'open' then
+  if tg_op = 'UPDATE' and new.status is not distinct from old.status then
+    new.won_at := old.won_at; new.lost_at := old.lost_at;
     return new;
   end if;
   if new.status = 'won' then
@@ -200,7 +213,7 @@ begin
   end if;
   return new;
 end $$;
-create trigger deals_status_fields before insert or update of status on public.deals
+create trigger deals_status_fields before insert or update on public.deals
   for each row execute function public.deals_status_fields();
 
 -- Linha do tempo (estende a função da fase 2; leads e contatos mantêm o comportamento) ---------
@@ -369,6 +382,17 @@ language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   converting boolean := coalesce(current_setting('oxyn.converting', true), '') = 'on';
 begin
+  if tg_op = 'INSERT' then
+    if not converting then
+      if new.status = 'converted' then
+        raise exception 'OXYN_INVALID_TRANSITION';
+      end if;
+      if new.converted_deal_id is not null or new.converted_at is not null then
+        raise exception 'OXYN_FORBIDDEN_FIELD';
+      end if;
+    end if;
+    return new;
+  end if;
   if new.status is distinct from old.status then
     if not ((old.status = 'open' and new.status in ('disqualified', 'archived'))
          or (old.status in ('disqualified', 'archived') and new.status = 'open')
@@ -387,7 +411,7 @@ begin
   end if;
   return new;
 end $$;
-create trigger guard_lead_status before update on public.leads
+create trigger guard_lead_status before insert or update on public.leads
   for each row execute function public.guard_lead_status();
 
 -- Conversão de lead em negócio ------------------------------------------------------------------
@@ -402,13 +426,17 @@ begin
   if auth.uid() is null then
     raise exception 'insufficient_privilege' using errcode = '42501';
   end if;
-  select * into l from public.leads where id = p_lead for update;
-  if not found then
+  -- leitura simples antes do lock: quem não pode editar o lead recebe o mesmo erro de "não existe"
+  select * into l from public.leads where id = p_lead;
+  if not found or not public.can_access(l.company_id, 'leads', l.owner_id, 'edit') then
     raise exception 'OXYN_NOT_FOUND';
   end if;
-  if not public.can_access(l.company_id, 'leads', l.owner_id, 'edit')
-     or not public.can_access(l.company_id, 'deals', l.owner_id, 'create') then
+  if not public.can_access(l.company_id, 'deals', l.owner_id, 'create') then
     raise exception 'insufficient_privilege' using errcode = '42501';
+  end if;
+  select * into l from public.leads where id = p_lead for update;
+  if exists (select 1 from public.pipelines where id = p_pipeline and archived_at is not null) then
+    raise exception 'OXYN_PIPELINE_ARCHIVED';
   end if;
   if l.deleted_at is not null or l.status <> 'open' then
     raise exception 'OXYN_INVALID_TRANSITION';
@@ -437,39 +465,43 @@ end $$;
 revoke execute on function public.convert_lead(uuid, uuid, uuid, text) from public, anon;
 grant execute on function public.convert_lead(uuid, uuid, uuid, text) to authenticated;
 
--- Filtros por etiqueta (security invoker: o RLS filtra) ------------------------------------------------
+-- Filtros por etiqueta (security invoker: o RLS filtra; sem SET na função para o planner poder expandi-la em linha) ------------------------------------------------
 
 create function public.organizations_with_labels(p_label_ids uuid[]) returns setof public.organizations
-language sql stable security invoker set search_path = public, pg_temp as $$
+language sql stable security invoker as $$
   select t.* from public.organizations t
-  where not exists (
-    select 1 from unnest(coalesce(p_label_ids, '{}')) x
-    where not exists (select 1 from public.record_labels rl
-                      where rl.entity = 'organizations' and rl.record_id = t.id and rl.label_id = x));
+  where coalesce(cardinality(p_label_ids), 0) = 0
+     or t.id in (select rl.record_id from public.record_labels rl
+                 where rl.entity = 'organizations' and rl.label_id = any (p_label_ids)
+                 group by rl.record_id
+                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 create function public.persons_with_labels(p_label_ids uuid[]) returns setof public.persons
-language sql stable security invoker set search_path = public, pg_temp as $$
+language sql stable security invoker as $$
   select t.* from public.persons t
-  where not exists (
-    select 1 from unnest(coalesce(p_label_ids, '{}')) x
-    where not exists (select 1 from public.record_labels rl
-                      where rl.entity = 'persons' and rl.record_id = t.id and rl.label_id = x));
+  where coalesce(cardinality(p_label_ids), 0) = 0
+     or t.id in (select rl.record_id from public.record_labels rl
+                 where rl.entity = 'persons' and rl.label_id = any (p_label_ids)
+                 group by rl.record_id
+                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 create function public.leads_with_labels(p_label_ids uuid[]) returns setof public.leads
-language sql stable security invoker set search_path = public, pg_temp as $$
+language sql stable security invoker as $$
   select t.* from public.leads t
-  where not exists (
-    select 1 from unnest(coalesce(p_label_ids, '{}')) x
-    where not exists (select 1 from public.record_labels rl
-                      where rl.entity = 'leads' and rl.record_id = t.id and rl.label_id = x));
+  where coalesce(cardinality(p_label_ids), 0) = 0
+     or t.id in (select rl.record_id from public.record_labels rl
+                 where rl.entity = 'leads' and rl.label_id = any (p_label_ids)
+                 group by rl.record_id
+                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 create function public.deals_with_labels(p_label_ids uuid[]) returns setof public.deals
-language sql stable security invoker set search_path = public, pg_temp as $$
+language sql stable security invoker as $$
   select t.* from public.deals t
-  where not exists (
-    select 1 from unnest(coalesce(p_label_ids, '{}')) x
-    where not exists (select 1 from public.record_labels rl
-                      where rl.entity = 'deals' and rl.record_id = t.id and rl.label_id = x));
+  where coalesce(cardinality(p_label_ids), 0) = 0
+     or t.id in (select rl.record_id from public.record_labels rl
+                 where rl.entity = 'deals' and rl.label_id = any (p_label_ids)
+                 group by rl.record_id
+                 having count(distinct rl.label_id) = (select count(distinct x) from unnest(p_label_ids) x));
 $$;
 revoke execute on function public.organizations_with_labels(uuid[]), public.persons_with_labels(uuid[]),
   public.leads_with_labels(uuid[]), public.deals_with_labels(uuid[]) from public, anon;

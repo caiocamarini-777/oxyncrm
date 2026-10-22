@@ -1,5 +1,5 @@
 begin;
-select plan(98);
+select plan(110);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -54,7 +54,8 @@ insert into stages (id, pipeline_id, company_id, name, position, required_fields
   ('00000000-0000-4000-8000-0000000000b3', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000d1', 'tst-etapa-3', 2, '{}'),
   ('00000000-0000-4000-8000-0000000000b4', '00000000-0000-4000-8000-0000000000a2', '00000000-0000-4000-8000-0000000000d1', 'tst-etapa-outro-funil', 0, '{}'),
   ('00000000-0000-4000-8000-0000000000b5', '00000000-0000-4000-8000-0000000000a3', '00000000-0000-4000-8000-0000000000d2', 'tst-etapa-naia', 0, '{}'),
-  ('00000000-0000-4000-8000-0000000000b6', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000d1', 'tst-etapa-produtos', 3, '{person_id,estimated_value,products}');
+  ('00000000-0000-4000-8000-0000000000b6', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000d1', 'tst-etapa-produtos', 3, '{person_id,estimated_value,products}'),
+  ('00000000-0000-4000-8000-0000000000b7', '00000000-0000-4000-8000-0000000000a3', '00000000-0000-4000-8000-0000000000d2', 'tst-etapa-naia-exige', 1, '{expected_close_date}');
 insert into custom_field_defs (company_id, entity, key, label, type) values
   ('00000000-0000-4000-8000-0000000000d1', 'deals', 'porte', 'Porte', 'text');
 insert into products (id, company_id, name, kind, active) values
@@ -121,6 +122,14 @@ insert into deal_items (id, deal_id, company_id, product_id, kind, quantity, uni
   ('00000000-0000-4000-8000-000000000e03', '00000000-0000-4000-8000-000000000d11', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000a4', 'setup', 1, 10);
 select is((select kind from deal_items where id = '00000000-0000-4000-8000-000000000e03'), 'recurring', 'tipo do item vem do produto, não do payload');
 
+delete from deal_items where deal_id = '00000000-0000-4000-8000-000000000d11';
+select results_eq($$ select setup_total, mrr from deals where id = '00000000-0000-4000-8000-000000000d11' $$, $$ values (0::numeric, 0::numeric) $$,
+  'sem itens restantes, os totais voltam a zero');
+insert into deal_items (id, deal_id, company_id, product_id, quantity, unit_price) values ('00000000-0000-4000-8000-000000000e04', '00000000-0000-4000-8000-000000000d11', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000a4', 1, 5);
+select set_config('oxyn.items_recalc', 'on', true);
+select throws_ok($$ update deals set mrr = 1 where id = '00000000-0000-4000-8000-000000000d11' $$, 'P0001', 'OXYN_TOTALS_FROM_ITEMS', 'a flag sozinha não libera totais manuais');
+select set_config('oxyn.items_recalc', 'off', true);
+
 -- D. campos obrigatórios -----------------------------------------------------
 insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id) values
   ('00000000-0000-4000-8000-000000000d12', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'tst-neg-obrigatorios', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2');
@@ -133,6 +142,8 @@ update custom_field_defs set archived_at = now() where company_id = '00000000-00
 update deals set setup_total = 1000, setup_first_due = '2026-06-01' where id = '00000000-0000-4000-8000-000000000d12';
 select lives_ok($$ update deals set stage_id = '00000000-0000-4000-8000-0000000000b1' where id = '00000000-0000-4000-8000-000000000d12' $$, 'campo personalizado arquivado não bloqueia');
 select is((select stage_id from deals where id = '00000000-0000-4000-8000-000000000d12'), '00000000-0000-4000-8000-0000000000b1'::uuid, 'negócio mudou de etapa');
+select throws_ok($$ insert into deals (company_id, owner_id, title, pipeline_id, stage_id) values ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'x', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b7') $$,
+  'P0001', 'OXYN_CROSS_COMPANY', 'etapa de outra empresa não vaza requisitos');
 select throws_ok($$ insert into deals (company_id, owner_id, title, pipeline_id, stage_id) values ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'x', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b1') $$,
   'P0001', 'OXYN_REQUIRED_FIELDS', 'criar direto numa etapa exigente também valida');
 update custom_field_defs set archived_at = null where company_id = '00000000-0000-4000-8000-0000000000d1' and entity = 'deals' and key = 'porte';
@@ -162,6 +173,17 @@ select is((select count(*) from deal_stage_history where deal_id = '00000000-000
 select throws_ok($$ update deals set stage_id = '00000000-0000-4000-8000-0000000000b4' where id = '00000000-0000-4000-8000-000000000d16' $$, 'P0001', 'OXYN_CROSS_COMPANY', 'etapa de outro funil sem trocar o funil');
 select lives_ok($$ update deals set pipeline_id = '00000000-0000-4000-8000-0000000000a2', stage_id = '00000000-0000-4000-8000-0000000000b4' where id = '00000000-0000-4000-8000-000000000d16' $$, 'trocar funil e etapa juntos');
 select throws_ok($$ update deals set pipeline_id = '00000000-0000-4000-8000-0000000000a1' where id = '00000000-0000-4000-8000-000000000d16' $$, 'P0001', 'OXYN_CROSS_COMPANY', 'trocar só o funil é incoerente');
+
+insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, stage_entered_at, won_at) values
+  ('00000000-0000-4000-8000-000000000d24', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c4', 'tst-neg-forcado', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2', '2000-01-01', '2000-01-01');
+select results_eq($$ select stage_entered_at = now(), won_at is null from deals where id = '00000000-0000-4000-8000-000000000d24' $$, $$ values (true, true) $$,
+  'insert ignora stage_entered_at e won_at do payload');
+update deals set stage_entered_at = '2000-01-01', lost_at = now(), won_at = now() where id = '00000000-0000-4000-8000-000000000d24';
+select results_eq($$ select stage_entered_at = now(), lost_at is null, won_at is null from deals where id = '00000000-0000-4000-8000-000000000d24' $$, $$ values (true, true, true) $$,
+  'update direto não muda stage_entered_at nem won_at/lost_at');
+update stages set archived_at = now() where id = '00000000-0000-4000-8000-0000000000b3';
+select throws_ok($$ update deals set stage_id = '00000000-0000-4000-8000-0000000000b3' where id = '00000000-0000-4000-8000-000000000d24' $$, 'P0001', 'OXYN_STAGE_ARCHIVED', 'não move para etapa arquivada');
+update stages set archived_at = null where id = '00000000-0000-4000-8000-0000000000b3';
 
 -- F. status --------------------------------------------------------------------
 insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id) values
@@ -204,6 +226,12 @@ update leads set deleted_at = now() where id = '00000000-0000-4000-8000-00000000
 insert into record_labels (label_id, entity, record_id) values
   ('00000000-0000-4000-8000-0000000000f1', 'leads', '00000000-0000-4000-8000-000000000c01'), ('00000000-0000-4000-8000-0000000000f1', 'organizations', '00000000-0000-4000-8000-000000000b01'), ('00000000-0000-4000-8000-0000000000f1', 'persons', '00000000-0000-4000-8000-000000000a01');
 
+select throws_ok($$ insert into leads (company_id, owner_id, title, status) values ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'x', 'converted') $$,
+  'P0001', 'OXYN_INVALID_TRANSITION', 'lead não nasce converted');
+select throws_ok($$ insert into leads (company_id, owner_id, title, converted_deal_id) values ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'x', '00000000-0000-4000-8000-000000000d11') $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'lead não nasce com converted_deal_id');
+select throws_ok($$ insert into leads (company_id, owner_id, title, converted_at) values ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'x', now()) $$,
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'lead não nasce com converted_at');
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c2');
 select lives_ok($$ select set_config('tst.deal', convert_lead('00000000-0000-4000-8000-000000000c01', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2')::text, true) $$, 'ana converte o lead dela');
 select results_eq($$ select title, owner_id, person_id, organization_id, estimated_value, lead_id from deals where id = current_setting('tst.deal')::uuid $$,
@@ -217,7 +245,7 @@ select is((select count(*) from timeline_events where record_id = '00000000-0000
 select is((select count(*) from timeline_events where record_id = current_setting('tst.deal')::uuid and kind = 'created'), 1::bigint, 'created na linha do tempo do negócio');
 select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c01', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2') $$, 'P0001', 'OXYN_INVALID_TRANSITION', 'segunda conversão falha');
 select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c04', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2') $$, 'P0001', 'OXYN_INVALID_TRANSITION', 'lead na lixeira não converte');
-select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c02', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2') $$, '42501', null, 'ana não edita lead de caio');
+select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c02', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2') $$, 'P0001', 'OXYN_NOT_FOUND', 'ana não edita lead de caio: mesmo erro de inexistente');
 select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c05', '00000000-0000-4000-8000-0000000000a3', '00000000-0000-4000-8000-0000000000b5') $$, 'P0001', 'OXYN_CROSS_COMPANY', 'funil de outra empresa');
 select throws_ok($$ update leads set converted_deal_id = null where id = '00000000-0000-4000-8000-000000000c01' $$, 'P0001', 'OXYN_FORBIDDEN_FIELD', 'converted_deal_id não muda fora de convert_lead');
 select lives_ok($$ select set_config('tst.deal2', convert_lead('00000000-0000-4000-8000-000000000c05', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2', 'tst-titulo-custom')::text, true) $$, 'conversão com título próprio');
@@ -288,5 +316,20 @@ select results_eq($$ select entity, record_id, title, subtitle from global_searc
   $$ values ('deals'::text, '00000000-0000-4000-8000-000000000d20'::uuid, 'tst-busca-xyz negocio'::text, 'tst-etapa-2'::text) $$, 'busca encontra negócio pelo título, com a etapa no subtítulo');
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c5');
 select is((select count(*) from global_search('tst-busca-xyz')), 0::bigint, 'busca de negócios respeita o RLS');
+
+-- L. conversão em funil/etapa arquivados
+select pg_temp.as_pg();
+insert into leads (id, company_id, owner_id, title) values
+  ('00000000-0000-4000-8000-000000000c07', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'tst-lead-arq-funil'), ('00000000-0000-4000-8000-000000000c08', '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c2', 'tst-lead-arq-etapa');
+update pipelines set archived_at = now() where id = '00000000-0000-4000-8000-0000000000a2';
+update stages set archived_at = now() where id = '00000000-0000-4000-8000-0000000000b3';
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c2');
+select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c07', '00000000-0000-4000-8000-0000000000a2', '00000000-0000-4000-8000-0000000000b4') $$, 'P0001', 'OXYN_PIPELINE_ARCHIVED', 'funil arquivado não recebe conversão');
+select throws_ok($$ select convert_lead('00000000-0000-4000-8000-000000000c08', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b3') $$, 'P0001', 'OXYN_STAGE_ARCHIVED', 'etapa arquivada não recebe conversão');
+
+-- M. filtros por etiqueta são expandidos em linha (sem SET na função)
+select pg_temp.as_pg();
+select is((select count(*) from pg_proc where proname in ('organizations_with_labels','persons_with_labels','leads_with_labels','deals_with_labels')
+  and pronamespace = 'public'::regnamespace and proconfig is null), 4::bigint, 'funções de filtro sem SET (inlinable)');
 
 select * from finish();

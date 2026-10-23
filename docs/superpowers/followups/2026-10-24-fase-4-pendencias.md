@@ -4,7 +4,8 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 
 ## Melhorias adiadas
 
-- Lixeira: as atividades excluídas não aparecem na página genérica da lixeira (`RECORD_ENTITIES` não foi ampliado). Elas são restauradas pela ação `restoreActivity` e purgadas junto com os registros vinculados ou pelo `purge_trash`.
+- Lixeira: as atividades excluídas não aparecem na página genérica da lixeira (`RECORD_ENTITIES` não foi ampliado). Atividades abertas vão para a lixeira junto com o registro vinculado (quando não resta outro vínculo vivo) e voltam quando o registro é restaurado (gatilho `cascade_parent_trash`); as concluídas permanecem. Elas são purgadas junto com os registros vinculados ou pelo `purge_trash`. A ação `restoreActivity` existe, mas nenhuma tela chega a ela.
+- Sem interface na ficha para reabrir, excluir ou restaurar atividades individuais (as ações `reopenActivity`, `trashActivity` e `restoreActivity` existem, mas nenhuma tela as usa).
 - Visibilidade: a visibilidade de uma atividade é independente da visibilidade do registro vinculado (quem enxerga a atividade pode não enxergar o lead, a pessoa ou o negócio). É uma decisão de produto a confirmar; hoje a RLS de atividades espelha a de negócios.
 - Concorrência: os guards com advisory lock (conclusão, reabertura, regras de último tipo, resultado e canal) não têm um teste de concorrência real; os testes pgTAP rodam em uma única sessão.
 - "Nova atividade" em `/atividades` só vincula pessoa ou organização: o `ActivityForm` não tem busca de lead nem de negócio. Para vincular a leads e negócios, criar a atividade pela aba Atividade da ficha.
@@ -30,3 +31,6 @@ Consultas do funil por canal:
 - Reuniões realizadas = reuniões com `meeting_outcome = 'held'`, agrupadas por `origin_channel_id` (o canal da atividade que agendou; `booked_by_activity_id` aponta para ela).
 - Oportunidades = leads convertidos com reunião realizada de origem.
 - Ganhos = negócios ganhos desses leads.
+- Atividades de leads convertidos mantêm `lead_id` e ganham `deal_id` (a conversão migra as abertas e as concluídas).
+- Reunião remarcada herda `booked_by_activity_id` e `origin_channel_id` da reunião de origem, então a reunião realizada continua creditada ao canal que agendou.
+- `booked_by_activity_id` é único por atividade de origem concluída: reabrir e concluir de novo reaproveita a reunião; concluir com resultado que não agenda solta o vínculo.

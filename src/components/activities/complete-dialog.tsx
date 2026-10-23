@@ -82,11 +82,11 @@ function CompleteBody({
   const [meetingDuration, setMeetingDuration] = useState("30");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [rescheduled, setRescheduled] = useState(false);
   const inFlight = useRef(false);
 
   const chosen = outcomes.find((o) => o.id === outcomeId);
-  const booking = !isMeeting && Boolean(chosen?.booksMeeting);
+  const rescheduling = isMeeting && meetingOutcome === "rescheduled";
+  const booking = rescheduling || (!isMeeting && Boolean(chosen?.booksMeeting));
   const meetingReady = meetingSubject.trim() !== "" && meetingDue !== "" && Number.isInteger(Number(meetingDuration));
   const ready = (isMeeting ? meetingOutcome !== "" : outcomeId !== "") && (!booking || meetingReady);
 
@@ -118,9 +118,7 @@ function CompleteBody({
       }
       toast.success("Atividade concluída.");
       onChanged();
-      const reschedule = isMeeting && meetingOutcome === "rescheduled" && !res.data.nextId;
-      if (reschedule || (res.data.rule === "suggest" && !res.data.nextId)) {
-        setRescheduled(reschedule);
+      if (res.data.rule === "suggest" && !res.data.nextId) {
         setStage("suggest");
         return { ok: true };
       }
@@ -150,7 +148,6 @@ function CompleteBody({
   const nextInitial = {
     typeId: types.some((t) => t.id === activity.type.id) ? activity.type.id : undefined,
     channelId: channels.some((c) => c.id === activity.channel.id) ? activity.channel.id : undefined,
-    subject: rescheduled ? (party ? `Reunião com ${party}` : activity.subject) : undefined,
     dueAt: defaultDue(data.nowIso, 1),
     ownerId: activity.ownerId,
   };
@@ -159,12 +156,8 @@ function CompleteBody({
     return (
       <>
         <DialogHeader>
-          <DialogTitle>{rescheduled ? "Remarcar a reunião" : "Próxima atividade"}</DialogTitle>
-          <DialogDescription>
-            {rescheduled
-              ? "A reunião foi concluída como remarcada. Crie a nova reunião agora."
-              : "Atividade concluída. Que tal já deixar a próxima agendada?"}
-          </DialogDescription>
+          <DialogTitle>Próxima atividade</DialogTitle>
+          <DialogDescription>Atividade concluída. Que tal já deixar a próxima agendada?</DialogDescription>
         </DialogHeader>
         <ActivityForm
           idPrefix="suggest"
@@ -209,9 +202,6 @@ function CompleteBody({
                 />
               ))}
             </div>
-            {meetingOutcome === "rescheduled" ? (
-              <p className="text-xs text-muted-foreground">Depois de concluir, sugerimos criar uma nova reunião.</p>
-            ) : null}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -249,7 +239,7 @@ function CompleteBody({
               className="overflow-hidden"
             >
               <fieldset className="flex flex-col gap-2 rounded-md border p-3" data-testid="schedule-meeting">
-                <legend className="px-1 text-sm font-medium">Agendar reunião</legend>
+                <legend className="px-1 text-sm font-medium">{rescheduling ? "Nova data da reunião" : "Agendar reunião"}</legend>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor="meeting-due">Data e hora da reunião</Label>

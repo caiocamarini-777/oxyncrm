@@ -178,31 +178,6 @@ export async function getActivitiesFor(
   return { open: toRows(open.data), done: toRows(done.data) };
 }
 
-export type NextActivity = { activityId: string; dueAt: string; subject: string; overdue: boolean };
-
-/** Próxima atividade aberta por lead/negócio (RPC `next_activity_for`, respeita o RLS). */
-export async function nextActivitiesFor(
-  entity: "leads" | "deals",
-  ids: string[],
-): Promise<Map<string, NextActivity>> {
-  const out = new Map<string, NextActivity>();
-  const valid = ids.filter(isUuid);
-  if (valid.length === 0) return out;
-  const supabase = await createServerClient();
-  const { data, error } = await supabase.rpc("next_activity_for", { p_entity: entity, p_ids: valid });
-  if (error) fail("próximas atividades", error);
-  for (const r of (data ?? []) as {
-    record_id: string;
-    activity_id: string;
-    due_at: string;
-    subject: string;
-    overdue: boolean;
-  }[]) {
-    out.set(r.record_id, { activityId: r.activity_id, dueAt: r.due_at, subject: r.subject, overdue: r.overdue });
-  }
-  return out;
-}
-
 export type ActivityCatalogItem = { id: string; name: string; active: boolean };
 export type ActivityCatalog = {
   types: (ActivityCatalogItem & { isMeeting: boolean })[];

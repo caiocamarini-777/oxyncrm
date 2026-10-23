@@ -33,7 +33,11 @@ export function buildActivityPatch(
     duration_minutes: d.durationMinutes,
     reminder_minutes: d.reminderMinutes,
   };
-  if (current.done) delete patch.type_id; // o tipo de uma atividade concluída não muda
+  if (current.done) {
+    // tipo e canal de uma atividade concluída não mudam
+    delete patch.type_id;
+    delete patch.channel_id;
+  }
   let remaining = false;
   for (const [key, col] of LINKS) {
     if (raw[key] !== undefined) {

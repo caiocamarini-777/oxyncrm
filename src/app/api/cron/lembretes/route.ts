@@ -16,9 +16,10 @@ const BUDGET_MS = 45_000;
 type Row = {
   id: number;
   user_id: string;
+  company_id: string | null;
   title: string;
   due_at: string | null;
-  profiles: { email: string; full_name: string; active: boolean } | null;
+  profiles: { email: string; full_name: string; active: boolean; is_super_admin: boolean } | null;
   companies: { slug: string } | null;
   activities: (ReminderLinks & { subject: string; done: boolean; deleted_at: string | null; owner_id: string }) | null;
 };
@@ -40,7 +41,7 @@ export async function GET(request: Request) {
   const { data, error } = await db
     .from("notifications")
     .select(
-      "id, user_id, title, due_at, profiles(email, full_name, active), companies(slug), activities(subject, done, deleted_at, owner_id, deal_id, lead_id, person_id, organization_id)",
+      "id, user_id, company_id, title, due_at, profiles(email, full_name, active, is_super_admin), companies(slug), activities(subject, done, deleted_at, owner_id, deal_id, lead_id, person_id, organization_id)",
     )
     .eq("kind", "activity_reminder")
     .is("email_sent_at", null)
@@ -51,6 +52,21 @@ export async function GET(request: Request) {
   if (error) {
     console.error("lembretes: falha ao listar notificações:", error.message);
     return Response.json({ error: "Falha ao listar lembretes" }, { status: 500 });
+  }
+
+  // Dono que saiu da empresa não recebe e-mail (super admin conta como membro).
+  const memberOf = new Set<string>();
+  if (data.length > 0) {
+    const { data: ms, error: mErr } = await db
+      .from("memberships")
+      .select("user_id, company_id")
+      .in("user_id", [...new Set(data.map((n) => n.user_id))])
+      .in("company_id", [...new Set(data.flatMap((n) => (n.company_id ? [n.company_id] : [])))]);
+    if (mErr) {
+      console.error("lembretes: falha ao listar vínculos:", mErr.message);
+      return Response.json({ error: "Falha ao listar lembretes" }, { status: 500 });
+    }
+    for (const m of ms) memberOf.add(`${m.user_id}:${m.company_id}`);
   }
 
   const site = (siteEnv ?? "http://localhost:3000").replace(/\/$/, "");
@@ -73,7 +89,12 @@ export async function GET(request: Request) {
       continue;
     }
     // Reivindicada de propósito nos dois casos abaixo: não há e-mail a enviar.
-    const decision = emailDecision({ userId: n.user_id, profile: n.profiles, activity: n.activities });
+    const decision = emailDecision({
+      userId: n.user_id,
+      profile: n.profiles,
+      activity: n.activities,
+      isMember: Boolean(n.profiles?.is_super_admin) || (n.company_id !== null && memberOf.has(`${n.user_id}:${n.company_id}`)),
+    });
     if (decision === "stale") {
       stale++;
       continue;

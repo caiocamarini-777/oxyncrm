@@ -46,6 +46,6 @@ describe("buildActivityPatch", () => {
   });
   it("tipo não muda em atividade concluída", () => {
     const r = run({}, cur({ done: true, lead_id: U(8) }));
-    expect(r.ok && "type_id" in r.patch).toBe(false);
+    expect(r.ok && ("type_id" in r.patch || "channel_id" in r.patch)).toBe(false);
   });
 });

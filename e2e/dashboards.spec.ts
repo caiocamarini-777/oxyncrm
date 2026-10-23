@@ -268,17 +268,25 @@ test("dashboard compartilhado aparece em Compartilhados comigo e abre somente le
   await expect(page.getByRole("button", { name: /^Mover widget/ })).toHaveCount(0);
 });
 
-test("destinatário sem view_reports abre o dashboard compartilhado pelo link", async ({ page }) => {
-  const shared = await admin().from("dashboard_shares").insert({ dashboard_id: dashboardId, user_id: recvId });
-  if (shared.error) throw shared.error;
+test("destinatário sem view_reports chega ao dashboard compartilhado pelo menu", async ({ page }) => {
   await login(page, recvEmail, password);
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
 
+  // Sem view_reports e sem compartilhamento, Relatórios fica desativado.
   await page.goto(`/${slug}/inicio`);
-  await expect(page.getByRole("navigation", { name: "Principal" }).getByLabel("Relatórios")).toHaveAttribute("aria-disabled", "true");
+  const nav = page.getByRole("navigation", { name: "Principal" });
+  await expect(nav.getByLabel("Relatórios")).toHaveAttribute("aria-disabled", "true");
 
-  await page.goto(`/${slug}/relatorios/dashboards`);
+  // Com um dashboard compartilhado, o item leva direto aos dashboards.
+  const shared = await admin().from("dashboard_shares").insert({ dashboard_id: dashboardId, user_id: recvId });
+  if (shared.error) throw shared.error;
+  await page.reload();
+  const item = nav.getByRole("link", { name: "Relatórios" });
+  await expect(item).toHaveAttribute("href", `/${slug}/relatorios/dashboards`);
+  await item.click();
+  await page.waitForURL(`**/${slug}/relatorios/dashboards`);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboards" })).toBeVisible();
+  await expect(item).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Meus dashboards" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Novo dashboard" })).toHaveCount(0);
   await page.getByRole("link", { name: new RegExp(dashName) }).click();

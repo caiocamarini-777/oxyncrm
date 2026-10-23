@@ -60,6 +60,22 @@ export const reportCompanySlugs = cache(async (): Promise<string[]> => {
 });
 
 /**
+ * Verdadeiro se há dashboard compartilhado comigo que eu ainda consigo abrir (o join com dashboards passa pela
+ * RLS, que descarta compartilhamentos sem empresa em comum com o dono). Uma contagem só, para o menu.
+ */
+export const hasSharedDashboards = cache(async (): Promise<boolean> => {
+  const profile = await getCurrentProfile();
+  if (!profile || !profile.active) return false;
+  const supabase = await createServerClient();
+  const { count, error } = await supabase
+    .from("dashboard_shares")
+    .select("dashboard_id, dashboards!inner(id)", { count: "exact", head: true })
+    .eq("user_id", profile.id);
+  if (error) fail("dashboards compartilhados", error);
+  return (count ?? 0) > 0;
+});
+
+/**
  * Permissões da tela de relatórios no escopo. view_reports vale por empresa (no escopo "todas", basta uma);
  * criar e compartilhar dashboards valem em qualquer empresa, como as políticas do banco.
  */

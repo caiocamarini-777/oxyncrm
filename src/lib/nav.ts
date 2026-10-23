@@ -38,14 +38,28 @@ export const PALETTE_EXTRA_ITEMS: NavItem[] = [
   { key: "lixeira", label: "Lixeira", icon: Trash2, path: "/lixeira", availableFromPhase: 2, scoped: true },
 ];
 
-export function navHref(item: NavItem, scopeSlug: string): string {
+/** Acesso ao menu Relatórios: view_reports no escopo e se há dashboards compartilhados comigo. */
+export type ReportsNavAccess = { canViewReports: boolean; hasSharedDashboards: boolean };
+
+/** Sem view_reports (e sem ser admin geral), mas com dashboards compartilhados: Relatórios leva só a eles. */
+export function reportsSharedOnly(isSuperAdmin: boolean, access?: ReportsNavAccess): boolean {
+  return !isSuperAdmin && !access?.canViewReports && !!access?.hasSharedDashboards;
+}
+
+export function navHref(item: NavItem, scopeSlug: string, sharedDashboardsOnly = false): string {
+  if (item.key === "relatorios" && sharedDashboardsOnly) return `/${scopeSlug}/relatorios/dashboards`;
   return item.scoped ? `/${scopeSlug}${item.path}` : item.path;
 }
 
-/** Relatórios exigem view_reports (ou admin geral); o resto depende só da fase. */
-export function isNavItemEnabled(item: NavItem, isSuperAdmin: boolean, canViewReports = false): boolean {
+/**
+ * Relatórios exigem view_reports (ou admin geral), ou dashboards compartilhados comigo (aí o item leva aos
+ * dashboards); o resto depende só da fase.
+ */
+export function isNavItemEnabled(item: NavItem, isSuperAdmin: boolean, access?: ReportsNavAccess): boolean {
   if (item.superAdminOnly && !isSuperAdmin) return false;
-  if (item.key === "relatorios" && !isSuperAdmin && !canViewReports) return false;
+  if (item.key === "relatorios" && !isSuperAdmin && !access?.canViewReports && !access?.hasSharedDashboards) {
+    return false;
+  }
   return DELIVERED_PHASES.includes(item.availableFromPhase);
 }
 

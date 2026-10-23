@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DELIVERED_PHASES, NAV_ITEMS, PALETTE_EXTRA_ITEMS, isNavItemEnabled, navHref, scopeCanViewReports } from "./nav";
+import {
+  DELIVERED_PHASES,
+  NAV_ITEMS,
+  PALETTE_EXTRA_ITEMS,
+  isNavItemEnabled,
+  navHref,
+  reportsSharedOnly,
+  scopeCanViewReports,
+} from "./nav";
 
 const get = (key: string) => NAV_ITEMS.find((i) => i.key === key)!;
 
@@ -14,10 +22,23 @@ describe("nav", () => {
     expect(isNavItemEnabled(get("leads"), false)).toBe(true);
     expect(isNavItemEnabled(get("contatos"), false)).toBe(true);
   });
-  it("relatórios exigem view_reports ou admin geral", () => {
-    expect(isNavItemEnabled(get("relatorios"), false, false)).toBe(false);
-    expect(isNavItemEnabled(get("relatorios"), false, true)).toBe(true);
-    expect(isNavItemEnabled(get("relatorios"), true, false)).toBe(true);
+  it("relatórios exigem view_reports, dashboards compartilhados ou admin geral", () => {
+    const none = { canViewReports: false, hasSharedDashboards: false };
+    expect(isNavItemEnabled(get("relatorios"), false)).toBe(false);
+    expect(isNavItemEnabled(get("relatorios"), false, none)).toBe(false);
+    expect(isNavItemEnabled(get("relatorios"), false, { canViewReports: true, hasSharedDashboards: false })).toBe(true);
+    expect(isNavItemEnabled(get("relatorios"), false, { canViewReports: false, hasSharedDashboards: true })).toBe(true);
+    expect(isNavItemEnabled(get("relatorios"), true, none)).toBe(true);
+  });
+  it("sem view_reports e com compartilhados, relatórios leva aos dashboards", () => {
+    const shared = { canViewReports: false, hasSharedDashboards: true };
+    expect(reportsSharedOnly(false, shared)).toBe(true);
+    expect(reportsSharedOnly(true, shared)).toBe(false);
+    expect(reportsSharedOnly(false, { canViewReports: true, hasSharedDashboards: true })).toBe(false);
+    expect(reportsSharedOnly(false, { canViewReports: false, hasSharedDashboards: false })).toBe(false);
+    expect(navHref(get("relatorios"), "volt", true)).toBe("/volt/relatorios/dashboards");
+    expect(navHref(get("relatorios"), "volt", false)).toBe("/volt/relatorios");
+    expect(navHref(get("leads"), "volt", true)).toBe("/volt/leads");
   });
   it("view_reports no escopo todas vale se alguma empresa libera", () => {
     expect(scopeCanViewReports("todas", "todas", ["volt"])).toBe(true);

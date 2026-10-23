@@ -13,7 +13,14 @@ import {
 } from "@/components/ui/command";
 import { ALL_COMPANIES_SLUG } from "@/lib/companies/constants";
 import { switchCompanyPath, type CompanyScope, type CompanySummary } from "@/lib/companies/pure";
-import { NAV_ITEMS, PALETTE_EXTRA_ITEMS, isNavItemEnabled, navHref } from "@/lib/nav";
+import {
+  NAV_ITEMS,
+  PALETTE_EXTRA_ITEMS,
+  isNavItemEnabled,
+  navHref,
+  reportsSharedOnly,
+  type ReportsNavAccess,
+} from "@/lib/nav";
 import { searchRecords, type SearchResult } from "@/lib/search/actions";
 
 const GROUPS = [
@@ -28,13 +35,13 @@ export function CommandPalette({
   scopeSlug,
   allowAll,
   isSuperAdmin,
-  canViewReports,
+  reports,
 }: {
   companies: CompanySummary[];
   scopeSlug: string | null;
   allowAll: boolean;
   isSuperAdmin: boolean;
-  canViewReports: boolean;
+  reports: ReportsNavAccess;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -80,8 +87,9 @@ export function CommandPalette({
   const targets = allowAll
     ? [{ id: "all", name: "Todas as empresas", slug: ALL_COMPANIES_SLUG }, ...companies]
     : companies;
+  const sharedOnly = reportsSharedOnly(isSuperAdmin, reports);
   const pages = [...NAV_ITEMS, ...PALETTE_EXTRA_ITEMS].filter(
-    (i) => isNavItemEnabled(i, isSuperAdmin, canViewReports) && (!i.scoped || scopeSlug),
+    (i) => isNavItemEnabled(i, isSuperAdmin, reports) && (!i.scoped || scopeSlug),
   );
 
   return (
@@ -143,7 +151,7 @@ export function CommandPalette({
           </CommandGroup>
           <CommandGroup heading="Ir para">
             {pages.map((i) => (
-              <CommandItem key={i.key} value={`ir ${i.label}`} onSelect={() => go(navHref(i, scopeSlug ?? ""))}>
+              <CommandItem key={i.key} value={`ir ${i.label}`} onSelect={() => go(navHref(i, scopeSlug ?? "", sharedOnly))}>
                 <i.icon className="size-4" />
                 {i.label}
               </CommandItem>

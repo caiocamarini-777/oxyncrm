@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { NAV_ITEMS, isNavItemEnabled, navHref } from "@/lib/nav";
+import { NAV_ITEMS, isNavItemEnabled, navHref, reportsSharedOnly, type ReportsNavAccess } from "@/lib/nav";
 import { cn } from "cn";
 
 const base = "flex size-10 items-center justify-center rounded-lg";
@@ -12,13 +12,14 @@ const base = "flex size-10 items-center justify-center rounded-lg";
 export function Sidebar({
   scopeSlug,
   isSuperAdmin,
-  canViewReports,
+  reports,
 }: {
   scopeSlug: string | null;
   isSuperAdmin: boolean;
-  canViewReports: boolean;
+  reports: ReportsNavAccess;
 }) {
   const pathname = usePathname();
+  const sharedOnly = reportsSharedOnly(isSuperAdmin, reports);
   const items = NAV_ITEMS.filter((i) => !i.superAdminOnly || isSuperAdmin);
 
   return (
@@ -33,7 +34,7 @@ export function Sidebar({
       <nav aria-label="Principal" className="flex flex-col items-center gap-1">
         {items.map((item) => {
           const Icon = item.icon;
-          if (!isNavItemEnabled(item, isSuperAdmin, canViewReports) || (item.scoped && !scopeSlug)) {
+          if (!isNavItemEnabled(item, isSuperAdmin, reports) || (item.scoped && !scopeSlug)) {
             return (
               <Tooltip key={item.key}>
                 <TooltipTrigger asChild>
@@ -47,7 +48,7 @@ export function Sidebar({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="right">
-                  {!isNavItemEnabled(item, isSuperAdmin, true)
+                  {!isNavItemEnabled(item, isSuperAdmin, { canViewReports: true, hasSharedDashboards: false })
                     ? "Disponível em breve"
                     : item.scoped && !scopeSlug
                       ? "Selecione uma empresa"
@@ -56,7 +57,7 @@ export function Sidebar({
               </Tooltip>
             );
           }
-          const href = navHref(item, scopeSlug ?? "");
+          const href = navHref(item, scopeSlug ?? "", sharedOnly);
           const segment = href.split("/").slice(0, item.scoped ? 3 : 2).join("/");
           const active = pathname === href || pathname.startsWith(`${segment}/`) || pathname === segment;
           return (

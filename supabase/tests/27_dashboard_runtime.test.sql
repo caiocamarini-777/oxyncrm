@@ -1,5 +1,5 @@
 begin;
-select plan(71);
+select plan(72);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -306,11 +306,13 @@ select throws_ok($$ select goal_progress(pg_temp.u(901), pg_temp.u(13)) $$, '425
 -- 6. preset goal_progress ----------------------------------------------------------------------------
 select pg_temp.as_user(pg_temp.u(11));
 select is((select r from jsonb_array_elements(run_widget(pg_temp.u(704), '{}')->'rows') r where r->>0 like 'Valor ganho (Volt%'),
-  jsonb_build_array('Valor ganho (Volt Teste)', 1000, 1500, 150, pg_temp.month_start(), pg_temp.month_end()),
+  jsonb_build_array('Valor ganho (Volt Teste)', 1000, 1500, 150, pg_temp.month_start(), pg_temp.month_end(), 'won_value'),
   'preset goal_progress pelo widget com report_id');
 select is(run_widget(pg_temp.u(704), '{"owner":["00000000-0000-4000-8000-000000000013"]}')->'rows',
-  jsonb_build_array(jsonb_build_array('Valor ganho (tst-vend)', 250, 500, 200, pg_temp.month_start(), pg_temp.month_end())),
+  jsonb_build_array(jsonb_build_array('Valor ganho (tst-vend)', 250, 500, 200, pg_temp.month_start(), pg_temp.month_end(), 'won_value')),
   'preset goal_progress com filtro owner mostra só as metas do usuário');
+select is((select jsonb_path_query_array(run_widget(pg_temp.u(704), '{}')->'columns', '$[*].key')), '["goal","target","actual","percent","period_start","period_end","metric"]'::jsonb,
+  'preset goal_progress expõe a coluna metric');
 select throws_ok($$ select run_report_self('{"kind":"goal_progress","params":{"x":1}}', array[pg_temp.u(1)]) $$, 'P0001',
   'OXYN_INVALID_REPORT', 'goal_progress não aceita params');
 

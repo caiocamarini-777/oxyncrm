@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseBRL } from "@/lib/records/format";
 import { UUID_RE } from "@/lib/uuid";
 
 export const GOAL_METRICS = [
@@ -54,6 +55,9 @@ export function alignStart(date: string, period: GoalPeriod): string {
 export function isAlignedStart(period: GoalPeriod, startsOn: string): boolean {
   return parseDay(startsOn) !== null && alignStart(startsOn, period) === startsOn;
 }
+
+/** Valor-alvo digitado em pt-BR ("10.000", "1.500,50") para número; vazio ou ilegível vira NaN (o schema recusa). */
+export const parseTargetValue = (raw: string): number => parseBRL(raw) ?? Number.NaN;
 
 export const goalSchema = z
   .strictObject({

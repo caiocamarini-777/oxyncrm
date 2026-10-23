@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 import { admin, createTestUser, deleteTestUser, login } from "./helpers/auth";
 import { runSql } from "./helpers/db";
 
+/** Dia de hoje em São Paulo (AAAA-MM-DD), como o banco conta o mês da meta. */
+const saoPauloToday = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(new Date());
+
 const stamp = Date.now();
 const password = "oxyn-test-123";
 const slug = `tst-e2e-mt-${stamp}`;
@@ -81,9 +84,14 @@ test("o admin cria a meta mensal de valor ganho e vê o realizado e a porcentage
   // Um início no meio do mês é alinhado ao dia 1.
   await dialog.getByLabel("Início").fill("2026-10-17");
   await expect(dialog.getByLabel("Início")).toHaveValue("2026-10-01");
-  await dialog.getByLabel("Início").fill(new Date().toISOString().slice(0, 8) + "15");
-  await expect(dialog.getByLabel("Início")).toHaveValue(/-01$/);
-  await dialog.getByLabel("Valor-alvo").fill("10000");
+  // Trocar o período não desvia a data digitada: semanal alinha à segunda e voltar a mensal volta ao dia 1.
+  await dialog.getByLabel("Período").selectOption({ label: "Semanal" });
+  await expect(dialog.getByLabel("Início")).toHaveValue("2026-10-12");
+  await dialog.getByLabel("Período").selectOption({ label: "Mensal" });
+  await expect(dialog.getByLabel("Início")).toHaveValue("2026-10-01");
+  await dialog.getByLabel("Início").fill(saoPauloToday().slice(0, 8) + "15");
+  await expect(dialog.getByLabel("Início")).toHaveValue(saoPauloToday().slice(0, 8) + "01");
+  await dialog.getByLabel("Valor-alvo").fill("10.000");
   await dialog.getByRole("button", { name: "Criar meta" }).click();
   await expect(dialog).toBeHidden();
 
@@ -113,4 +121,19 @@ test("o widget Progresso de metas de um dashboard mostra a mesma porcentagem", a
   const widget = page.getByRole("article", { name: widgetTitle });
   await expect(widget).toContainText("25,0%");
   await expect(widget.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+});
+
+test("excluir pede confirmação", async ({ page }) => {
+  await login(page, adminEmail, password);
+  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
+  await page.goto(`/${slug}/relatorios/metas`);
+  await page.getByRole("button", { name: /Excluir meta/ }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Excluir meta?" });
+  await confirm.getByRole("button", { name: "Cancelar" }).click();
+  await expect(page.getByRole("listitem").filter({ hasText: "Valor ganho" })).toHaveCount(1);
+  await page.getByRole("button", { name: /Excluir meta/ }).click();
+  await confirm.getByRole("button", { name: "Excluir meta" }).click();
+  await expect(page.getByText("Nenhuma meta definida.")).toBeVisible();
+  const left = await admin().from("goals").select("id").eq("company_id", companyId);
+  expect(left.data).toEqual([]);
 });

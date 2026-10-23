@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createGoal } from "@/lib/reports/actions";
-import { GOAL_METRICS, GOAL_METRIC_LABELS, GOAL_PERIODS, alignStart, type GoalPeriod } from "@/lib/reports/goals";
+import { GOAL_METRICS, GOAL_METRIC_LABELS, GOAL_PERIODS, alignStart, parseTargetValue, type GoalPeriod } from "@/lib/reports/goals";
 
 type Option = { value: string; label: string };
 
@@ -72,8 +72,10 @@ export function GoalForm({
   const [teamId, setTeamId] = useState("");
   const [metric, setMetric] = useState<(typeof GOAL_METRICS)[number]>("won_value");
   const [period, setPeriod] = useState<GoalPeriod>("month");
-  const [startsOn, setStartsOn] = useState(alignStart(today, "month"));
+  const [rawStart, setRawStart] = useState(today);
   const [value, setValue] = useState("");
+  // A data digitada é guardada crua; o início alinhado é derivado, então trocar o período não deriva a data.
+  const startsOn = alignStart(rawStart, period);
 
   function reset() {
     setCompanyId(initialCompany);
@@ -82,7 +84,7 @@ export function GoalForm({
     setTeamId("");
     setMetric("won_value");
     setPeriod("month");
-    setStartsOn(alignStart(today, "month"));
+    setRawStart(today);
     setValue("");
     setError(null);
     setFieldErrors({});
@@ -92,7 +94,6 @@ export function GoalForm({
     e.preventDefault();
     setError(null);
     setFieldErrors({});
-    const n = Number(value.replace(",", "."));
     startTransition(async () => {
       const res = await createGoal({
         companyId,
@@ -102,7 +103,7 @@ export function GoalForm({
         metric,
         period,
         startsOn,
-        targetValue: value.trim() === "" || !Number.isFinite(n) ? Number.NaN : n,
+        targetValue: parseTargetValue(value),
       });
       if (!res.ok) {
         setFieldErrors(res.fieldErrors ?? {});
@@ -217,9 +218,7 @@ export function GoalForm({
                 className={selectClass}
                 value={period}
                 onChange={(e) => {
-                  const p = e.target.value as GoalPeriod;
-                  setPeriod(p);
-                  setStartsOn(alignStart(startsOn, p));
+                  setPeriod(e.target.value as GoalPeriod);
                 }}
               >
                 {GOAL_PERIODS.map((p) => (
@@ -234,7 +233,7 @@ export function GoalForm({
                 id="goal-start"
                 type="date"
                 value={startsOn}
-                onChange={(e) => setStartsOn(alignStart(e.target.value, period))}
+                onChange={(e) => e.target.value && setRawStart(e.target.value)}
               />
             </Field>
           </div>

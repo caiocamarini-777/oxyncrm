@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alignStart, goalSchema, isAlignedStart } from "./goals";
+import { alignStart, goalSchema, isAlignedStart, parseTargetValue } from "./goals";
 
 const U = "00000000-0000-4000-8000-000000000001";
 const base = { companyId: U, targetKind: "company", metric: "won_value", period: "month", startsOn: "2026-10-01", targetValue: 100 };
@@ -62,5 +62,18 @@ describe("goalSchema", () => {
     expect(goalSchema.safeParse({ ...base, targetUserId: U }).success).toBe(false);
     expect(goalSchema.safeParse({ ...base, targetValue: 0 }).success).toBe(false);
     expect(goalSchema.safeParse({ ...base, metric: "x" }).success).toBe(false);
+  });
+});
+
+describe("parseTargetValue", () => {
+  it("entende pt-BR", () => {
+    expect(parseTargetValue("10.000")).toBe(10000);
+    expect(parseTargetValue("1.500,50")).toBe(1500.5);
+    expect(parseTargetValue("10000")).toBe(10000);
+    expect(parseTargetValue("2,5")).toBe(2.5);
+  });
+  it("vazio e lixo viram NaN", () => {
+    expect(parseTargetValue("")).toBeNaN();
+    expect(parseTargetValue("abc")).toBeNaN();
   });
 });

@@ -11,7 +11,7 @@ import { dayKey } from "@/lib/activities/time";
 import { resolveDashboardFilters } from "@/lib/dashboards/filters";
 import { getReportLookups } from "@/lib/reports/lookups";
 import { getReportPermissions, reportCompanySlugs } from "@/lib/reports/permissions";
-import { getDashboard, listReports, listShareCandidates, runWidgetResult } from "@/lib/reports/queries";
+import { getDashboard, listProfileNames, listReports, listShareCandidates, runWidgetResult } from "@/lib/reports/queries";
 
 export const instant = false;
 
@@ -62,6 +62,8 @@ export default async function DashboardPage({
   // Compartilhar: só o dono, e só com share_dashboards. As pessoas vêm das empresas dele (o banco confere de novo).
   const canShare = dashboard.isOwner && perms.shareDashboards;
   const candidates = canShare ? await listShareCandidates() : [];
+  const candidateIds = new Set(candidates.map((c) => c.id));
+  const names = canShare ? await listProfileNames(dashboard.sharedWith.filter((u) => !candidateIds.has(u))) : {};
   const nowMs = new Date().getTime();
   const linkItems: ShareLinkItem[] = canShare
     ? dashboard.links.map((l) => ({
@@ -83,7 +85,7 @@ export default async function DashboardPage({
         </div>
         <div className="flex flex-wrap items-center gap-2">
         {canShare ? (
-          <ShareDialog dashboardId={dashboard.id} users={candidates} sharedWith={dashboard.sharedWith} links={linkItems} />
+          <ShareDialog dashboardId={dashboard.id} users={candidates} sharedWith={dashboard.sharedWith} names={names} links={linkItems} />
         ) : null}
         {canAdd && lookups ? (
           <AddWidgetDialog

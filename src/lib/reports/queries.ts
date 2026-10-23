@@ -237,6 +237,15 @@ export async function listShareCandidates(): Promise<ShareCandidate[]> {
     .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
 }
 
+/** Nomes de perfis legíveis por RLS; quem não aparece fica de fora (a tela usa um rótulo padrão). */
+export async function listProfileNames(ids: string[]): Promise<Record<string, string>> {
+  const valid = ids.filter(isUuid);
+  if (valid.length === 0) return {};
+  const supabase = await createServerClient();
+  const { data } = await supabase.from("profiles").select("id, full_name, email").in("id", valid);
+  return Object.fromEntries((data ?? []).map((p) => [p.id as string, (p.full_name as string) || (p.email as string)]));
+}
+
 // Metas -----------------------------------------------------------------------------------------------------
 /** Metas das empresas do escopo, com o progresso do período corrente. */
 export async function listGoals(scopeSlug: string): Promise<GoalRow[]> {

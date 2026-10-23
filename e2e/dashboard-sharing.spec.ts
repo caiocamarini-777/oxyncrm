@@ -79,6 +79,12 @@ test.beforeAll(async () => {
     spec: { kind: "custom", base: "deals", metric: { op: "count" }, chart: "number" },
   });
   ownDashboardId = await insert("dashboards", { owner_id: sellerId, name: ownDashName });
+  await insert("dashboard_widgets", {
+    dashboard_id: ownDashboardId,
+    title: widgetTitle,
+    position: 0,
+    spec: { kind: "custom", base: "deals", metric: { op: "count" }, chart: "number" },
+  });
 });
 
 test.afterAll(async () => {
@@ -95,7 +101,7 @@ test("o gestor compartilha com a vendedora, que vê o mesmo número sem controle
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
   await page.goto(`/${slug}/relatorios/dashboards/${dashboardId}`);
   await expect(page.getByRole("heading", { level: 1, name: dashName })).toBeVisible();
-  await expect(page.getByRole("article", { name: widgetTitle })).toContainText("4");
+  await expect(page.getByRole("article", { name: widgetTitle })).toContainText(`${widgetTitle}4Quantidade`);
 
   await page.getByRole("button", { name: "Compartilhar" }).click();
   const dialog = page.getByRole("dialog", { name: "Compartilhar dashboard" });
@@ -118,7 +124,7 @@ test("o gestor compartilha com a vendedora, que vê o mesmo número sem controle
     const shared = seller.getByRole("region", { name: "Compartilhados comigo" });
     await shared.getByRole("link", { name: new RegExp(dashName) }).click();
     await expect(seller.getByRole("heading", { level: 1, name: dashName })).toBeVisible();
-    await expect(seller.getByRole("article", { name: widgetTitle })).toContainText("4");
+    await expect(seller.getByRole("article", { name: widgetTitle })).toContainText(`${widgetTitle}4Quantidade`);
     await expect(seller.getByRole("button", { name: "Adicionar widget" })).toHaveCount(0);
     await expect(seller.getByRole("button", { name: "Compartilhar" })).toHaveCount(0);
     await expect(seller.getByRole("button", { name: `Mover widget ${widgetTitle}` })).toHaveCount(0);
@@ -127,6 +133,8 @@ test("o gestor compartilha com a vendedora, que vê o mesmo número sem controle
     await seller.goto(`/${slug}/relatorios/dashboards/${ownDashboardId}`);
     await expect(seller.getByRole("heading", { level: 1, name: ownDashName })).toBeVisible();
     await expect(seller.getByRole("button", { name: "Compartilhar" })).toHaveCount(0);
+    // O número próprio da vendedora (1) é menor que o do gestor que ela vê no compartilhado (4).
+    await expect(seller.getByRole("article", { name: widgetTitle })).toContainText(`${widgetTitle}1Quantidade`);
   } finally {
     await ctx.close();
   }
@@ -152,7 +160,7 @@ test("link público: abre sem sessão e deixa de abrir depois de revogado", asyn
     const res = await p.goto(publicPath);
     expect(res?.status()).toBe(200);
     await expect(p.getByRole("heading", { level: 1, name: dashName })).toBeVisible();
-    await expect(p.getByRole("article", { name: widgetTitle })).toContainText("4");
+    await expect(p.getByRole("article", { name: widgetTitle })).toContainText(`${widgetTitle}4Quantidade`);
     await expect(p.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
     await expect(p.locator('meta[name="referrer"]')).toHaveAttribute("content", "no-referrer");
     expect(p.url()).not.toContain("/entrar");

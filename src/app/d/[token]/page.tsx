@@ -9,7 +9,7 @@ import { dayKey } from "@/lib/activities/time";
 import { resolveDashboardFilters } from "@/lib/dashboards/filters";
 import { buildWidgetFilters, type DashboardFilters as Filters } from "@/lib/reports/filters";
 import type { WidgetRow } from "@/lib/reports/rows";
-import { toReportResult, type ReportSpec } from "@/lib/reports/spec";
+import { toReportResult } from "@/lib/reports/spec";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/uuid";
 
@@ -63,7 +63,8 @@ export default async function PublicDashboardPage({
       id: w.id,
       dashboardId: "publico",
       reportId: null,
-      spec: w.chart ? ({ chart: w.chart } as unknown as ReportSpec) : null,
+      // O tipo de gráfico vem no resultado de run_widget_public; o espectador público não lê a spec.
+      spec: null,
       title: w.title ?? "",
       position: i,
       colSpan: w.col_span,

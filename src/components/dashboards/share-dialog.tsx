@@ -40,11 +40,14 @@ export function ShareDialog({
   dashboardId,
   users,
   sharedWith,
+  names = {},
   links,
 }: {
   dashboardId: string;
   users: ShareUser[];
   sharedWith: string[];
+  /** Nomes de quem já tem acesso e não está na lista de pessoas disponíveis. */
+  names?: Record<string, string>;
   links: ShareLinkItem[];
 }) {
   const router = useRouter();
@@ -60,7 +63,11 @@ export function ShareDialog({
 
   const term = query.trim().toLocaleLowerCase("pt-BR");
   const matches = (u: ShareUser) => !term || `${u.name} ${u.email}`.toLocaleLowerCase("pt-BR").includes(term);
-  const withAccess = users.filter((u) => shared.has(u.id));
+  // Quem já recebeu o dashboard mas saiu da lista (inativo ou fora das empresas) continua removível.
+  const known = new Map(users.map((u) => [u.id, u]));
+  const withAccess: ShareUser[] = [...shared].map(
+    (id) => known.get(id) ?? { id, name: names[id] ?? "Pessoa sem acesso às suas empresas", email: "" },
+  );
   const available = users.filter((u) => !shared.has(u.id) && matches(u));
 
   function add(u: ShareUser) {
@@ -259,7 +266,7 @@ export function ShareDialog({
                         </span>
                       </span>
                       {l.status === "ativo" ? (
-                        <Button size="sm" variant="outline" disabled={pending} aria-label="Revogar link" onClick={() => revoke(l.id)}>
+                        <Button size="sm" variant="outline" disabled={pending} aria-label={`Revogar link criado em ${fmtDate(l.createdAt)}`} onClick={() => revoke(l.id)}>
                           Revogar
                         </Button>
                       ) : null}

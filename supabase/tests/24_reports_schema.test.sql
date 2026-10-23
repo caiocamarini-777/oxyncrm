@@ -99,7 +99,6 @@ with x as (update dashboards set name = 'tst-hack' where id = pg_temp.u(601) ret
 select is((select count(*) from x), 0::bigint, 'destinatário não altera o dashboard (0 linhas)');
 select throws_ok($$ insert into dashboard_widgets (dashboard_id, spec, title, position) values (pg_temp.u(601), '{"a":1}', 'w', 5) $$,
   '42501', null, 'destinatário não escreve widget');
-select is((select count(*) from dashboard_share_links), 0::bigint, 'destinatário não vê links');
 select throws_ok($$ insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(601), pg_temp.u(20)) $$,
   '42501', null, 'sem share_dashboards não compartilha');
 select pg_temp.as_user(pg_temp.u(20));
@@ -110,6 +109,9 @@ select pg_temp.as_user(pg_temp.u(11));
 select lives_ok($$ insert into dashboard_share_links (dashboard_id, token_hash, created_by) values (pg_temp.u(601), 'tst-hash', pg_temp.u(11)) $$, 'dono cria link');
 select is((select count(*) from dashboard_share_links where dashboard_id = pg_temp.u(601)), 1::bigint, 'dono lê o link sem o hash');
 select throws_ok($$ select token_hash from dashboard_share_links $$, '42501', null, 'token_hash não é legível');
+select pg_temp.as_user(pg_temp.u(13));
+select is((select count(*) from dashboard_share_links where dashboard_id = pg_temp.u(601)), 0::bigint, 'destinatário não vê links existentes');
+select pg_temp.as_user(pg_temp.u(11));
 
 -- 5. metas ---------------------------------------------------------------------------------------
 select throws_ok($$ insert into goals (company_id, target_kind, metric, period, starts_on, target_value, created_by)

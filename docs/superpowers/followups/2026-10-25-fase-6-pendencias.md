@@ -6,10 +6,6 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 
 - A base "e-mails" do construtor de relatórios fica para depois da fase 5 (e-mail), que ainda não existe. A especificação a lista; hoje o construtor oferece leads, negócios, atividades, receita e histórico de etapas.
 
-## Verificação manual pendente
-
-- Os gráficos de linha, pizza e funil ainda precisam de uma conferência visual manual (cores, rótulos, tooltip, modo escuro e tela estreita). Os testes automatizados validam os dados e a tabela alternativa, não a aparência.
-
 ## Decisões que você pode querer rever
 
 - O preset de progresso de metas (`goal_progress`) só entrou na Task 4, depois de a função `goal_progress()` existir; o despachante de presets da Task 3 não o conhecia. Foi só ordem de implementação, sem efeito de produto.
@@ -17,7 +13,8 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 - A base "e-mails" ficou de fora (ver acima), apesar de constar na especificação.
 - As metas são geridas só pelo admin geral (a especificação não diz quem cria metas). Se outros papéis devem criar, falta uma chave de permissão nova.
 - O dashboard usa dnd-kit com tamanhos em passos (largura de 1 a 4 colunas, altura de 1 a 3 linhas) em vez de uma biblioteca de grade livre. Evita o risco de compatibilidade da `react-grid-layout` com React 19, ao custo de um redimensionamento menos fino.
-- Compartilhar com usuários exige que o destinatário divida uma empresa com o dono (ou seja admin geral). A especificação diz "qualquer usuário", mas isso vazaria o alcance do criador entre empresas; o link público cobre quem está de fora.
+- Compartilhar com usuários exige que o destinatário divida uma empresa com o dono (ou seja admin geral). A especificação diz "qualquer usuário", mas isso vazaria o alcance do criador entre empresas; o link público cobre quem está de fora. A regra vale a cada leitura, não só ao compartilhar: quem deixa de dividir empresa com o dono perde o dashboard e os widgets (o registro do compartilhamento fica e volta a valer se a empresa voltar). Dono admin geral divide empresa com qualquer usuário ativo que tenha vínculo em empresa não arquivada.
+- Destinatário sem `view_reports` que tem dashboards compartilhados vê o menu Relatórios ativo, levando direto a `/[empresa]/relatorios/dashboards`.
 - Dashboards e relatórios só se criam com `owner_id = auth.uid()`, mesmo pelo admin geral, porque o dono define o alcance da execução. O admin geral não cria em nome de outro.
 - O dono pode revogar compartilhamentos e links sem ter `share_dashboards`: revogar só reduz a exposição.
 - Funil e influência por canal aplicam o escopo de leads e negócios às contagens de oportunidade e ganho, então quem enxerga só os próprios registros vê números menores que os baseados em atividades.
@@ -34,6 +31,10 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 
 ## Melhorias adiadas
 
+### Filtros padrão do dashboard
+
+- `dashboards.default_filters`: a especificação (4.6) os lista, mas não há interface para editá-los. Ficam como pendência, e a lógica de interseção com os padrões continua sem uso até lá.
+
 ### Motor de relatórios (banco)
 
 - Filtros de período e data envolvem a coluna em conversão de fuso, o que impede o uso de índice.
@@ -44,7 +45,6 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 - O trailer de commit da Task 2 saiu com outro modelo.
 - Influência na conversão: a subconsulta correlacionada cresce com eventos vezes atividades.
 - O preset de progresso de metas chama `goal_progress` uma vez por meta (N varreduras).
-- Progresso de metas: a ordenação do CTE (por 2, 1) agora ordena pela métrica antes do limite de 501; só importa com mais de 501 metas.
 
 ### Compartilhamento e links
 
@@ -58,15 +58,13 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 - Em "Todas as empresas", `has_report_setting` é chamado N vezes (N+1).
 - A posição de `addWidget` tem corrida (cosmético).
 - `revalidatePath("/", "layout")` é amplo demais.
-- `reportCompanySlugs` faz N RPCs a cada navegação, no layout do app.
+- `reportCompanySlugs` e `has_report_setting`: são N RPCs por navegação, rodando no layout do app (mais a contagem de dashboards compartilhados). Juntar em uma única RPC que devolva um conjunto, em breve.
 - Rótulos de etapa não marcam funil arquivado.
-- A página do relatório confere se a empresa está no escopo, mas não `view_reports` por empresa.
 
 ### Dashboards
 
 - Todo salvamento de layout revalida o layout inteiro, então todos os widgets consultam de novo.
 - A alça de redimensionar fica escondida no celular.
-- Se o `onDone` da fila de salvamento lançar erro, a fila trava.
 - O teste 29 tem ajudantes sem uso.
 - Em "Todas as empresas", a empresa da URL substitui a lista padrão de empresas (o banco continua limitando).
 - Um período padrão inválido é descartado em silêncio.

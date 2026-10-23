@@ -7,10 +7,10 @@ import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
 import { UUID_RE } from "@/lib/uuid";
-import { shareUrl, type DashboardFilters } from "./filters";
+import { shareUrl } from "./filters";
 import { goalSchema, type GoalInput } from "./goals";
 import { defaultWidgetTitle } from "./rows";
-import { runReportResult, runWidgetResult } from "./queries";
+import { runReportResult } from "./queries";
 import { reportSpecSchema, type ReportResult, type ReportSpec } from "./spec";
 
 const uuid = z.string().regex(UUID_RE);
@@ -25,17 +25,14 @@ async function actor() {
 }
 
 // Execução (para componentes de cliente) -------------------------------------------------------------------
-export async function runReportAction(spec: ReportSpec, scopeSlug: string): Promise<ActionResult<ReportResult>> {
-  if (typeof scopeSlug !== "string") return INVALID;
-  return runReportResult(spec, scopeSlug);
-}
-
-export async function runWidgetAction(
-  widgetId: string,
-  filters: DashboardFilters | null,
+export async function runReportAction(
+  spec: ReportSpec,
+  scopeSlug: string,
+  companyId?: string | null,
 ): Promise<ActionResult<ReportResult>> {
-  if (!uuid.safeParse(widgetId).success) return INVALID;
-  return runWidgetResult(widgetId, filters);
+  if (typeof scopeSlug !== "string") return INVALID;
+  if (companyId != null && !uuid.safeParse(companyId).success) return INVALID;
+  return runReportResult(spec, scopeSlug, companyId);
 }
 
 // Relatórios salvos -----------------------------------------------------------------------------------------

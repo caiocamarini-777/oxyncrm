@@ -186,7 +186,7 @@ export function ReportBuilder({
     const timer = setTimeout(async () => {
       setPreview((p) => ({ ...p, loading: true }));
       try {
-        const res = await runReportAction(check.data, scopeSlug);
+        const res = await runReportAction(check.data, scopeSlug, companyId);
         if (id !== reqId.current) return;
         setPreview(res.ok ? { result: res.data, loading: false } : { error: res.error, loading: false });
       } catch {
@@ -194,7 +194,7 @@ export function ReportBuilder({
       }
     }, 400);
     return () => clearTimeout(timer);
-  }, [specKey, scopeSlug]);
+  }, [specKey, scopeSlug, companyId]);
 
   const specError = parsed.success ? null : (parsed.error.issues[0]?.message ?? "Revise os campos.");
 

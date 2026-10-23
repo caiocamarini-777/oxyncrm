@@ -33,12 +33,21 @@ function fail(what: string, error: { message: string; code?: string }): never {
 const INVALID_REPORT = "Relatório inválido. Revise os campos escolhidos.";
 const FORBIDDEN = "Você não tem permissão para esta ação.";
 
-/** Executa a spec nas empresas do escopo com view_reports; erros viram mensagens em português. */
-export async function runReportResult(spec: unknown, scopeSlug: string): Promise<ActionResult<ReportResult>> {
+/**
+ * Executa a spec nas empresas do escopo com view_reports; erros viram mensagens em português.
+ * Com companyId (relatório salvo de uma empresa), roda só nessa empresa, como o widget do relatório; se ela não
+ * está no escopo ou não tem view_reports, nega em vez de rodar nas outras.
+ */
+export async function runReportResult(
+  spec: unknown,
+  scopeSlug: string,
+  companyId?: string | null,
+): Promise<ActionResult<ReportResult>> {
   await connection();
   const parsed = reportSpecSchema.safeParse(spec);
   if (!parsed.success) return { ok: false, error: INVALID_REPORT };
-  const companies = await reportCompanyIds(scopeSlug);
+  const allowed = await reportCompanyIds(scopeSlug);
+  const companies = companyId ? allowed.filter((id) => id === companyId) : allowed;
   if (companies.length === 0) return { ok: false, error: FORBIDDEN };
   const supabase = await createServerClient();
   const { data, error } = await supabase.rpc("run_report_self", { p_spec: parsed.data, p_companies: companies });
@@ -47,8 +56,12 @@ export async function runReportResult(spec: unknown, scopeSlug: string): Promise
 }
 
 /** Para páginas e componentes de servidor: lança em vez de devolver o erro. */
-export async function runReport(spec: ReportSpec, scopeSlug: string): Promise<ReportResult> {
-  const res = await runReportResult(spec, scopeSlug);
+export async function runReport(
+  spec: ReportSpec,
+  scopeSlug: string,
+  companyId?: string | null,
+): Promise<ReportResult> {
+  const res = await runReportResult(spec, scopeSlug, companyId);
   if (!res.ok) throw new Error(res.error);
   return res.data;
 }

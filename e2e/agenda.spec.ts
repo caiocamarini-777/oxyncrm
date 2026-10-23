@@ -108,3 +108,10 @@ test("concluir pela agenda", async ({ page }) => {
   const item = page.getByTestId("agenda-item").filter({ hasText: `Noite ${stamp}` });
   await expect(item).toHaveAttribute("data-status", "done");
 });
+
+test("data absurda cai em hoje em vez de erro", async ({ page }) => {
+  await go(page, "?visao=semana&data=9999-12-31");
+  await expect(page.getByTestId("agenda-week")).toBeVisible();
+  await page.goto(`/${slug}/atividades?visao=mes&data=0001-01-01`);
+  await expect(page.getByTestId("agenda-month")).toBeVisible();
+});

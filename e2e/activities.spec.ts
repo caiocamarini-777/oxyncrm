@@ -21,6 +21,7 @@ let chOtherName = "";
 test.describe.configure({ mode: "serial" });
 test.setTimeout(60_000);
 
+const endOfToday = new Date(new Date(startOfNextDayUtc(dayKey(new Date()))).getTime() - 60_000).toISOString();
 const hours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
 
 async function insert(row: Record<string, unknown>) {
@@ -63,7 +64,6 @@ test.beforeAll(async () => {
   if (p.error) throw p.error;
   personId = p.data.id;
 
-  const endOfToday = new Date(new Date(startOfNextDayUtc(dayKey(new Date()))).getTime() - 60_000).toISOString();
   await insert({ subject: `Atrasada ${stamp}`, due_at: hours(-30) });
   await insert({ subject: `Hoje ${stamp}`, due_at: endOfToday });
   await insert({ subject: `Proxima ${stamp}`, due_at: hours(72), channel_id: chOther });
@@ -79,10 +79,12 @@ test.afterAll(async () => {
 });
 
 test("abas trazem as atividades certas e o contador de atrasadas", async ({ page }) => {
+  // 23:59 de hoje já passou perto da meia-noite de São Paulo
+  test.skip(new Date(endOfToday).getTime() - Date.now() < 10 * 60_000, "perto da meia-noite");
   await go(page, adminEmail, "");
   await expect(page.getByText(`Hoje ${stamp}`, { exact: true })).toBeVisible();
   await expect(page.getByText(`Atrasada ${stamp}`)).toHaveCount(0);
-  await expect(page.getByTestId("overdue-count")).toHaveText(/2/);
+  await expect(page.getByTestId("overdue-count")).toHaveText(/^2/);
 
   await page.getByRole("link", { name: /Atrasadas/ }).click();
   await expect(page).toHaveURL(/aba=atrasadas/);
@@ -137,6 +139,8 @@ test("nova atividade exige vínculo", async ({ page }) => {
 test("usuário padrão só vê as próprias", async ({ page }) => {
   await go(page, biaEmail, "?aba=atrasadas");
   await expect(page.getByText(`Da Bia ${stamp}`)).toBeVisible();
+  await expect(page.getByText(`Atrasada ${stamp}`)).toHaveCount(0);
+  await expect(page.getByTestId("overdue-count")).toHaveText(/^1/);
   await page.getByRole("link", { name: "Próximas" }).click();
   await expect(page.getByText(`Proxima ${stamp}`)).toHaveCount(0);
 });

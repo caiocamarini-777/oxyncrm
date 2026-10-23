@@ -7,7 +7,7 @@ import { AgendaMonth } from "@/components/activities/agenda-month";
 import { AgendaWeek } from "@/components/activities/agenda-week";
 import type { CompanyCtx, PageCtx } from "@/components/activities/page-context";
 import { Pagination } from "@/components/records/pagination";
-import { countOverdue, getActivityCatalog, getAgenda, listActivities } from "@/lib/activities/queries";
+import { AGENDA_LIMIT, countOverdue, getActivityCatalog, getAgenda, listActivities } from "@/lib/activities/queries";
 import { dayKey } from "@/lib/activities/time";
 import { agendaRange, parseActivityListQuery, parseAnchor, parseView } from "@/lib/activities/view";
 import { requireUser } from "@/lib/auth/session";
@@ -90,8 +90,7 @@ export default async function ActivitiesPage({
     ),
   };
 
-  const scopeSlug = scope.kind === "all" ? "todas" : scope.company.slug;
-  const filtered = Boolean(query.q) || ["owner", "team", "type", "channel"].some((k) => sp.has(k));
+    const filtered = Boolean(query.q) || ["owner", "team", "type", "channel"].some((k) => sp.has(k));
 
   let body: React.ReactNode;
   if (view === "lista") {
@@ -105,7 +104,6 @@ export default async function ActivitiesPage({
           ctx={ctx}
           overdueCount={overdueCount}
           filtered={filtered}
-          scopeSlug={scopeSlug}
         />
         <Pagination total={result.total} page={query.page} />
       </>
@@ -119,7 +117,13 @@ export default async function ActivitiesPage({
       { q: query.q, owner: query.owner, team: query.team, type: query.type, channel: query.channel },
       now,
     );
-    body = view === "semana" ? <AgendaWeek rows={rows} anchor={anchor} ctx={ctx} /> : <AgendaMonth rows={rows} anchor={anchor} ctx={ctx} />;
+    const truncated = rows.length >= AGENDA_LIMIT;
+    body =
+      view === "semana" ? (
+        <AgendaWeek rows={rows} anchor={anchor} ctx={ctx} truncated={truncated} />
+      ) : (
+        <AgendaMonth rows={rows} anchor={anchor} ctx={ctx} truncated={truncated} />
+      );
   }
 
   return (

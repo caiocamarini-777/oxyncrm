@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import type { CompanyScope } from "@/lib/companies/pure";
 import { safeTerm } from "@/lib/records/list-helpers";
 import { PAGE_SIZE, type ListQuery, type Paged, type RecordEntity } from "@/lib/records/types";
@@ -28,14 +29,19 @@ export type ActivityListQuery = ListQuery & {
 export type AgendaFilters = { owner?: string[]; type?: string[]; channel?: string[]; team?: string[]; q?: string };
 
 /** Donos das equipes escolhidas; `null` = nenhuma equipe tem membros (resultado vazio). */
-async function teamOwners(team: string[] | undefined): Promise<string[] | undefined | null> {
-  const ids = (team ?? []).filter(isUuid);
-  if (ids.length === 0) return undefined;
+const teamOwnersByKey = cache(async (key: string): Promise<string[] | null> => {
   const supabase = await createServerClient();
-  const { data, error } = await supabase.from("team_members").select("user_id").in("team_id", ids);
+  const { data, error } = await supabase.from("team_members").select("user_id").in("team_id", key.split(","));
   if (error) fail("equipes", error);
   const owners = [...new Set((data ?? []).map((m) => m.user_id as string))];
   return owners.length > 0 ? owners : null;
+});
+
+/** Donos das equipes escolhidas (uma consulta por requisição); `null` = nenhuma equipe tem membros. */
+async function teamOwners(team: string[] | undefined): Promise<string[] | undefined | null> {
+  const ids = [...new Set((team ?? []).filter(isUuid))].sort();
+  if (ids.length === 0) return undefined;
+  return teamOwnersByKey(ids.join(","));
 }
 
 type Filters = { owner?: string[]; type?: string[]; channel?: string[]; q?: string };
@@ -116,7 +122,7 @@ export async function countOverdue(
   return count ?? 0;
 }
 
-const AGENDA_LIMIT = 2000;
+export const AGENDA_LIMIT = 2000;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Atividades (abertas e concluídas) entre dois dias de São Paulo, `from` e `to` inclusive. */

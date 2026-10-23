@@ -74,7 +74,6 @@ export function ActivityList({
   ctx,
   overdueCount,
   filtered,
-  scopeSlug,
 }: {
   rows: ActivityRow[];
   total: number;
@@ -82,7 +81,6 @@ export function ActivityList({
   ctx: PageCtx;
   overdueCount: number;
   filtered: boolean;
-  scopeSlug: string;
 }) {
   const [completing, setCompleting] = useState<ActivityRow | null>(null);
   const now = new Date(ctx.nowIso);
@@ -179,7 +177,7 @@ export function ActivityList({
           query={query}
           entity="activities"
           companyColumn={ctx.allCompanies}
-          rowHref={(a) => primaryLink(a)?.href ?? `/${scopeSlug}/atividades`}
+          rowHref={(a) => primaryLink(a)?.href ?? null}
         />
       )}
       <CompleteHost activity={completing} ctx={ctx} onClose={() => setCompleting(null)} />

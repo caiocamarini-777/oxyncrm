@@ -11,10 +11,12 @@ export function parseView(raw: string | null | undefined): ActivityView {
   return (VIEWS as readonly string[]).includes(raw ?? "") ? (raw as ActivityView) : "lista";
 }
 
-/** `?data=YYYY-MM-DD` válido, senão `fallback` (hoje em São Paulo). */
+/** `?data=YYYY-MM-DD` válido e até 100 anos de `fallback` (hoje em São Paulo); senão `fallback`. */
 export function parseAnchor(raw: string | null | undefined, fallback: string): string {
   if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return fallback;
   const [y, m, d] = raw.split("-").map(Number);
+  const fallbackYear = Number(fallback.slice(0, 4));
+  if (Math.abs(y - fallbackYear) > 100) return fallback;
   const t = new Date(Date.UTC(y, m - 1, d));
   return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? raw : fallback;
 }

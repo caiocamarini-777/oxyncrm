@@ -16,6 +16,12 @@ describe("parseView / parseAnchor", () => {
     expect(parseAnchor("lixo", "2026-01-01")).toBe("2026-01-01");
     expect(parseAnchor(null, "2026-01-01")).toBe("2026-01-01");
   });
+  it("ano fora de hoje mais ou menos 100 anos cai em hoje", () => {
+    expect(parseAnchor("9999-12-31", "2026-10-22")).toBe("2026-10-22");
+    expect(parseAnchor("0001-01-01", "2026-10-22")).toBe("2026-10-22");
+    expect(parseAnchor("2126-10-22", "2026-10-22")).toBe("2126-10-22");
+    expect(parseAnchor("2127-01-01", "2026-10-22")).toBe("2026-10-22");
+  });
 });
 
 describe("parseActivityListQuery", () => {

@@ -6,7 +6,7 @@ import { dayKey, weekGrid } from "@/lib/activities/time";
 import { groupByDay } from "@/lib/activities/view";
 import { cn } from "cn";
 import { AgendaItem } from "./activity-popover";
-import { AgendaNav } from "./agenda-nav";
+import { AgendaNav, TruncatedNotice } from "./agenda-nav";
 import { CompleteHost } from "./complete-host";
 import type { PageCtx } from "./page-context";
 
@@ -15,7 +15,7 @@ const rangeFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", day: "numer
 const utc = (key: string) => new Date(`${key}T00:00:00Z`);
 
 /** Semana de segunda a domingo; cada dia lista as atividades por horário. */
-export function AgendaWeek({ rows, anchor, ctx }: { rows: ActivityRow[]; anchor: string; ctx: PageCtx }) {
+export function AgendaWeek({ rows, anchor, ctx, truncated = false }: { rows: ActivityRow[]; anchor: string; ctx: PageCtx; truncated?: boolean }) {
   const [completing, setCompleting] = useState<ActivityRow | null>(null);
   const days = weekGrid(anchor);
   const byDay = groupByDay(rows);
@@ -24,6 +24,7 @@ export function AgendaWeek({ rows, anchor, ctx }: { rows: ActivityRow[]; anchor:
   return (
     <div className="flex flex-col gap-3">
       <AgendaNav view="semana" anchor={anchor} label={label} />
+      {truncated ? <TruncatedNotice /> : null}
       <div className="grid grid-cols-1 gap-2 md:grid-cols-7" data-testid="agenda-week">
         {days.map((d) => {
           const items = byDay.get(d) ?? [];
@@ -33,7 +34,7 @@ export function AgendaWeek({ rows, anchor, ctx }: { rows: ActivityRow[]; anchor:
               data-testid="agenda-day"
               data-day={d}
               aria-label={dayFmt.format(utc(d))}
-              className={cn("flex min-h-24 flex-col gap-1 rounded-md border p-2", d === today && "border-primary")}
+              className={cn("flex min-h-24 flex-col gap-1 rounded-md border p-2", d === today && "border-primary", d === anchor && "ring-2 ring-primary/40")}
             >
               <h3 className={cn("text-xs font-medium capitalize", d === today ? "text-primary" : "text-muted-foreground")}>
                 {dayFmt.format(utc(d))}

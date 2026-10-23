@@ -8,7 +8,7 @@ import { dayKey, monthGrid } from "@/lib/activities/time";
 import { groupByDay } from "@/lib/activities/view";
 import { cn } from "cn";
 import { AgendaItem } from "./activity-popover";
-import { AgendaNav } from "./agenda-nav";
+import { AgendaNav, TruncatedNotice } from "./agenda-nav";
 import { CompleteHost } from "./complete-host";
 import type { PageCtx } from "./page-context";
 
@@ -18,7 +18,7 @@ const monthFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", month: "lon
 const utc = (key: string) => new Date(`${key}T00:00:00Z`);
 
 /** Mês em semanas de segunda a domingo; até 3 atividades por dia e "+N" que abre o dia na semana. */
-export function AgendaMonth({ rows, anchor, ctx }: { rows: ActivityRow[]; anchor: string; ctx: PageCtx }) {
+export function AgendaMonth({ rows, anchor, ctx, truncated = false }: { rows: ActivityRow[]; anchor: string; ctx: PageCtx; truncated?: boolean }) {
   const pathname = usePathname();
   const params = useSearchParams();
   const [completing, setCompleting] = useState<ActivityRow | null>(null);
@@ -37,6 +37,7 @@ export function AgendaMonth({ rows, anchor, ctx }: { rows: ActivityRow[]; anchor
   return (
     <div className="flex flex-col gap-3">
       <AgendaNav view="mes" anchor={anchor} label={monthFmt.format(utc(`${month}-01`))} />
+      {truncated ? <TruncatedNotice /> : null}
       <div className="overflow-x-auto">
         <div className="min-w-[44rem]" data-testid="agenda-month">
           <div className="grid grid-cols-7 gap-1 pb-1">
@@ -73,7 +74,12 @@ export function AgendaMonth({ rows, anchor, ctx }: { rows: ActivityRow[]; anchor
                         {Number(d.slice(8))}
                       </span>
                       {items.slice(0, PER_DAY).map((a) => (
-                        <AgendaItem key={a.id} activity={a} ctx={ctx} onComplete={setCompleting} />
+                        <div key={a.id} className="flex flex-col gap-0.5">
+                          <AgendaItem activity={a} ctx={ctx} onComplete={setCompleting} />
+                          {ctx.allCompanies ? (
+                            <span className="truncate px-1.5 text-[11px] text-muted-foreground">{a.companyName}</span>
+                          ) : null}
+                        </div>
                       ))}
                       {extra > 0 ? (
                         <Link

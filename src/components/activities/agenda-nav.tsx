@@ -34,3 +34,11 @@ export function AgendaNav({ view, anchor, label }: { view: "semana" | "mes"; anc
     </div>
   );
 }
+
+export function TruncatedNotice() {
+  return (
+    <p role="status" data-testid="agenda-truncated" className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+      A agenda mostra só as primeiras atividades do período. Use os filtros para ver as demais.
+    </p>
+  );
+}

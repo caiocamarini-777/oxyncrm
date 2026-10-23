@@ -272,7 +272,13 @@ export async function shareDashboard(dashboardId: string, userIds: string[]): Pr
       unique.map((user_id) => ({ dashboard_id: dashboardId, user_id })),
       { onConflict: "dashboard_id,user_id", ignoreDuplicates: true },
     );
-  if (error) return { ok: false, error: translateDbError(error) };
+  if (error) {
+    // A política de inserção recusa quem não divide empresa com o dono (ou está inativo): 42501.
+    if (error.code === "42501") {
+      return { ok: false, error: "Só é possível compartilhar com pessoas ativas que fazem parte de uma das suas empresas." };
+    }
+    return { ok: false, error: translateDbError(error) };
+  }
   touched();
   return { ok: true, data: undefined };
 }

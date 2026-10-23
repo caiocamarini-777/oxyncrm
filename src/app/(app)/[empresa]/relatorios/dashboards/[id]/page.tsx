@@ -4,13 +4,14 @@ import { connection } from "next/server";
 import { AddWidgetDialog } from "@/components/dashboards/add-widget-dialog";
 import { DashboardFilters } from "@/components/dashboards/dashboard-filters";
 import { DashboardView } from "@/components/dashboards/dashboard-view";
+import { ShareDialog, type ShareLinkItem } from "@/components/dashboards/share-dialog";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { dayKey } from "@/lib/activities/time";
 import { resolveDashboardFilters } from "@/lib/dashboards/filters";
 import { getReportLookups } from "@/lib/reports/lookups";
 import { getReportPermissions, reportCompanySlugs } from "@/lib/reports/permissions";
-import { getDashboard, listReports, runWidgetResult } from "@/lib/reports/queries";
+import { getDashboard, listReports, listShareCandidates, runWidgetResult } from "@/lib/reports/queries";
 
 export const instant = false;
 
@@ -58,6 +59,19 @@ export default async function DashboardPage({
     ? [[], null]
     : await Promise.all([listReports(empresa), getReportLookups(empresa)]);
 
+  // Compartilhar: só o dono, e só com share_dashboards. As pessoas vêm das empresas dele (o banco confere de novo).
+  const canShare = dashboard.isOwner && perms.shareDashboards;
+  const candidates = canShare ? await listShareCandidates() : [];
+  const nowMs = new Date().getTime();
+  const linkItems: ShareLinkItem[] = canShare
+    ? dashboard.links.map((l) => ({
+        id: l.id,
+        createdAt: l.createdAt,
+        expiresAt: l.expiresAt,
+        status: l.revokedAt ? "revogado" : l.expiresAt && new Date(l.expiresAt).getTime() <= nowMs ? "expirado" : "ativo",
+      }))
+    : [];
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -67,6 +81,10 @@ export default async function DashboardPage({
           </Link>
           <h1 className="font-heading text-2xl font-semibold">{dashboard.name}</h1>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+        {canShare ? (
+          <ShareDialog dashboardId={dashboard.id} users={candidates} sharedWith={dashboard.sharedWith} links={linkItems} />
+        ) : null}
         {canAdd && lookups ? (
           <AddWidgetDialog
             dashboardId={dashboard.id}
@@ -75,6 +93,7 @@ export default async function DashboardPage({
             defaultPipeline={lookups.defaultPipeline}
           />
         ) : null}
+        </div>
       </header>
 
       <DashboardFilters

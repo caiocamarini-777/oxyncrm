@@ -1,6 +1,7 @@
 import "server-only";
 import { connection } from "next/server";
 import { requireUser } from "@/lib/auth/session";
+import { getAccessibleCompanies } from "@/lib/companies/scope";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { createServerClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
@@ -212,6 +213,28 @@ export async function listShareLinks(dashboardId: string): Promise<ShareLinkRow[
     .order("created_at", { ascending: false });
   if (error) fail("links de compartilhamento", error);
   return ((data ?? []) as RawLink[]).map(toLinkRow);
+}
+
+export type ShareCandidate = { id: string; name: string; email: string };
+
+/** Pessoas ativas das empresas do dono, sem o próprio dono: os destinos possíveis de um compartilhamento. */
+export async function listShareCandidates(): Promise<ShareCandidate[]> {
+  const profile = await requireUser();
+  const companies = await getAccessibleCompanies();
+  if (companies.length === 0) return [];
+  const supabase = await createServerClient();
+  const { data: members, error } = await supabase
+    .from("memberships")
+    .select("user_id")
+    .in("company_id", companies.map((c) => c.id));
+  if (error) fail("pessoas para compartilhar", error);
+  const ids = [...new Set((members ?? []).map((m) => m.user_id as string))].filter((u) => u !== profile.id);
+  if (ids.length === 0) return [];
+  const { data, error: pe } = await supabase.from("profiles").select("id, full_name, email").in("id", ids).eq("active", true);
+  if (pe) fail("pessoas para compartilhar", pe);
+  return (data ?? [])
+    .map((p) => ({ id: p.id as string, name: (p.full_name as string) || (p.email as string), email: p.email as string }))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
 }
 
 // Metas -----------------------------------------------------------------------------------------------------

@@ -126,7 +126,7 @@ update activities set legacy = true where id = pg_temp.u(321);
 select generate_activity_reminders();
 select is((select count(*) from notifications where activity_id = pg_temp.u(320)), 1::bigint, 'lembrete normal gerado');
 select is((select count(*) from notifications where activity_id in (pg_temp.u(321), pg_temp.u(322))), 0::bigint, 'legado e dono sem vínculo não geram lembrete');
-select ok((select bool_and(proconfig is null) from pg_proc where proname in ('next_activity_for', 'deals_with_overdue_activity') and pronamespace = 'public'::regnamespace),
+select ok((select bool_and(proconfig is null) from pg_proc where proname in ('next_activity_for') and pronamespace = 'public'::regnamespace),
   'consultas sem set search_path (inlináveis)');
 
 select pg_temp.as_user(pg_temp.u(11));

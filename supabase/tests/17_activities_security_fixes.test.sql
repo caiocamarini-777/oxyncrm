@@ -87,12 +87,12 @@ select is((select count(*) from activities where id = '00000000-0000-4000-8000-0
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c3');
 select throws_ok($$ insert into activities (company_id, owner_id, type_id, channel_id, subject, due_at, lead_id, booked_by_activity_id)
   select '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c3', type_id, channel_id, 'b', now(), '00000000-0000-4000-8000-0000000000a6', '00000000-0000-4000-8000-000000000b02' from activities where id = '00000000-0000-4000-8000-000000000b04' $$,
-  'P0001', 'OXYN_LINK_FORBIDDEN', 'bruno não aponta booked_by para atividade que não lê');
-select lives_ok($$ insert into activities (company_id, owner_id, type_id, channel_id, subject, due_at, lead_id, booked_by_activity_id)
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'bruno não forja booked_by (nem para atividade ilegível)');
+select throws_ok($$ insert into activities (company_id, owner_id, type_id, channel_id, subject, due_at, lead_id, booked_by_activity_id)
   select '00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c3', type_id, channel_id, 'b', now(), '00000000-0000-4000-8000-0000000000a6', '00000000-0000-4000-8000-000000000b04' from activities where id = '00000000-0000-4000-8000-000000000b04' $$,
-  'bruno aponta booked_by para atividade que lê');
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'bruno não forja booked_by nem para atividade que lê');
 select throws_ok($$ update activities set booked_by_activity_id = '00000000-0000-4000-8000-000000000b02' where id = '00000000-0000-4000-8000-000000000b04' $$,
-  'P0001', 'OXYN_LINK_FORBIDDEN', 'bruno não troca booked_by para atividade ilegível');
+  'P0001', 'OXYN_FORBIDDEN_FIELD', 'bruno não troca booked_by');
 -- notificações
 select is((select count(*) from notifications where id = 900011), 1::bigint, 'usuário ativo vê a própria notificação');
 select throws_ok($$ update notifications set title = 'x' where id = 900011 $$, 'P0001', 'OXYN_FORBIDDEN_FIELD', 'só read_at muda');

@@ -1,5 +1,5 @@
 begin;
-select plan(55);
+select plan(53);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -185,8 +185,6 @@ select ok((select overdue from next_activity_for('deals', array[pg_temp.u(204)])
 select ok((select not overdue from next_activity_for('deals', array[pg_temp.u(205)])), 'futura não é overdue');
 select is((select count(*) from next_activity_for('deals', array[pg_temp.u(204), pg_temp.u(205), pg_temp.u(206)])), 2::bigint, 'registro sem atividade não volta');
 select is((select activity_id from next_activity_for('leads', array[pg_temp.u(103)])), pg_temp.u(333), 'funciona para leads');
-select ok(pg_temp.u(204) in (select deals_with_overdue_activity(pg_temp.u(1))), 'negócio com atrasada');
-select ok(pg_temp.u(205) not in (select deals_with_overdue_activity(pg_temp.u(1))), 'negócio sem atrasada fica de fora');
 
 select * from finish();
 rollback;

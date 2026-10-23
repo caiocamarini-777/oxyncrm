@@ -99,6 +99,23 @@ export async function listActivities(
   return { rows, total: count ?? 0, page: query.page, pageSize: PAGE_SIZE };
 }
 
+/** Quantas atividades abertas estão atrasadas, com os mesmos filtros da lista (contador da aba). */
+export async function countOverdue(
+  scope: CompanyScope,
+  query: Omit<ActivityListQuery, "tab">,
+  now: Date = new Date(),
+): Promise<number> {
+  const owners = await teamOwners(query.team);
+  if (owners === null) return 0;
+  const supabase = await createServerClient();
+  let q = supabase.from("activities").select("id", { count: "exact", head: true }).is("deleted_at", null);
+  if (scope.kind === "company") q = q.eq("company_id", scope.company.id);
+  q = applyFilters(q, query, owners).eq("done", false).lt("due_at", now.toISOString());
+  const { count, error } = await q;
+  if (error) fail("contagem de atrasadas", error);
+  return count ?? 0;
+}
+
 const AGENDA_LIMIT = 2000;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 

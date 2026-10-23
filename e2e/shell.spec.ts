@@ -102,8 +102,9 @@ test("trocar empresa mantém a seção", async ({ page }) => {
 test("itens de fases futuras ficam desabilitados", async ({ page }) => {
   await login(page, users.one, password);
   await expect(page).toHaveURL(/inicio/);
-  await expect(page.getByRole("link", { name: "Atividades" })).toHaveCount(0);
-  await page.getByLabel("Atividades").hover();
+  await expect(page.getByRole("link", { name: "Atividades" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "E-mail" })).toHaveCount(0);
+  await page.getByRole("navigation", { name: "Principal" }).getByLabel("E-mail").hover();
   await expect(page.getByRole("tooltip", { name: "Disponível em breve" })).toBeVisible();
 });
 

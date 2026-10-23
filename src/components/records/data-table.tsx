@@ -31,10 +31,12 @@ export type RecordColumn<T> = {
   companyOnly?: boolean;
 };
 
-export const storageKey = (entity: RecordEntity) => `oxyn:columns:${entity}`;
+export type TableEntity = RecordEntity | "activities";
+
+export const storageKey = (entity: TableEntity) => `oxyn:columns:${entity}`;
 
 /** Ids ocultos salvos; qualquer falha de leitura cai no padrão. */
-export function readHidden(entity: RecordEntity, fallback: string[]): string[] {
+export function readHidden(entity: TableEntity, fallback: string[]): string[] {
   try {
     const raw = window.localStorage.getItem(storageKey(entity));
     if (!raw) return fallback;
@@ -60,7 +62,7 @@ export function DataTable<T extends { id: string }>({
   rows: T[];
   total: number;
   query: ListQuery;
-  entity: RecordEntity;
+  entity: TableEntity;
   /** true na visão "Todas": mostra a coluna de empresa. */
   companyColumn?: boolean;
   /** Destino do detalhe de cada linha (use recordHref com o slug da empresa do registro). */

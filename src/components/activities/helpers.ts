@@ -2,6 +2,7 @@ import type { ActivityRow } from "@/lib/activities/queries";
 import type { ActivityInput, NextActivityInput } from "@/lib/activities/schema";
 import { toLocalInput } from "@/lib/activities/time";
 import type { RecordLinks } from "@/lib/activities/record-context";
+import { recordHref } from "@/lib/records/types";
 import type { FormValues } from "./activity-form";
 
 const HOUR = 3_600_000;
@@ -61,4 +62,20 @@ export function toNextInput(v: FormValues): NextActivityInput {
 /** Vínculos crus da atividade de origem (a próxima sugerida herda todos). */
 export function linksOf(a: ActivityRow): RecordLinks {
   return { leadId: a.leadId, dealId: a.dealId, personId: a.personId, organizationId: a.organizationId };
+}
+
+export type PrimaryLink = { kind: "deals" | "leads" | "persons" | "organizations"; label: string; href: string };
+
+/** Vínculo principal visível: negócio, lead, pessoa, organização (nessa ordem). */
+export function primaryLink(a: ActivityRow): PrimaryLink | null {
+  const pick: [PrimaryLink["kind"], { id: string; name: string } | null][] = [
+    ["deals", a.deal],
+    ["leads", a.lead],
+    ["persons", a.person],
+    ["organizations", a.organization],
+  ];
+  for (const [kind, l] of pick) {
+    if (l) return { kind, label: l.name, href: recordHref(kind, a.companySlug, l.id) };
+  }
+  return null;
 }

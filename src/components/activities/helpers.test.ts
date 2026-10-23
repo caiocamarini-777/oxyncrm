@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FormValues } from "./activity-form";
-import { defaultDue, toCreateInput, toEditInput } from "./helpers";
+import { defaultDue, primaryLink, toCreateInput, toEditInput } from "./helpers";
 
 const base: FormValues = {
   typeId: "t",
@@ -40,4 +40,21 @@ describe("defaultDue", () => {
     expect(defaultDue("2031-03-10T17:20:00.000Z")).toBe("2031-03-10T15:00");
     expect(defaultDue("2031-03-10T17:20:00.000Z", 1)).toBe("2031-03-11T15:00");
   });
+});
+
+describe("primaryLink", () => {
+  const row = (over: Record<string, unknown>) =>
+    ({ companySlug: "volt", deal: null, lead: null, person: null, organization: null, ...over }) as never;
+  it("prefere negócio, depois lead, pessoa e organização", () => {
+    expect(primaryLink(row({ deal: { id: "d", name: "N" }, lead: { id: "l", name: "L" } }))).toEqual({
+      kind: "deals",
+      label: "N",
+      href: "/volt/negocios/d",
+    });
+    expect(primaryLink(row({ person: { id: "p", name: "P" }, organization: { id: "o", name: "O" } }))?.href).toBe(
+      "/volt/contatos/pessoas/p",
+    );
+    expect(primaryLink(row({ organization: { id: "o", name: "O" } }))?.href).toBe("/volt/contatos/organizacoes/o");
+  });
+  it("sem vínculo visível retorna null", () => expect(primaryLink(row({}))).toBeNull());
 });

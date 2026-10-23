@@ -97,6 +97,47 @@ test.afterAll(async () => {
   if (userId) await deleteTestUser(userId).catch(() => {});
 });
 
+test("lista mostra a próxima atividade e o último canal", async ({ browser }) => {
+  const a = admin();
+  await lead("act", { title: `Lead Atividade ${stamp}` });
+  await lead("noact", { title: `Lead Sem Atividade ${stamp}` });
+  const [type, ch] = await Promise.all([
+    a.from("activity_types").select("id").eq("company_id", companyA).limit(1).single(),
+    a.from("activity_channels").select("id, name").eq("company_id", companyA).eq("is_legacy", false).order("position").limit(2),
+  ]);
+  if (type.error) throw type.error;
+  if (ch.error) throw ch.error;
+  expect(ch.data.length).toBeGreaterThanOrEqual(2);
+  const base = { company_id: companyA, owner_id: userId, type_id: type.data.id, lead_id: rec.act };
+  const open = await a
+    .from("activities")
+    .insert({ ...base, channel_id: ch.data[0].id, subject: `Retornar ${stamp}`, due_at: new Date(Date.now() - 3_600_000).toISOString() });
+  if (open.error) throw open.error;
+  // Concluída: o canal dela é o "último canal" (a conclusão direta vale só para o seed do teste).
+  const outcome = await a.from("activity_outcomes").select("id").eq("company_id", companyA).limit(1).single();
+  if (outcome.error) throw outcome.error;
+  const done = await a.from("activities").insert({
+    ...base,
+    channel_id: ch.data[1].id,
+    subject: `Feita ${stamp}`,
+    due_at: new Date(Date.now() - 86_400_000).toISOString(),
+    done: true,
+    completed_at: new Date(Date.now() - 80_000_000).toISOString(),
+    outcome_id: outcome.data.id,
+  });
+  if (done.error) throw done.error;
+
+  const page = await newPage(browser);
+  await page.goto(`/${slugA}/leads?q=${encodeURIComponent(`${stamp}`)}`);
+  const row = page.getByRole("row").filter({ hasText: `Lead Atividade ${stamp}` });
+  await expect(row.getByTestId("next-activity")).toHaveText("Atrasada");
+  await expect(row.getByTestId("next-activity")).toHaveAttribute("title", `Retornar ${stamp}`);
+  await expect(row).toContainText(ch.data[1].name);
+  const none = page.getByRole("row").filter({ hasText: `Lead Sem Atividade ${stamp}` });
+  await expect(none.getByTestId("next-activity")).toHaveText("Sem atividade");
+  await page.context().close();
+});
+
 test("cria lead criando pessoa e organização juntas", async ({ browser }) => {
   const page = await newPage(browser);
   const title = `Lead Novo ${stamp}`;

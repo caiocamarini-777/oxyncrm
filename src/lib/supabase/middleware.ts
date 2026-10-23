@@ -2,6 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC = ["/entrar", "/recuperar-senha", "/auth/confirm", "/auth/callback"];
+// Rotas que dispensam sessão porque se autenticam sozinhas. Só caminhos exatos, e cada handler
+// DEVE chamar isCronAuthorized (src/lib/notifications/cron-auth.ts) antes de qualquer trabalho.
+const SELF_AUTH = ["/api/cron/lembretes"];
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -30,7 +33,7 @@ export async function updateSession(request: NextRequest) {
   const user = claimsData?.claims.sub ? claimsData.claims : null;
 
   const path = request.nextUrl.pathname;
-  const isPublic = PUBLIC.some((p) => path === p || path.startsWith(p + "/"));
+  const isPublic = [...PUBLIC, ...SELF_AUTH].some((p) => path === p || path.startsWith(p + "/"));
   if (!user && error?.code === "user_banned" && !isPublic) {
     // Acesso desativado (ban no Auth): derruba a sessão e explica o motivo.
     await supabase.auth.signOut({ scope: "local" });

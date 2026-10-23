@@ -10,7 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export const CURRENT_PHASE = 3;
+export const CURRENT_PHASE = 4;
 
 export type NavItem = {
   key: string;

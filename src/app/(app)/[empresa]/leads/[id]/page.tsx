@@ -7,6 +7,9 @@ import { RecordHeader } from "@/components/records/record-header";
 import { RecordLayout } from "@/components/records/record-layout";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
+import { ActivityTab } from "@/components/activities/activity-tab";
+import { PlannedList } from "@/components/activities/planned-list";
+import { loadRecordActivity } from "@/lib/activities/record-context";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { listPipelinesWithStages } from "@/lib/pipelines/queries";
@@ -28,8 +31,9 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
   if (!lead) notFound();
   if (scope.kind === "company" && scope.company.id !== lead.companyId) notFound();
 
-  const [timeline, owners, labels, defs, permissions, dealPermissions, sources, reasons, pipelineRows, dealDefs] = await Promise.all([
+  const [timeline, activity, owners, labels, defs, permissions, dealPermissions, sources, reasons, pipelineRows, dealDefs] = await Promise.all([
     getTimeline("leads", lead.id),
+    loadRecordActivity({ entity: "leads", recordId: lead.id, companyId: lead.companyId, partyName: (lead.person?.state === "ok" ? lead.person.name : null) ?? (lead.organization?.state === "ok" ? lead.organization.name : "") }),
     listAssignableOwners(lead.companyId),
     listCompanyLabels(lead.companyId),
     listActiveCustomFieldDefs(lead.companyId, "leads"),
@@ -91,7 +95,8 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
       main={
         <RecordTabs
           notes={<NoteComposer entity="leads" recordId={lead.id} />}
-          timeline={<Timeline items={timeline} />}
+          activity={<ActivityTab data={activity} />}
+          timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }
     />

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { RecordColumn } from "@/components/records/data-table";
+import { NextActivityBadge } from "@/components/activities/next-activity-badge";
 import { LabelChip } from "@/components/records/label-chip";
 import { leadAgeLabel } from "@/lib/leads/schema";
 import type { LeadRow } from "@/lib/leads/queries";
@@ -53,6 +54,12 @@ export const leadColumns: RecordColumn<LeadRow>[] = [
     sortKey: "estimated_value",
     cell: (r) => (r.estimatedValue === null ? dash : formatMoney(r.estimatedValue)),
   },
+  {
+    id: "nextActivity",
+    header: "Próxima atividade",
+    cell: (r) => (r.status === "open" ? <NextActivityBadge next={r.nextActivity} /> : dash),
+  },
+  { id: "lastChannel", header: "Último canal", cell: (r) => r.lastChannel ?? dash },
   { id: "owner", header: "Responsável", cell: (r) => r.ownerName || dash },
   {
     id: "labels",

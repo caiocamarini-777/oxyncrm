@@ -1,15 +1,16 @@
 # Oxyn CRM
 
-CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios).
+CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades.
 
 - Especificação: [docs/superpowers/specs/2026-10-21-oxyn-crm-design.md](docs/superpowers/specs/2026-10-21-oxyn-crm-design.md)
 - Plano da fase 1: [docs/superpowers/plans/2026-10-21-fase-1-fundacao.md](docs/superpowers/plans/2026-10-21-fase-1-fundacao.md)
+- Pendências da fase 4: [docs/superpowers/followups/2026-10-24-fase-4-pendencias.md](docs/superpowers/followups/2026-10-24-fase-4-pendencias.md)
 - Pendências da fase 3: [docs/superpowers/followups/2026-10-23-fase-3-pendencias.md](docs/superpowers/followups/2026-10-23-fase-3-pendencias.md)
 - Pendências da fase 2: [docs/superpowers/followups/2026-10-22-fase-2-pendencias.md](docs/superpowers/followups/2026-10-22-fase-2-pendencias.md)
 
 ## Módulos
 
-Depois da fase 3, cada empresa tem:
+Depois da fase 4, cada empresa tem:
 
 - **Leads**: caixa de leads com abas por status (abertos, desqualificados, arquivados), idade do lead, valor estimado, origem, vínculo com pessoa e organização, desqualificação com motivo e reabertura. Um lead aberto converte em negócio (a pessoa, a organização, o valor e as etiquetas vão junto) e passa a aparecer na aba Convertidos.
 - **Negócios**: funis com etapas configuráveis, em quatro partes.
@@ -18,11 +19,31 @@ Depois da fase 3, cada empresa tem:
   - **Detalhe do negócio**: barra de etapas, ganho, perdido (com motivo) e reabertura, produtos (setup e recorrente), condições de contrato e cronograma de receita mês a mês. Com produtos, os totais vêm dos itens.
   - **Conversão de lead**: do lead para um negócio no funil e na etapa escolhidos.
   - **Configurações** (por empresa): funis e etapas (ordem por arrastar, probabilidade, prazo para esfriar, campos obrigatórios, campo exibido no card), catálogo de produtos e motivos de perda. Campos personalizados também valem para Negócios.
+- **Atividades**: tarefas, ligações, reuniões, e-mails e mensagens, cada uma com tipo, canal obrigatório (por exemplo LinkedIn) e vínculo com lead, negócio, pessoa ou organização.
+  - **Conclusão com resultado**: nenhuma atividade conclui sem resultado, em qualquer caminho. Um resultado que agenda reunião cria a reunião já com o canal de origem; reuniões fecham como Realizada, No-show, Remarcada ou Cancelada.
+  - **Próxima atividade**: regra Desligada, Sugerir ou Obrigar por funil e para os leads da empresa; com Obrigar o diálogo só conclui junto da nova atividade.
+  - **Lista e agenda** (`/atividades`): abas Atrasadas, Hoje e Próximas, e visões de lista, semana e mês. Atrasadas aparecem em vermelho na agenda, no card do kanban e nos painéis. Horários em America/Sao_Paulo.
+  - **Kanban e leads**: o card mostra a próxima atividade, há filtro de negócios com atividade atrasada, e a caixa de leads mostra Próxima atividade e Último canal.
+  - **Configurações** (admin geral, por empresa): tipos, canais e resultados de atividade e a regra de próxima atividade dos leads.
 - **Contatos**: **Pessoas** (vários e-mails e telefones, link de WhatsApp, organização vinculada) e **Organizações** (CNPJ, domínio, segmento). Listas paginadas no servidor, com filtros, ordenação, colunas configuráveis e exportação em CSV conforme a permissão. A visão "Todas as empresas" reúne os registros que o usuário pode ver. Avisos de duplicidade não expõem dados de quem não tem acesso.
 - **Registros**: etiquetas, campos personalizados, anotações e linha do tempo unificada em cada ficha, além de troca de responsável com permissão.
 - **Busca global** (Ctrl+K): encontra leads, negócios, pessoas e organizações e leva à lixeira.
 - **Lixeira**: registros excluídos ficam 30 dias e podem ser restaurados; a exclusão definitiva é automática após o prazo ou manual, só pelo admin geral.
 - **Configurações** (admin geral, por empresa): campos personalizados, etiquetas, origens de lead, motivos de desqualificação, funis, produtos e motivos de perda.
+
+## Lembretes de atividades
+
+Atividades com lembrete geram uma notificação (função `generate_activity_reminders`, agendada no pg_cron a cada minuto). O sino na barra superior mostra as não lidas em tempo real (Supabase Realtime) e abre um aviso com o botão "Abrir".
+
+O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota a cada 5 minutos; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Atenção: o cron de 5 em 5 minutos exige Vercel Pro; no Hobby, agendar a rota via pg_cron + pg_net com o header Bearer.
+
+Configuração:
+
+- `CRON_SECRET`: segredo da rota de e-mail. Na Vercel, nas variáveis do projeto; localmente, em `.env.local` (sem ele a rota responde 401 e o teste E2E do e-mail é ignorado).
+- `NEXT_PUBLIC_SITE_URL`: base dos links do e-mail (`http://localhost:3000` em dev, o domínio em produção).
+- `REMINDERS_URL`: opcional, endereço que o `pnpm reminders:send` chama (padrão: `http://localhost:3000`).
+- pg_cron: a notificação em si nasce da rotina `generate_activity_reminders`, agendada pelas migrações a cada minuto; confira que ela está ativa no banco de produção.
+ Localmente, defina `CRON_SECRET` em `.env.local` e rode `pnpm reminders:send` (use `REMINDERS_URL` para apontar a outro endereço; o e-mail vai para `.e2e-outbox/emails.jsonl` com `EMAIL_TRANSPORT=file`).
 
 ## Desenvolvimento
 

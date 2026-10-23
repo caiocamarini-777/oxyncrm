@@ -17,6 +17,7 @@ export function parseDealListQuery(params: URLSearchParams, allowedSorts: string
     stage: uuids(params, "stage"),
     team: uuids(params, "team"),
     rotting: params.get("rotting") === "1",
+    overdue: params.get("overdue") === "1",
   };
 }
 

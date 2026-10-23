@@ -16,6 +16,7 @@ const ITEMS = [
   { href: "/configuracoes/funis", label: "Funis" },
   { href: "/configuracoes/produtos", label: "Produtos" },
   { href: "/configuracoes/motivos-perda", label: "Motivos de perda" },
+  { href: "/configuracoes/atividades", label: "Atividades" },
 ];
 
 export function SettingsNav() {

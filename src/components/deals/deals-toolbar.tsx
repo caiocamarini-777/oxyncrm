@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Columns3, LineChart, List, Search, Snowflake } from "lucide-react";
+import { Clock, Columns3, LineChart, List, Search, Snowflake } from "lucide-react";
 import { CompanyPicker } from "@/components/records/company-picker";
 import { LABEL_FILTER, MultiSelect, type MultiOption } from "@/components/records/multi-select";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import type { CompanySummary } from "@/lib/companies/pure";
 import type { DealView } from "@/lib/deals/query";
 
 
-const FILTER_KEYS = ["q", "owner", "team", "label", "rotting", "stage", "page"];
+const FILTER_KEYS = ["q", "owner", "team", "label", "rotting", "overdue", "stage", "page"];
 
 export type DealFilterOptions = { owners: MultiOption[]; teams: MultiOption[]; labels: MultiOption[]; stages?: MultiOption[] };
 
@@ -162,6 +162,14 @@ export function DealsToolbar({
           onPressedChange={(p) => set("rotting", p ? "1" : null)}
         >
           <Snowflake /> Esfriando
+        </Toggle>
+        <Toggle
+          variant="outline"
+          size="sm"
+          pressed={params.get("overdue") === "1"}
+          onPressedChange={(p) => set("overdue", p ? "1" : null)}
+        >
+          <Clock /> Atividades atrasadas
         </Toggle>
         {hasFilters ? (
           <Button variant="ghost" size="sm" onClick={clear}>

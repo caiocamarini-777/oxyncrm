@@ -2,6 +2,7 @@
 
 import { CommandPalette } from "./command-palette";
 import { CompanySwitcher } from "./company-switcher";
+import { NotificationsBell } from "./notifications-bell";
 import { QuickCreate } from "./quick-create";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu, type MenuProfile } from "./user-menu";
@@ -30,6 +31,7 @@ export function Topbar({
         />
       </div>
       <QuickCreate isSuperAdmin={profile.isSuperAdmin} />
+      <NotificationsBell />
       <ThemeToggle />
       <UserMenu profile={profile} />
     </header>

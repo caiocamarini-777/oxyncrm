@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { RecordColumn } from "@/components/records/data-table";
+import { NextActivityBadge } from "@/components/activities/next-activity-badge";
 import { LabelChip } from "@/components/records/label-chip";
 import { StatusTabs } from "@/components/records/status-tabs";
 import type { DealRow } from "@/lib/deals/queries";
@@ -69,6 +70,11 @@ export const dealColumns: RecordColumn<DealRow>[] = [
     header: "Fechamento",
     sortKey: "expected_close_date",
     cell: (r) => (r.expectedCloseDate ? formatDate(r.expectedCloseDate) : dash),
+  },
+  {
+    id: "nextActivity",
+    header: "Próxima atividade",
+    cell: (r) => (r.status === "open" ? <NextActivityBadge next={r.nextActivity} /> : dash),
   },
   { id: "owner", header: "Responsável", cell: (r) => r.ownerName || dash },
   {

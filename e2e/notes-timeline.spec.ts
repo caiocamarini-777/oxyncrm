@@ -84,8 +84,8 @@ test("anotação aparece na linha do tempo e só o autor edita", async ({ browse
   await gestor.goto(orgPath);
   const save = gestor.getByRole("button", { name: "Salvar anotação" });
   await expect(save).toBeDisabled();
-  await gestor.getByLabel("Anotação", { exact: true }).fill("Primeira linha\nvisite https://exemplo.com/a depois");
-  await gestor.getByLabel("Anotação", { exact: true }).press("Control+Enter");
+  await gestor.getByRole("textbox", { name: "Anotação", exact: true }).fill("Primeira linha\nvisite https://exemplo.com/a depois");
+  await gestor.getByRole("textbox", { name: "Anotação", exact: true }).press("Control+Enter");
   const note = gestor.getByTestId("timeline-note").first();
   await expect(note).toContainText("Primeira linha");
   await expect(note).toContainText("Gestor E2E");
@@ -93,7 +93,7 @@ test("anotação aparece na linha do tempo e só o autor edita", async ({ browse
   await expect(link).toHaveAttribute("target", "_blank");
   await expect(link).toHaveAttribute("rel", "noopener noreferrer");
   await expect(note.getByRole("button", { name: "Editar" })).toBeVisible();
-  await expect(gestor.getByText("As atividades chegam na próxima fase.")).toBeVisible();
+  await expect(gestor.getByText("Nenhuma atividade planejada.")).toBeVisible();
 
   // edição pelo autor
   await note.getByRole("button", { name: "Editar" }).click();
@@ -137,7 +137,7 @@ test("texto com <script> é exibido como texto", async ({ browser }) => {
     void d.dismiss();
   });
   const payload = `<script>window.__xss=1</script><img src=x onerror="window.__xss=1"> javascript:alert(1)`;
-  await gestor.getByLabel("Anotação", { exact: true }).fill(payload);
+  await gestor.getByRole("textbox", { name: "Anotação", exact: true }).fill(payload);
   await gestor.getByRole("button", { name: "Salvar anotação" }).click();
   const note = gestor.getByTestId("timeline-note").first();
   await expect(note).toContainText(payload);

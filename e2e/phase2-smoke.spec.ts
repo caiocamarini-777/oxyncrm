@@ -161,7 +161,7 @@ test("SDR cria organização, pessoa e lead com etiqueta, campo e anotação, e 
   await page.getByRole("menuitem", { name: labelName }).click();
   await expect(page.getByText(labelName)).toBeVisible();
 
-  await page.getByLabel("Anotação", { exact: true }).fill("Primeiro contato feito");
+  await page.getByRole("textbox", { name: "Anotação", exact: true }).fill("Primeiro contato feito");
   await page.getByRole("button", { name: "Salvar anotação" }).click();
   await expect(page.getByTestId("timeline-note").first()).toContainText("Primeiro contato feito");
 

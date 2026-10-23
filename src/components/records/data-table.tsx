@@ -31,10 +31,12 @@ export type RecordColumn<T> = {
   companyOnly?: boolean;
 };
 
-export const storageKey = (entity: RecordEntity) => `oxyn:columns:${entity}`;
+export type TableEntity = RecordEntity | "activities";
+
+export const storageKey = (entity: TableEntity) => `oxyn:columns:${entity}`;
 
 /** Ids ocultos salvos; qualquer falha de leitura cai no padrão. */
-export function readHidden(entity: RecordEntity, fallback: string[]): string[] {
+export function readHidden(entity: TableEntity, fallback: string[]): string[] {
   try {
     const raw = window.localStorage.getItem(storageKey(entity));
     if (!raw) return fallback;
@@ -60,11 +62,11 @@ export function DataTable<T extends { id: string }>({
   rows: T[];
   total: number;
   query: ListQuery;
-  entity: RecordEntity;
+  entity: TableEntity;
   /** true na visão "Todas": mostra a coluna de empresa. */
   companyColumn?: boolean;
   /** Destino do detalhe de cada linha (use recordHref com o slug da empresa do registro). */
-  rowHref: (row: T) => string;
+  rowHref: (row: T) => string | null;
   createHref?: string;
   createLabel?: string;
 }) {
@@ -202,16 +204,18 @@ export function DataTable<T extends { id: string }>({
             {table.getRowModel().rows.map((row) => (
               <TableRow
                 key={row.id}
-                className="cursor-pointer"
+                className={rowHref(row.original) ? "cursor-pointer" : undefined}
                 tabIndex={0}
                 onClick={(e) => {
                   if ((e.target as HTMLElement).closest("a, button, input, [role=checkbox]")) return;
-                  router.push(rowHref(row.original));
+                  const href = rowHref(row.original);
+                  if (href) router.push(href);
                 }}
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   if ((e.target as HTMLElement).closest("a, button, input, [role=checkbox]")) return;
-                  router.push(rowHref(row.original));
+                  const href = rowHref(row.original);
+                  if (href) router.push(href);
                 }}
               >
                 {row.getAllCells().map((cell) => (

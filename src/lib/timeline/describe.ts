@@ -1,3 +1,5 @@
+import { formatDateTime } from "@/lib/activities/time";
+
 export const STATUS_LABELS: Record<string, string> = {
   open: "Aberto",
   converted: "Convertido",
@@ -51,6 +53,13 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
   },
 };
 
+const MEETING_OUTCOME_TEXT: Record<string, string> = {
+  held: "Realizada",
+  no_show: "No-show",
+  rescheduled: "Remarcada",
+  canceled: "Cancelada",
+};
+
 export type EventLike = { kind: string; entity: string; data: Record<string, unknown> | null };
 
 /** "a", "a e b", "a, b e c". */
@@ -96,6 +105,19 @@ export function describeEvent(event: EventLike, names: Record<string, string>): 
       const fields = Array.isArray(d.fields) ? d.fields.map(String) : [];
       const labels = fields.map((f) => map[f]).filter((l): l is string => Boolean(l));
       return labels.length > 0 ? `Editou ${joinList(labels)}` : "Editou o registro";
+    }
+    case "activity_scheduled": {
+      const subject = names[str(d.activity_id)] ?? "atividade";
+      const type = str(d.type) || "atividade";
+      const due = str(d.due_at);
+      return `Agendou ${type}: ${subject}${due ? ` para ${formatDateTime(due)}` : ""}`;
+    }
+    case "activity_completed": {
+      const id = str(d.activity_id);
+      const subject = names[id] ?? "atividade";
+      const type = str(d.type) || names[`type:${id}`] || "atividade";
+      const result = MEETING_OUTCOME_TEXT[str(d.meeting_outcome)] ?? str(d.outcome);
+      return `Concluiu ${type}: ${subject}${result ? ` (${result})` : ""}`;
     }
     default:
       return "";

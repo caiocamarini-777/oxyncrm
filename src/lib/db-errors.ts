@@ -25,6 +25,17 @@ export function translateDbError(err: { code?: string; message?: string }): stri
   if (msg.includes("OXYN_INVALID_TRANSITION")) return "Essa mudança de status não é permitida.";
   if (msg.includes("OXYN_STAGE_ARCHIVED")) return "Esta etapa está arquivada.";
   if (msg.includes("OXYN_PIPELINE_ARCHIVED")) return "Este funil está arquivado.";
+  if (msg.includes("OXYN_LAST_MEETING_TYPE")) return "Mantenha ao menos um tipo de reunião ativo.";
+  if (msg.includes("OXYN_LAST_BOOKING_OUTCOME")) return "Mantenha ao menos um resultado que agenda reunião.";
+  if (msg.includes("OXYN_LEGACY_CHANNEL")) return "O canal de importação não pode ser ativado.";
+  if (msg.includes("OXYN_ALREADY_DONE")) return "Esta atividade já foi concluída.";
+  if (msg.includes("OXYN_NOT_DONE")) return "Esta atividade não está concluída.";
+  if (msg.includes("OXYN_OUTCOME_REQUIRED")) return "Informe o resultado da atividade.";
+  if (msg.includes("OXYN_MEETING_REQUIRED")) return "Agende a reunião para concluir com este resultado.";
+  if (msg.includes("OXYN_NEXT_ACTIVITY_REQUIRED")) return "Agende a próxima atividade para concluir.";
+  if (msg.includes("OXYN_LINK_FORBIDDEN")) return "Você não tem acesso a um dos registros vinculados.";
+  if (msg.includes("OXYN_INVALID_INPUT")) return "Dados inválidos. Confira os campos e tente novamente.";
+  if (msg.includes("OXYN_FORBIDDEN")) return "Você não tem permissão para esta ação.";
   switch (err.code) {
     case "23505":
       return "Já existe um registro com esse valor.";

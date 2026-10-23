@@ -4,14 +4,20 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireSuperAdmin } from "@/lib/auth/session";
 import { createServerClient } from "@/lib/supabase/server";
+import { NAME_MAX } from "@/lib/activities/settings-schema";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 
-export type ListKind = "source" | "reason" | "lost_reason";
+export type ListKind = "source" | "reason" | "lost_reason" | "activity_type" | "activity_channel" | "activity_outcome";
 
-const TABLES = { source: "lead_sources", reason: "disqualification_reasons", lost_reason: "lost_reasons" } as const;
-const PATHS = { source: "/configuracoes/origens", reason: "/configuracoes/motivos", lost_reason: "/configuracoes/motivos-perda" } as const;
+const TABLES = { source: "lead_sources", reason: "disqualification_reasons", lost_reason: "lost_reasons",
+  activity_type: "activity_types", activity_channel: "activity_channels", activity_outcome: "activity_outcomes" } as const;
+const PATHS = { source: "/configuracoes/origens", reason: "/configuracoes/motivos", lost_reason: "/configuracoes/motivos-perda",
+  activity_type: "/configuracoes/atividades", activity_channel: "/configuracoes/atividades", activity_outcome: "/configuracoes/atividades" } as const;
 
-const nameSchema = z.string().trim().min(1, "Informe o nome.").max(80, "Use no máximo 80 caracteres.");
+function nameSchemaFor(kind: ListKind) {
+  const max = NAME_MAX[kind];
+  return z.string().trim().min(1, "Informe o nome.").max(max, `Use no máximo ${max} caracteres.`);
+}
 
 function nameFailure(message: string): ActionResult<never> {
   return { ok: false, error: message, fieldErrors: { name: message } };
@@ -23,7 +29,7 @@ function dbFailure(err: { code?: string; message?: string }): ActionResult<never
 }
 
 function validKind(kind: string): kind is ListKind {
-  return kind === "source" || kind === "reason" || kind === "lost_reason";
+  return Object.hasOwn(TABLES, kind);
 }
 
 export async function createListItem(
@@ -32,10 +38,10 @@ export async function createListItem(
   name: string,
 ): Promise<ActionResult<{ id: string }>> {
   await requireSuperAdmin();
-  if (!validKind(kind) || !z.string().uuid().safeParse(companyId).success) {
+  if (!validKind(kind) || kind.startsWith("activity_") || !z.string().uuid().safeParse(companyId).success) {
     return { ok: false, error: "Dados inválidos." };
   }
-  const parsed = nameSchema.safeParse(name);
+  const parsed = nameSchemaFor(kind).safeParse(name);
   if (!parsed.success) return nameFailure(parsed.error.issues[0].message);
   const supabase = await createServerClient();
   const table = TABLES[kind];
@@ -59,7 +65,7 @@ export async function createListItem(
 export async function renameListItem(kind: ListKind, id: string, name: string): Promise<ActionResult> {
   await requireSuperAdmin();
   if (!validKind(kind)) return { ok: false, error: "Dados inválidos." };
-  const parsed = nameSchema.safeParse(name);
+  const parsed = nameSchemaFor(kind).safeParse(name);
   if (!parsed.success) return nameFailure(parsed.error.issues[0].message);
   const supabase = await createServerClient();
   const { error } = await supabase.from(TABLES[kind]).update({ name: parsed.data }).eq("id", id);

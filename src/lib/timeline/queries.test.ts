@@ -65,3 +65,22 @@ describe("linkify", () => {
     expect(linkify("sem link")).toEqual([{ type: "text", value: "sem link" }]);
   });
 });
+
+describe("describeEvent com nomes de atividade (como monta timeline/queries)", () => {
+  const nm = { a1: "Falar com a Ana", "type:a1": "Ligação" };
+  it("agendada usa o tipo do evento e o assunto carregado", () => {
+    expect(
+      describeEvent({ kind: "activity_scheduled", entity: "leads", data: { activity_id: "a1", type: "Ligação", due_at: "2026-10-24T02:30:00Z" } }, nm),
+    ).toBe("Agendou Ligação: Falar com a Ana para 23/10, 23:30");
+  });
+  it("concluída usa o tipo carregado e o resultado", () => {
+    expect(
+      describeEvent({ kind: "activity_completed", entity: "deals", data: { activity_id: "a1", outcome: "Sem resposta" } }, nm),
+    ).toBe("Concluiu Ligação: Falar com a Ana (Sem resposta)");
+  });
+  it("sem acesso à atividade cai no texto genérico", () => {
+    expect(describeEvent({ kind: "activity_completed", entity: "deals", data: { activity_id: "zz" } }, {})).toBe(
+      "Concluiu atividade: atividade",
+    );
+  });
+});

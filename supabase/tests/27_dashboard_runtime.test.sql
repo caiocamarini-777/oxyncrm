@@ -1,5 +1,5 @@
 begin;
-select plan(60);
+select plan(71);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -97,6 +97,10 @@ insert into dashboard_widgets (id, dashboard_id, report_id, spec, title, positio
   (pg_temp.u(703), pg_temp.u(602), null, '{"kind":"custom","base":"deals","metric":{"op":"count"},"chart":"number"}', 'Outro', 0),
   (pg_temp.u(704), pg_temp.u(601), pg_temp.u(801), null, 'Metas', 2),
   (pg_temp.u(705), pg_temp.u(601), null, '{"kind":"forecast","chart":"table"}', 'Forecast', 3),
+  (pg_temp.u(708), pg_temp.u(602), null, jsonb_build_object('kind', 'custom', 'base', 'deals', 'metric', '{"op":"count"}'::jsonb,
+     'chart', 'number', 'filters', (select jsonb_agg('{"field":"status","op":"in","value":["open","won","lost"]}'::jsonb) from generate_series(1, 20))), '20 filtros', 1),
+  (pg_temp.u(709), pg_temp.u(602), null, jsonb_build_object('kind', 'custom', 'base', 'deals', 'metric', '{"op":"count"}'::jsonb,
+     'chart', 'number', 'filters', (select jsonb_agg('{"field":"status","op":"in","value":["open","won","lost"]}'::jsonb) from generate_series(1, 21))), '21 filtros', 2),
   (pg_temp.u(706), pg_temp.u(603), null, '{"kind":"custom","base":"deals","metric":{"op":"count"},"chart":"number"}', 'Meu', 0);
 insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(601), pg_temp.u(13));
 
@@ -151,6 +155,10 @@ select is(run_widget(pg_temp.u(701), '{"team":["00000000-0000-4000-8000-00000000
 select is(run_widget(pg_temp.u(701), '{"owner":[]}')->'total', '0'::jsonb, 'owner vazio não amplia');
 select is(run_widget(pg_temp.u(705), '{"period":{"from":"2026-03-01","to":"2026-03-31"}}')->'rows', '[]'::jsonb,
   'preset sem período recebe o período do filtro');
+select is(run_widget(pg_temp.u(708), '{"owner":["00000000-0000-4000-8000-000000000013"],"team":["00000000-0000-4000-8000-000000000031"]}')->'total',
+  '1'::jsonb, 'spec com 20 filtros aceita owner e team do dashboard (fora do limite)');
+select throws_ok($$ select run_widget(pg_temp.u(709), '{}') $$, 'P0001', 'OXYN_INVALID_REPORT',
+  'spec do usuário com 21 filtros continua inválida');
 select throws_ok($$ select run_widget(pg_temp.u(701), '{"x":1}') $$, 'P0001', 'OXYN_INVALID_REPORT', 'chave de filtro desconhecida');
 select throws_ok($$ select run_widget(pg_temp.u(701), '{"owner":["nao-uuid"]}') $$, 'P0001', 'OXYN_INVALID_REPORT', 'owner inválido');
 select throws_ok($$ select run_widget(pg_temp.u(701), '{"period":{"from":"2026-05-01","to":"2026-04-01"}}') $$, 'P0001',
@@ -230,6 +238,30 @@ select throws_ok($$ select run_widget_public((select token from tok where n = 3)
   'OXYN_FORBIDDEN', 'dono desativado: run_widget_public negado');
 select pg_temp.as_pg();
 update profiles set active = true where id = pg_temp.u(11);
+update roles set permissions = jsonb_set(permissions, '{settings,share_dashboards}', 'false') where id = pg_temp.u(21);
+select pg_temp.as_service();
+select is((select dashboard_public(token) from tok where n = 3), null, 'dono sem share_dashboards: link dá null');
+select throws_ok($$ select run_widget_public((select token from tok where n = 3), pg_temp.u(701), '{}') $$, 'P0001',
+  'OXYN_FORBIDDEN', 'dono sem share_dashboards: run_widget_public negado');
+select pg_temp.as_pg();
+update roles set permissions = jsonb_set(permissions, '{settings,share_dashboards}', 'true') where id = pg_temp.u(21);
+select pg_temp.as_service();
+select is((select dashboard_public(token) from tok where n = 3)->>'name', 'tst-painel', 'link volta a valer com share_dashboards');
+
+-- 4b. links só por RPC ---------------------------------------------------------------------------------
+select pg_temp.as_pg();
+select is((select revoked_at is not null from dashboard_share_links where id = current_setting('tst.link1')::uuid), true,
+  'revoke_share_link grava revoked_at');
+select pg_temp.as_user(pg_temp.u(11));
+select throws_ok($$ insert into dashboard_share_links (dashboard_id, token_hash, created_by)
+  values (pg_temp.u(601), 'hash-escolhido', pg_temp.u(11)) $$, '42501', null, 'dono não insere link direto');
+select throws_ok($$ update dashboard_share_links set revoked_at = null where id = current_setting('tst.link1')::uuid $$,
+  '42501', null, 'dono não desfaz a revogação direto');
+select throws_ok($$ update dashboard_share_links set expires_at = null where dashboard_id = pg_temp.u(601) $$,
+  '42501', null, 'dono não muda a validade direto');
+select is((select count(*)::int from dashboard_share_links where dashboard_id = pg_temp.u(601)), 3,
+  'dono ainda lista os próprios links (sem token_hash)');
+select pg_temp.as_pg();
 
 -- 5. progresso de metas ------------------------------------------------------------------------------
 select is(goal_progress(pg_temp.u(901), pg_temp.u(11)),
@@ -249,6 +281,21 @@ select is(goal_progress(pg_temp.u(905), pg_temp.u(11)) - 'target' - 'percent',
     'period_end', to_char(date_trunc('quarter', pg_temp.today()::timestamp) + interval '3 months' - interval '1 day', 'YYYY-MM-DD')),
   'meta trimestral de reuniões realizadas, no trimestre corrente');
 select is(goal_progress(pg_temp.u(906), pg_temp.u(11))->'actual', '2'::jsonb, 'activities_done conta concluídas sem legadas');
+
+-- fronteira do mês em São Paulo: 23:30 do último dia do mês anterior não conta; 00:30 do dia 1 conta
+alter table deals disable trigger deals_status_fields;
+alter table deals disable trigger deals_stage_entry;
+insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, status, created_at, won_at, setup_total, setup_first_due) values
+  (pg_temp.u(206), pg_temp.u(2), pg_temp.u(15), 'tst-d6', pg_temp.u(402), pg_temp.u(502), 'won', '2026-01-10 10:00-03',
+   (pg_temp.month_start()::timestamp - interval '30 minutes') at time zone 'America/Sao_Paulo', 1000, '2026-01-01'),
+  (pg_temp.u(207), pg_temp.u(2), pg_temp.u(15), 'tst-d7', pg_temp.u(402), pg_temp.u(502), 'won', '2026-01-10 10:00-03',
+   (pg_temp.month_start()::timestamp + interval '30 minutes') at time zone 'America/Sao_Paulo', 300, '2026-01-01');
+alter table deals enable trigger deals_status_fields;
+alter table deals enable trigger deals_stage_entry;
+insert into goals (id, company_id, target_kind, metric, period, starts_on, target_value, created_by) values
+  (pg_temp.u(908), pg_temp.u(2), 'company', 'won_value', 'month', '2026-01-01', 600, pg_temp.u(15));
+select is(goal_progress(pg_temp.u(908), pg_temp.u(15)) - 'period_start' - 'period_end',
+  '{"target":600,"actual":300,"percent":50}'::jsonb, 'fronteira do mês em São Paulo (23:30 do dia anterior fora, 00:30 do dia 1 dentro)');
 
 select pg_temp.as_user(pg_temp.u(13));
 select is((select jsonb_agg(g->'actual' order by g->>'id') from jsonb_array_elements(goals_progress_self(array[pg_temp.u(1)])) g

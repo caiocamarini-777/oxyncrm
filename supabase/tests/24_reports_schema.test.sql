@@ -106,7 +106,7 @@ select is((select count(*) from dashboards where id = pg_temp.u(601)), 0::bigint
 
 -- 4. links ---------------------------------------------------------------------------------------
 select pg_temp.as_user(pg_temp.u(11));
-select lives_ok($$ insert into dashboard_share_links (dashboard_id, token_hash, created_by) values (pg_temp.u(601), 'tst-hash', pg_temp.u(11)) $$, 'dono cria link');
+select lives_ok($$ select create_share_link(pg_temp.u(601), null) $$, 'dono cria link (pela RPC; insert direto é bloqueado na 000007)');
 select is((select count(*) from dashboard_share_links where dashboard_id = pg_temp.u(601)), 1::bigint, 'dono lê o link sem o hash');
 select throws_ok($$ select token_hash from dashboard_share_links $$, '42501', null, 'token_hash não é legível');
 select pg_temp.as_user(pg_temp.u(13));

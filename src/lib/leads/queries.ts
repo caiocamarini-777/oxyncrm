@@ -15,6 +15,8 @@ import {
 import { PAGE_SIZE, type ListQuery, type Paged } from "@/lib/records/types";
 import { LEAD_STATUSES, type LeadStatus } from "./schema";
 import { isUuid } from "@/lib/uuid";
+import type { NextActivity } from "@/lib/activities/next";
+import { loadLastChannels, loadNextActivities } from "@/lib/activities/next-queries";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("leads", what, error);
 
@@ -42,6 +44,10 @@ export type LeadRow = {
   ownerId: string;
   ownerName: string;
   labels: LabelRef[];
+  /** Próxima atividade aberta (null: nenhuma, ou lista carregada sem ela). */
+  nextActivity: NextActivity | null;
+  /** Canal da última atividade concluída. */
+  lastChannel: string | null;
   createdAt: string;
 };
 
@@ -99,6 +105,7 @@ export async function fetchLeadRows(
   query: ListQuery,
   range: { from: number; to: number },
   companyIds?: string[],
+  withActivity = false,
 ): Promise<{ rows: LeadRow[]; total: number }> {
   const supabase = await createServerClient();
   let q = listSource(supabase, "leads", query.label)
@@ -121,6 +128,10 @@ export async function fetchLeadRows(
 
   const raw = (data ?? []) as unknown as RawRow[];
   const labelsBy = await loadRecordLabels("leads", raw.map((r) => r.id));
+  const ids = raw.map((r) => r.id);
+  const [next, channels] = withActivity
+    ? await Promise.all([loadNextActivities("leads", ids), loadLastChannels(ids)])
+    : [new Map<string, NextActivity>(), new Map<string, string>()];
   const rows: LeadRow[] = raw.map((r) => {
     const person = one(r.person);
     const org = one(r.organization);
@@ -139,6 +150,8 @@ export async function fetchLeadRows(
       ownerId: r.owner_id,
       ownerName: one(r.owner)?.full_name ?? "",
       labels: labelsBy.get(r.id) ?? [],
+      nextActivity: next.get(r.id) ?? null,
+      lastChannel: channels.get(r.id) ?? null,
       createdAt: r.created_at,
     };
   });
@@ -147,7 +160,7 @@ export async function fetchLeadRows(
 
 export async function listLeads(scope: CompanyScope, query: ListQuery): Promise<Paged<LeadRow>> {
   const from = (query.page - 1) * PAGE_SIZE;
-  const { rows, total } = await fetchLeadRows(scope, query, { from, to: from + PAGE_SIZE - 1 });
+  const { rows, total } = await fetchLeadRows(scope, query, { from, to: from + PAGE_SIZE - 1 }, undefined, true);
   return { rows, total, page: query.page, pageSize: PAGE_SIZE };
 }
 

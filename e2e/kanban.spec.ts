@@ -12,6 +12,7 @@ const userEmail = `tst-e2e-kb-padrao-${stamp}@oxyn.test`;
 const PIPE = `Funil Kanban ${stamp}`;
 const PIPE_MRR = `Funil MRR ${stamp}`;
 const PIPE_ARCHIVED = `Funil Arquivado ${stamp}`;
+const PIPE_ACT = `Funil Atividades ${stamp}`;
 
 let companyId = "";
 let adminId = "";
@@ -101,6 +102,32 @@ test.beforeAll(async () => {
     contract_months: 6,
   });
 
+  // Funil só das atividades: não mexe nas contagens dos outros testes.
+  pipe.act = await insert("pipelines", { company_id: companyId, name: PIPE_ACT, position: 50 });
+  await mkStage("act", pipe.act, "Contato", 0);
+  await mkDeal("ovd", { pipeline_id: pipe.act, stage_id: stage.act, title: `Atrasado ${stamp}` });
+  await mkDeal("fut", { pipeline_id: pipe.act, stage_id: stage.act, title: `Futuro ${stamp}` });
+  await mkDeal("nact", { pipeline_id: pipe.act, stage_id: stage.act, title: `Sem atividade ${stamp}` });
+  const [types, channels] = await Promise.all([
+    a.from("activity_types").select("id").eq("company_id", companyId).limit(1).single(),
+    a.from("activity_channels").select("id").eq("company_id", companyId).eq("is_legacy", false).limit(1).single(),
+  ]);
+  if (types.error) throw types.error;
+  if (channels.error) throw channels.error;
+  const act = async (dealId: string, subject: string, dueAt: string) => {
+    await insert("activities", {
+      company_id: companyId,
+      owner_id: adminId,
+      type_id: types.data.id,
+      channel_id: channels.data.id,
+      deal_id: dealId,
+      subject,
+      due_at: dueAt,
+    });
+  };
+  await act(deal.ovd, `Ligar agora ${stamp}`, new Date(Date.now() - 3_600_000).toISOString());
+  await act(deal.fut, `Enviar proposta ${stamp}`, new Date(Date.now() + 5 * 86_400_000).toISOString());
+
   const old = new Date(Date.now() - 10 * 86_400_000).toISOString();
   await withoutTriggers((sql) => sql`update public.deals set stage_entered_at = ${old} where id = ${deal.rot}`);
 
@@ -139,6 +166,33 @@ async function openBoard(page: Page, pipelineId = pipe.main) {
   await expect(page.getByRole("heading", { level: 1, name: "Negócios" })).toBeVisible();
   await expect(page.getByTestId("kanban-column").first()).toBeVisible();
 }
+
+test("card mostra a próxima atividade e o filtro isola as atrasadas", async ({ browser }) => {
+  const page = await newPage(browser);
+  await openBoard(page, pipe.act);
+  const badge = (title: string) => card(page, title).getByTestId("next-activity");
+  await expect(badge(`Atrasado ${stamp}`)).toHaveText("Atrasada");
+  await expect(badge(`Atrasado ${stamp}`)).toHaveAttribute("data-status", "overdue");
+  await expect(badge(`Atrasado ${stamp}`)).toHaveAttribute("title", `Ligar agora ${stamp}`);
+  await expect(badge(`Futuro ${stamp}`)).toHaveAttribute("data-status", "upcoming");
+  await expect(badge(`Futuro ${stamp}`)).toHaveAttribute("title", `Enviar proposta ${stamp}`);
+  await expect(badge(`Futuro ${stamp}`)).toHaveText(/^\d{2}\/\d{2}$/);
+  await expect(badge(`Sem atividade ${stamp}`)).toHaveText("Sem atividade");
+  await expect(badge(`Sem atividade ${stamp}`)).toHaveAttribute("data-status", "none");
+
+  await page.getByRole("button", { name: "Atividades atrasadas" }).click();
+  await expect(page).toHaveURL(/overdue=1/);
+  await expect(card(page, `Atrasado ${stamp}`)).toBeVisible();
+  await expect(card(page, `Futuro ${stamp}`)).toHaveCount(0);
+  await expect(card(page, `Sem atividade ${stamp}`)).toHaveCount(0);
+
+  // Na lista a coluna mostra o mesmo selo e o filtro continua valendo.
+  await page.goto(`/${slug}/negocios?visao=lista&funil=${pipe.act}&overdue=1`);
+  const row = page.getByRole("row").filter({ hasText: `Atrasado ${stamp}` });
+  await expect(row.getByTestId("next-activity")).toHaveText("Atrasada");
+  await expect(page.getByRole("row").filter({ hasText: `Futuro ${stamp}` })).toHaveCount(0);
+  await page.context().close();
+});
 
 test("funil arquivado não aparece no seletor", async ({ browser }) => {
   const page = await newPage(browser);

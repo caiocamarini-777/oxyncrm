@@ -126,3 +126,6 @@ export function formatDue(utc: string | Date, now: Date): string {
   if (diff < 0) return `Atrasada há ${-diff} ${diff === -1 ? "dia" : "dias"}`;
   return `${weekdayFmt.format(due)}, ${dateFmt.format(due)}, ${formatTime(due)}`;
 }
+
+/** "23/10" em São Paulo. */
+export const formatShortDate = (utc: string | Date) => dateFmt.format(toDate(utc));

@@ -6,6 +6,8 @@ import { LabelChip } from "@/components/records/label-chip";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cardValue } from "@/lib/deals/kanban";
 import type { BoardDeal } from "@/lib/deals/queries";
+import { NextActivityBadge } from "@/components/activities/next-activity-badge";
+import type { NextActivity } from "@/lib/activities/next";
 import { formatMoney } from "@/lib/records/format";
 
 export type CardValueField = "total" | "mrr" | "setup";
@@ -14,7 +16,7 @@ export type CardValueField = "total" | "mrr" | "setup";
 export type CardDeal = Pick<
   BoardDeal,
   "id" | "title" | "organization" | "rotting" | "labels" | "ownerName" | "ownerAvatarUrl" | "contractValue" | "estimatedValue" | "mrr" | "setupTotal"
->;
+> & { nextActivity?: NextActivity | null };
 
 function initials(name: string) {
   return (
@@ -86,6 +88,7 @@ export function DealCardBody({
               deal.organization ? `Organização: ${deal.organization.name}.` : null,
               `Valor: ${formatMoney(value)}.`,
               deal.rotting ? "Esfriando." : null,
+              deal.nextActivity === undefined ? null : deal.nextActivity ? `Próxima atividade: ${deal.nextActivity.label}.` : "Sem atividade.",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -102,6 +105,7 @@ export function DealCardBody({
           {extra > 0 ? <span className="text-xs text-muted-foreground">+{extra}</span> : null}
         </div>
       ) : null}
+      {deal.nextActivity !== undefined ? <NextActivityBadge next={deal.nextActivity} /> : null}
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-semibold tabular-nums">{formatMoney(value)}</span>
         <Avatar size="sm" title={deal.ownerName} aria-label={`Responsável: ${deal.ownerName}`}>

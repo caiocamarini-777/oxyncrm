@@ -17,6 +17,8 @@ import { forecastBuckets, type ForecastBucket } from "./forecast";
 import { cardValue, isRotting } from "./kanban";
 import { dealStatusOf, type DealStatus } from "./schema";
 import { isUuid } from "@/lib/uuid";
+import type { NextActivity } from "@/lib/activities/next";
+import { loadNextActivities } from "@/lib/activities/next-queries";
 
 const fail = (what: string, error: { message: string; code?: string }) => failFor("deals", what, error);
 
@@ -30,10 +32,12 @@ export type DealListQuery = ListQuery & {
   stage?: string[];
   team?: string[];
   rotting?: boolean;
+  /** Só negócios com atividade aberta atrasada. */
+  overdue?: boolean;
 };
 
 /** Filtros do quadro e da previsão. */
-export type DealBoardFilters = { q?: string; owner?: string[]; team?: string[]; label?: string[]; rotting?: boolean };
+export type DealBoardFilters = { q?: string; owner?: string[]; team?: string[]; label?: string[]; rotting?: boolean; overdue?: boolean };
 
 export type DealRow = {
   id: string;
@@ -61,6 +65,8 @@ export type DealRow = {
   ownerId: string;
   ownerName: string;
   labels: LabelRef[];
+  /** Próxima atividade aberta (null: nenhuma, ou lista carregada sem ela). */
+  nextActivity: NextActivity | null;
   createdAt: string;
 };
 
@@ -92,7 +98,7 @@ type RawRow = {
 
 const num = (v: number | string) => Number(v);
 
-function toRow(r: RawRow, labels: Map<string, LabelRef[]>, now: Date): DealRow {
+function toRow(r: RawRow, labels: Map<string, LabelRef[]>, now: Date, next: Map<string, NextActivity> = new Map()): DealRow {
   const person = one(r.person);
   const org = one(r.organization);
   const stage = one(r.stage);
@@ -120,15 +126,16 @@ function toRow(r: RawRow, labels: Map<string, LabelRef[]>, now: Date): DealRow {
     ownerId: r.owner_id,
     ownerName: one(r.owner)?.full_name ?? "",
     labels: labels.get(r.id) ?? [],
+    nextActivity: next.get(r.id) ?? null,
     createdAt: r.created_at,
   };
 }
 
 /** Filtros comuns que dependem de leituras prévias (equipes, etapas que esfriam). */
-type Resolved = { teamOwners: string[] | null; rottingOr: string | null };
+type Resolved = { teamOwners: string[] | null; rottingOr: string | null; overdueIds: string[] | null };
 
 async function resolveCommon(
-  f: { team?: string[]; rotting?: boolean },
+  f: { team?: string[]; rotting?: boolean; overdue?: boolean },
   stageScope: { companyId?: string; pipelineId?: string | null; stageIds?: string[] },
 ): Promise<Resolved | null> {
   const supabase = await createServerClient();
@@ -154,7 +161,26 @@ async function resolveCommon(
     if (parts.length === 0) return null;
     rottingOr = parts.join(",");
   }
-  return { teamOwners, rottingOr };
+  let overdueIds: string[] | null = null;
+  if (f.overdue) {
+    let companyIds: string[];
+    if (stageScope.companyId) companyIds = [stageScope.companyId];
+    else {
+      const { data, error } = await supabase.from("companies").select("id");
+      if (error) fail("empresas", error);
+      companyIds = (data ?? []).map((c) => c.id as string);
+    }
+    const found = await Promise.all(
+      companyIds.map(async (id) => {
+        const { data, error } = await supabase.rpc("deals_with_overdue_activity", { p_company: id });
+        if (error) fail("atividades atrasadas", error);
+        return (data ?? []) as unknown as string[];
+      }),
+    );
+    overdueIds = [...new Set(found.flat())];
+    if (overdueIds.length === 0) return null;
+  }
+  return { teamOwners, rottingOr, overdueIds };
 }
 
 type Filterable<T> = {
@@ -172,6 +198,7 @@ function applyCommon<T extends Filterable<T>>(
   if (f.owner && f.owner.length > 0) q = q.in("owner_id", f.owner);
   if (r.teamOwners) q = q.in("owner_id", r.teamOwners);
   if (r.rottingOr) q = q.eq("status", "open").or(r.rottingOr);
+  if (r.overdueIds) q = q.in("id", r.overdueIds);
   const term = safeTerm(f.q ?? "");
   if (term) q = q.ilike("title", `%${term}%`);
   return q;
@@ -182,6 +209,7 @@ export async function fetchDealRows(
   query: DealListQuery,
   range: { from: number; to: number },
   companyIds?: string[],
+  withActivity = false,
 ): Promise<{ rows: DealRow[]; total: number }> {
   const resolved = await resolveCommon(query, {
     companyId: scope.kind === "company" ? scope.company.id : undefined,
@@ -211,12 +239,13 @@ export async function fetchDealRows(
   const raw = (data ?? []) as unknown as RawRow[];
   const labelsBy = await loadRecordLabels("deals", raw.map((r) => r.id));
   const now = new Date();
-  return { rows: raw.map((r) => toRow(r, labelsBy, now)), total: count ?? 0 };
+  const next = withActivity ? await loadNextActivities("deals", raw.map((r) => r.id), now) : undefined;
+  return { rows: raw.map((r) => toRow(r, labelsBy, now, next)), total: count ?? 0 };
 }
 
 export async function listDeals(scope: CompanyScope, query: DealListQuery): Promise<Paged<DealRow>> {
   const from = (query.page - 1) * PAGE_SIZE;
-  const { rows, total } = await fetchDealRows(scope, query, { from, to: from + PAGE_SIZE - 1 });
+  const { rows, total } = await fetchDealRows(scope, query, { from, to: from + PAGE_SIZE - 1 }, undefined, true);
   return { rows, total, page: query.page, pageSize: PAGE_SIZE };
 }
 
@@ -311,6 +340,9 @@ export async function getBoard(
       return { ...base, count: total, truncated: total > deals.length, deals };
     }),
   );
+  // Uma consulta para o quadro todo (não uma por card).
+  const next = await loadNextActivities("deals", columns.flatMap((c) => c.deals.map((d) => d.id)), now);
+  for (const c of columns) for (const d of c.deals) d.nextActivity = next.get(d.id) ?? null;
   return { pipeline, stages: columns };
 }
 

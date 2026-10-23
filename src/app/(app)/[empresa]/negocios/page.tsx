@@ -63,7 +63,7 @@ export default async function DealsPage({
   const pipeline = view === "lista" ? requestedPipeline : (requestedPipeline ?? pipelines[0] ?? null);
   const defaultPipeline = requestedPipeline ?? pipelines[0] ?? null;
 
-  const filters = { q: query.q, owner: query.owner, team: query.team, label: query.label, rotting: query.rotting };
+  const filters = { q: query.q, owner: query.owner, team: query.team, label: query.label, rotting: query.rotting, overdue: query.overdue };
   const board = pipeline && view === "kanban" ? await getBoard(company.id, pipeline.id, filters) : null;
   const forecast = pipeline && view === "forecast" ? await getForecast(company.id, pipeline.id, filters) : null;
   const listQuery = { ...query, pipeline: pipeline?.id ?? null };

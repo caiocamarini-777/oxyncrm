@@ -1,9 +1,10 @@
 # Oxyn CRM
 
-CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades.
+CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades. A fase 6 entrega Relatórios, dashboards e metas.
 
 - Especificação: [docs/superpowers/specs/2026-10-21-oxyn-crm-design.md](docs/superpowers/specs/2026-10-21-oxyn-crm-design.md)
 - Plano da fase 1: [docs/superpowers/plans/2026-10-21-fase-1-fundacao.md](docs/superpowers/plans/2026-10-21-fase-1-fundacao.md)
+- Pendências da fase 6: [docs/superpowers/followups/2026-10-25-fase-6-pendencias.md](docs/superpowers/followups/2026-10-25-fase-6-pendencias.md)
 - Pendências da fase 4: [docs/superpowers/followups/2026-10-24-fase-4-pendencias.md](docs/superpowers/followups/2026-10-24-fase-4-pendencias.md)
 - Pendências da fase 3: [docs/superpowers/followups/2026-10-23-fase-3-pendencias.md](docs/superpowers/followups/2026-10-23-fase-3-pendencias.md)
 - Pendências da fase 2: [docs/superpowers/followups/2026-10-22-fase-2-pendencias.md](docs/superpowers/followups/2026-10-22-fase-2-pendencias.md)
@@ -30,6 +31,38 @@ Depois da fase 4, cada empresa tem:
 - **Busca global** (Ctrl+K): encontra leads, negócios, pessoas e organizações e leva à lixeira.
 - **Lixeira**: registros excluídos ficam 30 dias e podem ser restaurados; a exclusão definitiva é automática após o prazo ou manual, só pelo admin geral.
 - **Configurações** (admin geral, por empresa): campos personalizados, etiquetas, origens de lead, motivos de desqualificação, funis, produtos e motivos de perda.
+
+## Relatórios, dashboards e metas
+
+O menu Relatórios (`/<empresa>/relatorios`) reúne relatórios prontos, o construtor de relatórios personalizados, dashboards e metas. Toda consulta roda em funções do banco, que aplicam a visibilidade de quem consulta; nenhuma consulta é montada no front.
+
+- **Relatórios**: bases leads, negócios, atividades, receita e histórico de etapas (a base "e-mails" fica para depois da fase 5). Métricas: quantidade, soma, média, taxa de conversão e tempo médio. Gráficos: número, barras, linha, funil, pizza e tabela. Prontos: Funil de reuniões por canal, Sucesso por canal, Influência na conversão, Conversão por etapa, Forecast, Receita mês a mês, Visão do funil, Idade, Atividades por usuário, Motivos de perda e Progresso de metas.
+- **Dashboards** (`/<empresa>/relatorios/dashboards`): grade de widgets que se reordenam por arrastar e mudam de tamanho pela alça (ou pelas setas do teclado), com filtro global de período e, em "Todas as empresas", de empresa.
+- **Metas** (`/<empresa>/relatorios/metas`): metas por empresa, usuário ou equipe, com as métricas reuniões agendadas, reuniões realizadas, oportunidades criadas, valor ganho, MRR ganho e atividades concluídas, em períodos semanal, mensal ou trimestral. As metas são criadas e excluídas só pelo admin geral; qualquer membro da empresa com acesso a Relatórios vê o progresso, calculado só sobre o que ele enxerga.
+
+### Permissões
+
+São três chaves em `roles.permissions.settings`, por papel e por empresa. O admin geral tem todas.
+
+- `view_reports`: libera o menu Relatórios, os relatórios prontos, o construtor e as metas.
+- `create_dashboards`: libera criar dashboards e adicionar widgets.
+- `share_dashboards`: libera compartilhar com usuários e criar link público.
+
+### Quem vê o quê
+
+- **Dashboard próprio**: os números respeitam a visibilidade de quem abre (papel, equipe e empresas).
+- **Dashboard compartilhado com usuários**: o destinatário vê os números com o alcance do criador, não com o dele, em modo somente leitura. Só dá para compartilhar com quem divide empresa com o dono. O destinatário abre o dashboard mesmo sem `view_reports`. Os filtros do destinatário só restringem; nunca ampliam o alcance do criador.
+- **Link público** (`/d/<token>`): abre sem login, também com o alcance do criador, em somente leitura. O token é mostrado uma única vez ao criar o link e só o hash fica no banco. O link pode ter validade e ser revogado a qualquer momento; se o criador perder o acesso ou a permissão de compartilhar, o link deixa de abrir. A página tem `noindex` e `no-referrer`.
+
+`NEXT_PUBLIC_SITE_URL` é obrigatório para gerar os links (a ação de criar o link falha sem ela, para nunca apontar para localhost): `http://localhost:3000` em dev e o domínio em produção.
+
+### Semântica dos filtros
+
+- Filtro ausente significa sem filtro; uma lista vazia significa nada (nenhum registro). A interface omite a chave quando nada foi escolhido.
+- Os filtros do dashboard (período, empresa, responsável, equipe) só restringem o que o relatório já mostra. O período do relatório é o limite; o filtro global não o amplia.
+- Um widget de relatório salvo respeita a empresa em que o relatório foi salvo, mesmo em "Todas as empresas".
+- Tabelas cortam em 500 linhas e avisam quando cortaram.
+- No funil por canal, um lead com reuniões em canais diferentes conta em cada canal, então as linhas não somam.
 
 ## Lembretes de atividades
 

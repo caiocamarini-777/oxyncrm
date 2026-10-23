@@ -7,7 +7,10 @@ const password = "oxyn-test-123";
 const slug = `tst-e2e-db-${stamp}`;
 const adminEmail = `tst-e2e-db-admin-${stamp}@oxyn.test`;
 const plainEmail = `tst-e2e-db-plain-${stamp}@oxyn.test`;
+const slug2 = `tst-e2e-db2-${stamp}`;
+const recvEmail = `tst-e2e-db-recv-${stamp}@oxyn.test`;
 const roleName = `tst-e2e-db-sem-dashboards-${stamp}`;
+const recvRoleName = `tst-e2e-db-sem-relatorios-${stamp}`;
 const reportName = `Total de negócios ${stamp}`;
 const dashName = `Painel comercial ${stamp}`;
 
@@ -15,6 +18,9 @@ let companyId = "";
 let adminId = "";
 let plainId = "";
 let roleId = "";
+let recvId = "";
+let recvRoleId = "";
+let company2Id = "";
 let dashboardId = "";
 
 test.describe.configure({ mode: "serial" });
@@ -38,6 +44,33 @@ test.beforeAll(async () => {
   );
   roleId = rows[0]!.id;
   await insert("memberships", { user_id: plainId, company_id: companyId, role_id: roleId });
+
+  // Destinatário sem view_reports: só abre dashboards compartilhados.
+  recvId = await createTestUser({ email: recvEmail, password, fullName: "Rita Receptora" });
+  const recvRows = await runSql<{ id: string }>(
+    `insert into public.roles (name, description, permissions, is_system)
+       select '${recvRoleName}', 'Papel de teste', jsonb_set(jsonb_set(permissions, '{settings,view_reports}', 'false'), '{settings,create_dashboards}', 'false'), false
+       from public.roles where is_system returning id`,
+  );
+  recvRoleId = recvRows[0]!.id;
+  await insert("memberships", { user_id: recvId, company_id: companyId, role_id: recvRoleId });
+
+  // Segunda empresa com negócios: o escopo da primeira não pode contá-los.
+  company2Id = await insert("companies", { name: `Dashboards E2E B ${stamp}`, slug: slug2 });
+  const pipeline2 = await insert("pipelines", { company_id: company2Id, name: `Funil DB2 ${stamp}`, position: -1 });
+  const stage2 = await insert("stages", { company_id: company2Id, pipeline_id: pipeline2, name: "Etapa DB2", position: 0, probability: 50 });
+  for (const k of [1, 2]) {
+    await insert("deals", {
+      company_id: company2Id,
+      owner_id: adminId,
+      pipeline_id: pipeline2,
+      stage_id: stage2,
+      position: k * 1024,
+      title: `B${k} ${stamp}`,
+      setup_total: 100,
+      setup_first_due: "2026-12-01",
+    });
+  }
 
   const pipelineId = await insert("pipelines", { company_id: companyId, name: `Funil DB ${stamp}`, position: -1 });
   const stageId = await insert("stages", { company_id: companyId, pipeline_id: pipelineId, name: "Etapa DB", position: 0, probability: 50 });
@@ -69,6 +102,9 @@ test.afterAll(async () => {
   await admin().from("dashboards").delete().eq("owner_id", adminId);
   await admin().from("reports").delete().eq("owner_id", adminId);
   if (companyId) await admin().from("companies").delete().eq("id", companyId);
+  if (company2Id) await admin().from("companies").delete().eq("id", company2Id);
+  if (recvId) await deleteTestUser(recvId).catch(() => {});
+  if (recvRoleId) await runSql(`delete from public.roles where id = '${recvRoleId}' and not is_system`);
   if (adminId) await deleteTestUser(adminId).catch(() => {});
   if (plainId) await deleteTestUser(plainId).catch(() => {});
   if (roleId) await runSql(`delete from public.roles where id = '${roleId}' and not is_system`);
@@ -76,6 +112,18 @@ test.afterAll(async () => {
 
 const widget = (page: Page, title: string) => page.getByRole("article", { name: title });
 const titles = (page: Page) => page.getByTestId("widget").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+
+/** Nenhum widget em erro e todos com conteúdo além do cabeçalho. */
+async function expectHealthyWidgets(page: Page, count: number) {
+  const all = page.getByTestId("widget");
+  await expect(all).toHaveCount(count);
+  for (let i = 0; i < count; i++) {
+    const w = all.nth(i);
+    await expect(w.getByRole("alert")).toHaveCount(0);
+    await expect(w.getByRole("status")).toHaveCount(0); // carregamento terminou
+    await expect.poll(async () => (await w.locator("div.overflow-auto").first().innerText()).trim().length).toBeGreaterThan(0);
+  }
+}
 
 async function drag(page: Page, handle: Locator, target: Locator) {
   await handle.scrollIntoViewIfNeeded();
@@ -113,6 +161,7 @@ test("cria dashboard, adiciona widgets, reordena, redimensiona e persiste", asyn
   await page.getByRole("button", { name: "Adicionar", exact: true }).click();
   await expect(widget(page, reportName)).toBeVisible();
   expect(await titles(page)).toEqual(["Pipeline geral", reportName]);
+  await expectHealthyWidgets(page, 2);
 
   // Arrasta o segundo para a primeira posição.
   await drag(page, page.getByRole("button", { name: `Mover widget ${reportName}` }), widget(page, "Pipeline geral"));
@@ -152,6 +201,7 @@ test("cria dashboard, adiciona widgets, reordena, redimensiona e persiste", asyn
   expect(await titles(page)).toEqual([reportName, "Pipeline geral"]);
   await expect(widget(page, reportName)).toHaveAttribute("data-col-span", "3");
   await expect(widget(page, "Pipeline geral")).toHaveAttribute("data-row-span", "2");
+  await expectHealthyWidgets(page, 2);
 });
 
 test("o período global recalcula o widget e a URL inválida não quebra", async ({ page }) => {
@@ -160,7 +210,8 @@ test("o período global recalcula o widget e a URL inválida não quebra", async
   const url = `/${slug}/relatorios/dashboards/${dashboardId}`;
   await page.goto(url);
   const number = widget(page, reportName).getByRole("img");
-  await expect(number).toContainText("3");
+  await expect(number).toContainText("3"); // só a empresa do escopo: os 2 negócios da outra ficam de fora
+  await expectHealthyWidgets(page, 2);
 
   await page.getByLabel("Período").selectOption({ label: "Últimos 30 dias" });
   await expect(page).toHaveURL(/de=\d{4}-\d{2}-\d{2}&ate=\d{4}-\d{2}-\d{2}/);
@@ -180,6 +231,13 @@ test("o período global recalcula o widget e a URL inválida não quebra", async
   await filters.getByLabel("Empresa").selectOption({ label: `Dashboards E2E ${stamp}` });
   await expect(page).toHaveURL(new RegExp(`empresa=${slug}`));
   await expect(widget(page, reportName).getByRole("img")).toContainText("3");
+  await filters.getByLabel("Empresa").selectOption({ label: `Dashboards E2E B ${stamp}` });
+  await expect(page).toHaveURL(new RegExp(`empresa=${slug2}`));
+  await expect(widget(page, reportName).getByRole("img")).toContainText("2");
+
+  // Segunda empresa no escopo único: lista só os dela
+  await page.goto(`/${slug2}/relatorios/dashboards/${dashboardId}`);
+  await expect(widget(page, reportName).getByRole("img")).toContainText("2");
 });
 
 test("usuário sem create_dashboards não vê Novo dashboard", async ({ page }) => {
@@ -207,4 +265,31 @@ test("dashboard compartilhado aparece em Compartilhados comigo e abre somente le
   await expect(page.getByRole("button", { name: "Adicionar widget" })).toHaveCount(0);
   await expect(page.getByTestId("widget-resize")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Mover widget/ })).toHaveCount(0);
+});
+
+test("destinatário sem view_reports abre o dashboard compartilhado pelo link", async ({ page }) => {
+  const shared = await admin().from("dashboard_shares").insert({ dashboard_id: dashboardId, user_id: recvId });
+  if (shared.error) throw shared.error;
+  await login(page, recvEmail, password);
+  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
+
+  await page.goto(`/${slug}/inicio`);
+  await expect(page.getByRole("navigation", { name: "Principal" }).getByLabel("Relatórios")).toHaveAttribute("aria-disabled", "true");
+
+  await page.goto(`/${slug}/relatorios/dashboards`);
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboards" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meus dashboards" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Novo dashboard" })).toHaveCount(0);
+  await page.getByRole("link", { name: new RegExp(dashName) }).click();
+
+  await expect(page.getByRole("heading", { level: 1, name: dashName })).toBeVisible();
+  await expectHealthyWidgets(page, 2);
+  await expect(widget(page, reportName).getByRole("img")).toContainText("3");
+  await expect(page.getByRole("button", { name: "Adicionar widget" })).toHaveCount(0);
+
+  // Quem não tem acesso nenhum continua recebendo 404.
+  const other = await admin().from("dashboards").insert({ owner_id: adminId, name: `Privado ${stamp}` }).select("id").single();
+  if (other.error) throw other.error;
+  const res = await page.goto(`/${slug}/relatorios/dashboards/${other.data.id}`);
+  expect(res?.status()).toBe(404);
 });

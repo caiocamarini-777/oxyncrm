@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { NewDashboardDialog } from "@/components/dashboards/new-dashboard-dialog";
 import { getReportPermissions } from "@/lib/reports/permissions";
@@ -30,7 +29,6 @@ export default async function DashboardsPage({ params }: { params: Promise<{ emp
   await connection();
   const { empresa } = await params;
   const perms = await getReportPermissions(empresa);
-  if (!perms.viewReports) notFound();
   const all = await listDashboards();
   const mine = all.filter((d) => !d.shared);
   const shared = all.filter((d) => d.shared);
@@ -39,20 +37,24 @@ export default async function DashboardsPage({ params }: { params: Promise<{ emp
     <div className="space-y-8">
       <header className="flex items-center justify-between gap-4">
         <div>
-          <Link href={`/${empresa}/relatorios`} className="text-sm text-muted-foreground hover:underline">
-            Relatórios
-          </Link>
+          {perms.viewReports ? (
+            <Link href={`/${empresa}/relatorios`} className="text-sm text-muted-foreground hover:underline">
+              Relatórios
+            </Link>
+          ) : null}
           <h1 className="font-heading text-2xl font-semibold">Dashboards</h1>
         </div>
-        {perms.createDashboards ? <NewDashboardDialog empresa={empresa} /> : null}
+        {perms.viewReports && perms.createDashboards ? <NewDashboardDialog empresa={empresa} /> : null}
       </header>
 
+      {perms.viewReports ? (
       <section aria-labelledby="meus" className="space-y-3">
         <h2 id="meus" className="font-heading text-lg font-semibold">
           Meus dashboards
         </h2>
         <DashboardList items={mine} empresa={empresa} empty="Você ainda não criou nenhum dashboard." />
       </section>
+      ) : null}
 
       <section aria-labelledby="compartilhados" className="space-y-3">
         <h2 id="compartilhados" className="font-heading text-lg font-semibold">

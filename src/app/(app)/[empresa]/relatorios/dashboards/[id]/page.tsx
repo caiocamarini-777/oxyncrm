@@ -31,22 +31,30 @@ export default async function DashboardPage({
     getAccessibleCompanies(),
     reportCompanySlugs(),
   ]);
-  if (!perms.viewReports) notFound();
+  // Quem recebeu o dashboard abre sem view_reports: o acesso é decidido por getDashboard (dono, compartilhamento ou admin).
   const scope = resolveCompanyScope(empresa, companies, profile.isSuperAdmin);
   if (!scope) notFound();
   const dashboard = await getDashboard(id);
   if (!dashboard) notFound();
 
   // O filtro de empresa só existe no escopo "Todas as empresas", entre as empresas com view_reports.
-  const options = scope.kind === "all" ? companies.filter((c) => slugs.includes(c.slug)) : null;
+  const allOptions = scope.kind === "all" ? companies.filter((c) => slugs.includes(c.slug)) : [];
+  const options = allOptions.length > 0 ? allOptions : null;
   const companyBySlug = options ? new Map(options.map((c) => [c.slug, c.id])) : null;
   const params2 = { de: first(sp.de), ate: first(sp.ate), empresa: first(sp.empresa) };
-  const filters = resolveDashboardFilters(params2, dashboard.defaultFilters, companyBySlug);
-  const urlOnly = resolveDashboardFilters(params2, {}, companyBySlug);
+  const filters = resolveDashboardFilters(
+    params2,
+    dashboard.defaultFilters,
+    companyBySlug,
+    scope.kind === "company" ? scope.company.id : null,
+  );
+  const urlOnly = resolveDashboardFilters(params2, {}, companyBySlug, null);
   const today = dayKey(new Date());
 
   const readOnly = !dashboard.isOwner;
-  const [reports, lookups] = readOnly
+  // Adicionar widget precisa listar relatórios e funis, o que exige view_reports.
+  const canAdd = !readOnly && perms.viewReports;
+  const [reports, lookups] = !canAdd
     ? [[], null]
     : await Promise.all([listReports(empresa), getReportLookups(empresa)]);
 
@@ -59,7 +67,7 @@ export default async function DashboardPage({
           </Link>
           <h1 className="font-heading text-2xl font-semibold">{dashboard.name}</h1>
         </div>
-        {!readOnly && lookups ? (
+        {canAdd && lookups ? (
           <AddWidgetDialog
             dashboardId={dashboard.id}
             reports={reports.map((r) => ({ id: r.id, name: r.name }))}

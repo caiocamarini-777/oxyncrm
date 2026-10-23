@@ -58,6 +58,8 @@ export function resolveDashboardFilters(
   params: FilterParams,
   defaults: DashboardFilters,
   companyBySlug: Map<string, string> | null,
+  /** Empresa do escopo atual; quando informada, o filtro de empresa só pode restringir dentro dela. */
+  scopeCompanyId?: string | null,
 ): DashboardFilters {
   const out: DashboardFilters = {};
   const from = params.de;
@@ -71,6 +73,11 @@ export function resolveDashboardFilters(
   if (urlCompany) out.company = [urlCompany];
   else if (defaults.company && defaults.company.length > 0) out.company = defaults.company.filter(isUuid);
   if (out.company && out.company.length === 0) delete out.company;
+  if (scopeCompanyId) {
+    // Escopo de uma empresa: o filtro nunca amplia. A interseção com o padrão do dashboard é a própria empresa
+    // do escopo (ou vazia, e lista vazia seria omitida e liberaria tudo), então vale sempre só ela.
+    out.company = [scopeCompanyId];
+  }
   for (const key of ["owner", "team"] as const) {
     const ids = (defaults[key] ?? []).filter(isUuid);
     if (ids.length > 0) out[key] = ids;

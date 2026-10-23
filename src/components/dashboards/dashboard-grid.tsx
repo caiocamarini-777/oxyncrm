@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -104,8 +104,15 @@ export function DashboardGrid({
   const sig = signature(items);
   const [seen, setSeen] = useState(sig);
   const [layout, setLayout] = useState<Slot[]>(() => toSlots(items));
+  // Salvamentos em andamento: enquanto houver, a resposta do servidor é parcial e não substitui o layout local.
+  const [saving, setSaving] = useState(0);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const latest = useRef(items);
+  useEffect(() => {
+    latest.current = items;
+  });
   // O servidor é a fonte da verdade: quando ele devolve outro layout (widget novo ou removido), recomeçamos dele.
-  if (seen !== sig) {
+  if (seen !== sig && saving === 0) {
     setSeen(sig);
     setLayout(toSlots(items));
   }
@@ -118,15 +125,26 @@ export function DashboardGrid({
   const title = (id: string | number) => byId.get(String(id))?.title ?? "";
   const visible = layout.filter((s) => byId.has(s.id));
 
-  async function persist(next: Slot[]) {
-    const res = await updateWidgetLayout(
-      dashboardId,
-      next.map((s, i) => ({ id: s.id, position: i, colSpan: s.colSpan, rowSpan: s.rowSpan })),
-    );
-    if (!res.ok) {
-      toast.error(res.error);
-      setLayout(toSlots(items)); // volta ao que o servidor tem
-    }
+  // Salvamentos em fila: cada um espera o anterior, então chegam ao banco na ordem em que foram feitos.
+  function persist(next: Slot[]) {
+    setSaving((n) => n + 1);
+    queue.current = queue.current.then(async () => {
+      try {
+        const res = await updateWidgetLayout(
+          dashboardId,
+          next.map((s, i) => ({ id: s.id, position: i, colSpan: s.colSpan, rowSpan: s.rowSpan })),
+        );
+        if (!res.ok) {
+          toast.error(res.error);
+          setLayout(toSlots(latest.current)); // volta ao que o servidor tem
+        }
+      } catch {
+        toast.error("Não foi possível salvar o layout.");
+        setLayout(toSlots(latest.current));
+      } finally {
+        setSaving((n) => n - 1);
+      }
+    });
   }
 
   function onDragEnd(e: DragEndEvent) {
@@ -137,7 +155,7 @@ export function DashboardGrid({
     if (from < 0 || to < 0) return;
     const next = arrayMove(layout, from, to);
     setLayout(next);
-    void persist(next);
+    persist(next);
   }
 
   const withSpans = (id: string, s: Spans) => layout.map((w) => (w.id === id ? { ...w, ...s } : w));
@@ -145,7 +163,7 @@ export function DashboardGrid({
   function commit(id: string, s: Spans) {
     const next = withSpans(id, s);
     setLayout(next);
-    void persist(next);
+    persist(next);
   }
 
   async function remove(id: string) {

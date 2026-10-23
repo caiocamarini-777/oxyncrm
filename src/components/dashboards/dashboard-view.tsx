@@ -5,6 +5,7 @@ import type { DashboardFilters } from "@/lib/reports/filters";
 import type { WidgetRow } from "@/lib/reports/rows";
 import type { Chart, ReportResult } from "@/lib/reports/spec";
 import { DashboardGrid } from "./dashboard-grid";
+import { WidgetErrorBoundary } from "./widget-error-boundary";
 
 /** Carrega os dados de um widget; a página do dono usa runWidgetResult, a pública usa o carregador por link. */
 export type WidgetLoader = (widgetId: string, filters: DashboardFilters) => Promise<ActionResult<ReportResult>>;
@@ -68,9 +69,11 @@ export function DashboardView({
     colSpan: w.colSpan,
     rowSpan: w.rowSpan,
     content: (
-      <Suspense key={filterKey} fallback={<WidgetSkeleton />}>
-        <WidgetBody widget={w} filters={filters} load={load} />
-      </Suspense>
+      <WidgetErrorBoundary key={filterKey}>
+        <Suspense fallback={<WidgetSkeleton />}>
+          <WidgetBody widget={w} filters={filters} load={load} />
+        </Suspense>
+      </WidgetErrorBoundary>
     ),
   }));
   return <DashboardGrid dashboardId={dashboardId} items={items} readOnly={readOnly} />;

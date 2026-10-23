@@ -31,6 +31,15 @@ export function DashboardFilters({
   const [forceRange, setForceRange] = useState(false);
   const [from, setFrom] = useState(period?.from ?? "");
   const [to, setTo] = useState(period?.to ?? "");
+  // A URL manda: quando o período dela muda (voltar, link, atalho), os campos acompanham.
+  const urlKey = period ? `${period.from}/${period.to}` : "";
+  const [seenKey, setSeenKey] = useState(urlKey);
+  if (seenKey !== urlKey) {
+    setSeenKey(urlKey);
+    setFrom(period?.from ?? "");
+    setTo(period?.to ?? "");
+    if (period) setForceRange(false);
+  }
 
   const preset = period ? matchPeriodPreset(period, today) : null;
   const mode = preset ?? (period || forceRange ? "range" : "");

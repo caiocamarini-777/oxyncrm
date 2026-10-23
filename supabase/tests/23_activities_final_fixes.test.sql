@@ -1,5 +1,5 @@
 begin;
-select plan(52);
+select plan(58);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -156,21 +156,29 @@ select lives_ok($$ select reopen_activity(pg_temp.u(641)) $$, 'reabre a outra');
 select lives_ok($$ select complete_activity(pg_temp.u(641), pg_temp.oid('Sem resposta')) $$, 'conclui sem agendar');
 select ok((select booked_by_activity_id is null from activities where id = current_setting('tst.q1')::uuid)
   and (select deleted_at is null from activities where id = current_setting('tst.q1')::uuid), 'reunião fica, sem crédito de agendamento');
+select ok((select origin_channel_id is null from activities where id = current_setting('tst.q1')::uuid), 'reunião solta perde o canal de origem');
 
 -- 6. lembretes rearmados -----------------------------------------------------------------------------------------------
 select pg_temp.as_pg();
 select pg_temp.mk(650, 'Tarefa', 'E-mail', null, pg_temp.u(202), null, null, 10, now() - interval '1 minute');
 select generate_activity_reminders();
 select ok((select reminder_sent_at is not null from activities where id = pg_temp.u(650)), 'lembrete marcado como enviado');
+select is((select count(*) from notifications where activity_id = pg_temp.u(650) and user_id = pg_temp.u(11)), 1::bigint, 'u11 recebe o lembrete');
 select pg_temp.as_user(pg_temp.u(11));
 select lives_ok($$ update activities set owner_id = pg_temp.u(13) where id = pg_temp.u(650) $$, 'reatribui');
 select ok((select reminder_sent_at is null from activities where id = pg_temp.u(650)), 'troca de dono rearma o lembrete');
 select pg_temp.as_pg();
-update activities set reminder_sent_at = now() where id = pg_temp.u(650);
+select generate_activity_reminders();
+select is((select count(*) from notifications where activity_id = pg_temp.u(650) and user_id = pg_temp.u(13)), 1::bigint, 'u13 recebe o lembrete do novo dono');
 select pg_temp.as_user(pg_temp.u(11));
+select throws_ok($$ update activities set reminder_sent_at = now() + interval '1 hour' where id = pg_temp.u(650) $$, 'P0001', 'OXYN_FORBIDDEN_FIELD', 'cliente não altera reminder_sent_at');
 select lives_ok($$ select complete_activity(pg_temp.u(650), pg_temp.oid('Sem resposta')) $$, 'conclui');
 select lives_ok($$ select reopen_activity(pg_temp.u(650)) $$, 'reabre');
 select ok((select reminder_sent_at is null from activities where id = pg_temp.u(650)), 'reabrir rearma o lembrete');
+select pg_temp.as_pg();
+select is((select count(*) from notifications where activity_id = pg_temp.u(650)), 0::bigint, 'reabrir apaga os lembretes antigos');
+select generate_activity_reminders();
+select is((select count(*) from notifications where activity_id = pg_temp.u(650) and user_id = pg_temp.u(13)), 1::bigint, 'novo lembrete após reabrir');
 
 select * from finish();
 rollback;

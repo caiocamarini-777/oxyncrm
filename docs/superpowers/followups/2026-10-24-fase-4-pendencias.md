@@ -6,6 +6,9 @@ Registro do que foi decidido, adiado e do que precisa de ação antes de seguir.
 
 - Lixeira: as atividades excluídas não aparecem na página genérica da lixeira (`RECORD_ENTITIES` não foi ampliado). Atividades abertas vão para a lixeira junto com o registro vinculado (quando não resta outro vínculo vivo) e voltam quando o registro é restaurado (gatilho `cascade_parent_trash`); as concluídas permanecem. Elas são purgadas junto com os registros vinculados ou pelo `purge_trash`. A ação `restoreActivity` existe, mas nenhuma tela chega a ela.
 - Sem interface na ficha para reabrir, excluir ou restaurar atividades individuais (as ações `reopenActivity`, `trashActivity` e `restoreActivity` existem, mas nenhuma tela as usa).
+- Remarcar, reabrir e remarcar de novo cria uma segunda reunião; só é alcançável pelo RPC de reabertura, que não tem interface.
+- Atividades concluídas permanecem ativas sob um registro na lixeira e continuam em "Concluídas".
+- O cron de e-mail conta como "inativo" o dono que deixou a empresa.
 - Visibilidade: a visibilidade de uma atividade é independente da visibilidade do registro vinculado (quem enxerga a atividade pode não enxergar o lead, a pessoa ou o negócio). É uma decisão de produto a confirmar; hoje a RLS de atividades espelha a de negócios.
 - Concorrência: os guards com advisory lock (conclusão, reabertura, regras de último tipo, resultado e canal) não têm um teste de concorrência real; os testes pgTAP rodam em uma única sessão.
 - "Nova atividade" em `/atividades` só vincula pessoa ou organização: o `ActivityForm` não tem busca de lead nem de negócio. Para vincular a leads e negócios, criar a atividade pela aba Atividade da ficha.

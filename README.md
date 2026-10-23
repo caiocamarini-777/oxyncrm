@@ -28,7 +28,7 @@ Depois da fase 3, cada empresa tem:
 
 Atividades com lembrete geram uma notificação (função `generate_activity_reminders`, agendada no pg_cron a cada minuto). O sino na barra superior mostra as não lidas em tempo real (Supabase Realtime) e abre um aviso com o botão "Abrir".
 
-O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota a cada 5 minutos; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Localmente, defina `CRON_SECRET` em `.env.local` e rode `pnpm reminders:send` (o e-mail vai para `.e2e-outbox/emails.jsonl` com `EMAIL_TRANSPORT=file`).
+O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota a cada 5 minutos; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Atenção: o cron de 5 em 5 minutos exige Vercel Pro; no Hobby, agendar a rota via pg_cron + pg_net com o header Bearer. Localmente, defina `CRON_SECRET` em `.env.local` e rode `pnpm reminders:send` (use `REMINDERS_URL` para apontar a outro endereço; o e-mail vai para `.e2e-outbox/emails.jsonl` com `EMAIL_TRANSPORT=file`).
 
 ## Desenvolvimento
 

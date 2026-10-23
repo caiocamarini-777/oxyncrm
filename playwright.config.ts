@@ -9,9 +9,11 @@ export default defineConfig({
   workers: 1, // os testes compartilham o banco de dev
   use: { baseURL },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command: "pnpm dev",
-    url: baseURL,
-    reuseExistingServer: true,
-  },
+  webServer: process.env.E2E_BASE_URL
+    ? undefined
+    : {
+        command: "pnpm dev",
+        url: baseURL,
+        reuseExistingServer: true,
+      },
 });

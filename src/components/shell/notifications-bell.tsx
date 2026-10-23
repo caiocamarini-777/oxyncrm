@@ -50,8 +50,10 @@ export function NotificationsBell() {
       supabase.from("notifications").select(SELECT).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(20).overrideTypes<Raw[], { merge: false }>(),
       supabase.from("notifications").select("id", { count: "exact", head: true }).is("read_at", null),
     ]);
-    if (!list.error) setItems(list.data.map(toItem));
+    const mapped = list.error ? null : list.data.map(toItem);
+    if (mapped) setItems(mapped);
     if (!count.error) setUnread(count.count ?? 0);
+    return mapped;
   }, [supabase]);
 
   useEffect(() => {
@@ -70,21 +72,15 @@ export function NotificationsBell() {
           "postgres_changes",
           { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
           (payload) => {
-            void load();
-            if (payload.eventType !== "INSERT") return;
-            const row = payload.new as { id: number; title: string };
-            void supabase
-              .from("notifications")
-              .select(SELECT)
-              .eq("id", row.id)
-              .single()
-              .overrideTypes<Raw, { merge: false }>()
-              .then(({ data: full }) => {
-                const href = full ? toItem(full).href : null;
-                toast(row.title, {
-                  action: href ? { label: "Abrir", onClick: () => router.push(href) } : undefined,
-                });
+            // Uma única consulta por evento: a lista já traz o destino do aviso.
+            const row = payload.new as { id?: number; title?: string };
+            void load().then((list) => {
+              if (payload.eventType !== "INSERT" || row.id === undefined) return;
+              const href = list?.find((i) => i.id === row.id)?.href;
+              toast(row.title ?? "Lembrete", {
+                action: href ? { label: "Abrir", onClick: () => router.push(href) } : undefined,
               });
+            });
           },
         )
         .subscribe();

@@ -9,7 +9,7 @@ async function main() {
     console.error("CRON_SECRET ausente. Defina em .env.local.");
     process.exit(1);
   }
-  const base = (process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "");
+  const base = (process.env.REMINDERS_URL || "http://localhost:3000").replace(/\/$/, "");
   const res = await fetch(`${base}/api/cron/lembretes`, { headers: { Authorization: `Bearer ${secret}` } });
   const body = await res.text();
   if (!res.ok) {

@@ -2,8 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC = ["/entrar", "/recuperar-senha", "/auth/confirm", "/auth/callback"];
-// Rotas de cron se autenticam sozinhas com CRON_SECRET (Bearer), sem sessão de usuário.
-const SELF_AUTH = ["/api/cron"];
+// Rotas que dispensam sessão porque se autenticam sozinhas. Só caminhos exatos, e cada handler
+// DEVE chamar isCronAuthorized (src/lib/notifications/cron-auth.ts) antes de qualquer trabalho.
+const SELF_AUTH = ["/api/cron/lembretes"];
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });

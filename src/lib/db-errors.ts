@@ -35,6 +35,7 @@ export function translateDbError(err: { code?: string; message?: string }): stri
   if (msg.includes("OXYN_NEXT_ACTIVITY_REQUIRED")) return "Agende a próxima atividade para concluir.";
   if (msg.includes("OXYN_LINK_FORBIDDEN")) return "Você não tem acesso a um dos registros vinculados.";
   if (msg.includes("OXYN_INVALID_INPUT")) return "Dados inválidos. Confira os campos e tente novamente.";
+  if (msg.includes("OXYN_INVALID_REPORT")) return "Relatório inválido. Revise os campos escolhidos.";
   if (msg.includes("OXYN_FORBIDDEN")) return "Você não tem permissão para esta ação.";
   switch (err.code) {
     case "23505":

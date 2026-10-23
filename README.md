@@ -24,6 +24,12 @@ Depois da fase 3, cada empresa tem:
 - **Lixeira**: registros excluídos ficam 30 dias e podem ser restaurados; a exclusão definitiva é automática após o prazo ou manual, só pelo admin geral.
 - **Configurações** (admin geral, por empresa): campos personalizados, etiquetas, origens de lead, motivos de desqualificação, funis, produtos e motivos de perda.
 
+## Lembretes de atividades
+
+Atividades com lembrete geram uma notificação (função `generate_activity_reminders`, agendada no pg_cron a cada minuto). O sino na barra superior mostra as não lidas em tempo real (Supabase Realtime) e abre um aviso com o botão "Abrir".
+
+O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota a cada 5 minutos; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Localmente, defina `CRON_SECRET` em `.env.local` e rode `pnpm reminders:send` (o e-mail vai para `.e2e-outbox/emails.jsonl` com `EMAIL_TRANSPORT=file`).
+
 ## Desenvolvimento
 
 Pré-requisitos: Node 22 e pnpm. Não é preciso Docker: o banco é um projeto Supabase de desenvolvimento.

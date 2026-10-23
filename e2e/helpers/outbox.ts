@@ -22,3 +22,13 @@ export async function getLatestLink(to: string): Promise<string> {
   }
   throw new Error(`Nenhum e-mail com link para ${to} em 10 s.`);
 }
+
+/** Todas as mensagens gravadas no outbox de arquivo para `to`. */
+export async function getMessages(to: string): Promise<{ to: string; subject: string; html: string; text: string }[]> {
+  try {
+    const lines = (await readFile(FILE, "utf8")).split("\n").filter(Boolean);
+    return lines.map((l) => JSON.parse(l) as { to: string; subject: string; html: string; text: string }).filter((m) => m.to === to);
+  } catch {
+    return [];
+  }
+}

@@ -20,3 +20,16 @@ export async function withoutTriggers(run: (sql: postgres.TransactionSql) => Pro
     await sql.end();
   }
 }
+
+/** Roda uma consulta direta no banco de dev (para funções sem permissão de API, como o gerador de lembretes). */
+export async function runSql<T = unknown>(query: string): Promise<T[]> {
+  loadEnv();
+  const url = process.env.SUPABASE_DB_URL;
+  if (!url) throw new Error("SUPABASE_DB_URL ausente");
+  const sql = postgres(url, { max: 1 });
+  try {
+    return (await sql.unsafe(query)) as unknown as T[];
+  } finally {
+    await sql.end();
+  }
+}

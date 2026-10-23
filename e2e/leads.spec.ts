@@ -107,6 +107,7 @@ test("lista mostra a próxima atividade e o último canal", async ({ browser }) 
   ]);
   if (type.error) throw type.error;
   if (ch.error) throw ch.error;
+  expect(ch.data.length).toBeGreaterThanOrEqual(2);
   const base = { company_id: companyA, owner_id: userId, type_id: type.data.id, lead_id: rec.act };
   const open = await a
     .from("activities")
@@ -127,7 +128,7 @@ test("lista mostra a próxima atividade e o último canal", async ({ browser }) 
   if (done.error) throw done.error;
 
   const page = await newPage(browser);
-  await page.goto(`/${slugA}/leads`);
+  await page.goto(`/${slugA}/leads?q=${encodeURIComponent(`${stamp}`)}`);
   const row = page.getByRole("row").filter({ hasText: `Lead Atividade ${stamp}` });
   await expect(row.getByTestId("next-activity")).toHaveText("Atrasada");
   await expect(row.getByTestId("next-activity")).toHaveAttribute("title", `Retornar ${stamp}`);

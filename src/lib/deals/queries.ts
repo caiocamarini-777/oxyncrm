@@ -132,10 +132,10 @@ function toRow(r: RawRow, labels: Map<string, LabelRef[]>, now: Date, next: Map<
 }
 
 /** Filtros comuns que dependem de leituras prévias (equipes, etapas que esfriam). */
-type Resolved = { teamOwners: string[] | null; rottingOr: string | null; overdueIds: string[] | null };
+type Resolved = { teamOwners: string[] | null; rottingOr: string | null };
 
 async function resolveCommon(
-  f: { team?: string[]; rotting?: boolean; overdue?: boolean },
+  f: { team?: string[]; rotting?: boolean },
   stageScope: { companyId?: string; pipelineId?: string | null; stageIds?: string[] },
 ): Promise<Resolved | null> {
   const supabase = await createServerClient();
@@ -161,44 +161,27 @@ async function resolveCommon(
     if (parts.length === 0) return null;
     rottingOr = parts.join(",");
   }
-  let overdueIds: string[] | null = null;
-  if (f.overdue) {
-    let companyIds: string[];
-    if (stageScope.companyId) companyIds = [stageScope.companyId];
-    else {
-      const { data, error } = await supabase.from("companies").select("id");
-      if (error) fail("empresas", error);
-      companyIds = (data ?? []).map((c) => c.id as string);
-    }
-    const found = await Promise.all(
-      companyIds.map(async (id) => {
-        const { data, error } = await supabase.rpc("deals_with_overdue_activity", { p_company: id });
-        if (error) fail("atividades atrasadas", error);
-        return (data ?? []) as unknown as string[];
-      }),
-    );
-    overdueIds = [...new Set(found.flat())];
-    if (overdueIds.length === 0) return null;
-  }
-  return { teamOwners, rottingOr, overdueIds };
+  return { teamOwners, rottingOr };
 }
 
 type Filterable<T> = {
   in(c: string, v: string[]): T;
   eq(c: string, v: string): T;
   or(f: string): T;
+  is(c: string, v: boolean): T;
   ilike(c: string, p: string): T;
 };
 
 function applyCommon<T extends Filterable<T>>(
   q: T,
-  f: { q?: string; owner?: string[] },
+  f: { q?: string; owner?: string[]; overdue?: boolean },
   r: Resolved,
 ): T {
   if (f.owner && f.owner.length > 0) q = q.in("owner_id", f.owner);
   if (r.teamOwners) q = q.in("owner_id", r.teamOwners);
   if (r.rottingOr) q = q.eq("status", "open").or(r.rottingOr);
-  if (r.overdueIds) q = q.in("id", r.overdueIds);
+  // Campo computado has_overdue_activity (migration 000009): vale também em deals_with_labels.
+  if (f.overdue) q = q.is("has_overdue_activity", true);
   const term = safeTerm(f.q ?? "");
   if (term) q = q.ilike("title", `%${term}%`);
   return q;

@@ -1,7 +1,7 @@
 import { dayKey, dueStatus, formatShortDate, startOfNextDayUtc } from "./time";
 
 /** Linha de `next_activity_for` já em camelCase. */
-export type NextActivityRow = { activityId: string; dueAt: string; subject: string; overdue: boolean };
+export type NextActivityRow = { activityId: string; dueAt: string; subject: string };
 
 /** Próxima atividade aberta de um registro, pronta para o selo. */
 export type NextActivity = {

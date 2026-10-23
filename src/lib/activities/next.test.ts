@@ -3,7 +3,7 @@ import { toNextActivity } from "./next";
 
 // 2026-10-23 15:00 em São Paulo
 const now = new Date("2026-10-23T18:00:00Z");
-const row = (dueAt: string) => ({ activityId: "a1", dueAt, subject: "Ligar", overdue: false });
+const row = (dueAt: string) => ({ activityId: "a1", dueAt, subject: "Ligar" });
 
 describe("toNextActivity", () => {
   it("atrasada quando o horário já passou", () => {

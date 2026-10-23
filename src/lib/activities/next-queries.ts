@@ -15,7 +15,7 @@ export async function loadNextActivities(
   const { data, error } = await supabase.rpc("next_activity_for", { p_entity: entity, p_ids: ids });
   if (error) fail(entity, "próxima atividade", error);
   for (const r of data ?? []) {
-    out.set(r.record_id, toNextActivity({ activityId: r.activity_id, dueAt: r.due_at, subject: r.subject, overdue: r.overdue }, now));
+    out.set(r.record_id, toNextActivity({ activityId: r.activity_id, dueAt: r.due_at, subject: r.subject }, now));
   }
   return out;
 }
@@ -25,18 +25,8 @@ export async function loadLastChannels(leadIds: string[]): Promise<Map<string, s
   const out = new Map<string, string>();
   if (leadIds.length === 0) return out;
   const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from("activities")
-    .select("lead_id, completed_at, channel:activity_channels!channel_id(name)")
-    .in("lead_id", leadIds)
-    .eq("done", true)
-    .is("deleted_at", null)
-    .order("completed_at", { ascending: false });
+  const { data, error } = await supabase.rpc("last_channel_for", { p_ids: leadIds });
   if (error) fail("leads", "último canal", error);
-  for (const r of (data ?? []) as unknown as { lead_id: string; channel: { name: string } | { name: string }[] | null }[]) {
-    if (out.has(r.lead_id)) continue;
-    const ch = Array.isArray(r.channel) ? r.channel[0] : r.channel;
-    if (ch) out.set(r.lead_id, ch.name);
-  }
+  for (const r of data ?? []) out.set(r.lead_id, r.channel_name);
   return out;
 }

@@ -129,8 +129,9 @@ export async function fetchLeadRows(
   const raw = (data ?? []) as unknown as RawRow[];
   const labelsBy = await loadRecordLabels("leads", raw.map((r) => r.id));
   const ids = raw.map((r) => r.id);
+  const now = new Date();
   const [next, channels] = withActivity
-    ? await Promise.all([loadNextActivities("leads", ids), loadLastChannels(ids)])
+    ? await Promise.all([loadNextActivities("leads", ids, now), loadLastChannels(ids)])
     : [new Map<string, NextActivity>(), new Map<string, string>()];
   const rows: LeadRow[] = raw.map((r) => {
     const person = one(r.person);

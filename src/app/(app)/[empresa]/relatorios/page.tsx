@@ -25,6 +25,9 @@ export default async function ReportsPage({ params }: { params: Promise<{ empres
         <h1 className="font-heading text-2xl font-semibold">Relatórios</h1>
         <div className="flex gap-2">
           <Button asChild variant="outline">
+            <Link href={`/${empresa}/relatorios/metas`}>Metas</Link>
+          </Button>
+          <Button asChild variant="outline">
             <Link href={`/${empresa}/relatorios/dashboards`}>Dashboards</Link>
           </Button>
           <Button asChild>

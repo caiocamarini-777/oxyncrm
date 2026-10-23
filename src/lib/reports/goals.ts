@@ -36,16 +36,23 @@ function parseDay(s: string): Date | null {
     : null;
 }
 
-/**
- * Espelha o check do banco em goals.starts_on: semana começa na segunda, mês no dia 1 e trimestre no dia 1
- * de janeiro, abril, julho ou outubro. A Task 9 reutiliza este helper.
- */
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+/** Alinha uma data (AAAA-MM-DD) ao início do período: segunda, dia 1 ou início do trimestre. Data inválida volta como veio. */
+export function alignStart(date: string, period: GoalPeriod): string {
+  const d = parseDay(date);
+  if (!d) return date;
+  if (period === "week") {
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return iso(d);
+  }
+  const month = period === "month" ? d.getUTCMonth() : Math.floor(d.getUTCMonth() / 3) * 3;
+  return iso(new Date(Date.UTC(d.getUTCFullYear(), month, 1)));
+}
+
+/** Espelha o check do banco em goals.starts_on; é o ponto fixo de alignStart. */
 export function isAlignedStart(period: GoalPeriod, startsOn: string): boolean {
-  const d = parseDay(startsOn);
-  if (!d) return false;
-  if (period === "week") return d.getUTCDay() === 1;
-  if (period === "month") return d.getUTCDate() === 1;
-  return d.getUTCDate() === 1 && [0, 3, 6, 9].includes(d.getUTCMonth());
+  return parseDay(startsOn) !== null && alignStart(startsOn, period) === startsOn;
 }
 
 export const goalSchema = z

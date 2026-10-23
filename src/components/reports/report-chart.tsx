@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, Tooltip, XAxis, YAxis } from "recharts";
 import { ResponsiveContainer } from "recharts";
+import { GoalProgressList, isGoalProgressResult } from "@/components/goals/goal-progress";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EMPTY_TEXT, TRUNCATED_TEXT, isNumeric, shape, summarize } from "@/lib/reports/chart-data";
@@ -186,6 +187,8 @@ export function ReportChart({
   let body: React.ReactNode;
   if (empty) {
     body = <p className="py-8 text-center text-sm text-muted-foreground">{EMPTY_TEXT}</p>;
+  } else if (chart === "table" && isGoalProgressResult(result)) {
+    body = <GoalProgressList result={result} />;
   } else if (chart === "table" || asTable) {
     body = <ResultTable result={result} />;
   } else if (chart === "number") {

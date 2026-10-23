@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { goalSchema, isAlignedStart } from "./goals";
+import { alignStart, goalSchema, isAlignedStart } from "./goals";
 
 const U = "00000000-0000-4000-8000-000000000001";
 const base = { companyId: U, targetKind: "company", metric: "won_value", period: "month", startsOn: "2026-10-01", targetValue: 100 };
@@ -22,6 +22,30 @@ describe("isAlignedStart", () => {
   it("data inválida", () => {
     expect(isAlignedStart("month", "2026-02-31")).toBe(false);
     expect(isAlignedStart("month", "x")).toBe(false);
+  });
+});
+
+describe("alignStart", () => {
+  it("quinta 2026-10-22", () => {
+    expect(alignStart("2026-10-22", "week")).toBe("2026-10-19");
+    expect(alignStart("2026-10-22", "month")).toBe("2026-10-01");
+    expect(alignStart("2026-10-22", "quarter")).toBe("2026-10-01");
+  });
+  it("segunda e domingo na semana", () => {
+    expect(alignStart("2026-10-19", "week")).toBe("2026-10-19");
+    expect(alignStart("2026-10-25", "week")).toBe("2026-10-19");
+  });
+  it("trimestres", () => {
+    expect(alignStart("2026-02-15", "quarter")).toBe("2026-01-01");
+    expect(alignStart("2026-05-31", "quarter")).toBe("2026-04-01");
+    expect(alignStart("2026-09-30", "quarter")).toBe("2026-07-01");
+  });
+  it("cruza o ano na semana e é consistente com isAlignedStart", () => {
+    expect(alignStart("2027-01-01", "week")).toBe("2026-12-28");
+    for (const p of ["week", "month", "quarter"] as const) expect(isAlignedStart(p, alignStart("2026-03-17", p))).toBe(true);
+  });
+  it("data inválida volta como veio", () => {
+    expect(alignStart("x", "month")).toBe("x");
   });
 });
 

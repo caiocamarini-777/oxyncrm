@@ -103,11 +103,11 @@ test("admin vê os relatórios prontos e abre o funil por canal", async ({ page 
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
   await page.goto(`/${slug}/relatorios`);
   await expect(page.getByRole("heading", { level: 1, name: "Relatórios" })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Funil por canal/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Funil de reuniões por canal/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /Motivos de perda/ })).toBeVisible();
 
-  await page.getByRole("link", { name: /Funil por canal/ }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Funil por canal" })).toBeVisible();
+  await page.getByRole("link", { name: /Funil de reuniões por canal/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Funil de reuniões por canal" })).toBeVisible();
   await expect(
     page.getByText("Um lead com reuniões de canais diferentes conta em cada canal; as linhas não somam."),
   ).toBeVisible();
@@ -146,6 +146,14 @@ test("monta, salva e lista um relatório personalizado", async ({ page }) => {
   await page.getByRole("button", { name: "Salvar" }).click();
   await expect(page).toHaveURL(new RegExp(`/${slug}/relatorios$`));
   await expect(page.getByRole("link", { name: new RegExp(reportName) })).toBeVisible();
+
+  // Reabrir e salvar de novo mantém a empresa do relatório.
+  await page.getByRole("link", { name: new RegExp(reportName) }).click();
+  await expect(page.getByLabel("Nome")).toHaveValue(reportName);
+  await page.getByRole("button", { name: "Salvar" }).click();
+  await expect(page).toHaveURL(new RegExp(`/${slug}/relatorios$`));
+  const saved = await admin().from("reports").select("company_id").eq("name", reportName).single();
+  expect(saved.data?.company_id).toBe(companyId);
 });
 
 test("usuário sem view_reports vê Relatórios desativado e recebe 404", async ({ page }) => {
@@ -158,6 +166,8 @@ test("usuário sem view_reports vê Relatórios desativado e recebe 404", async 
     "aria-disabled",
     "true",
   );
+  await page.getByRole("navigation", { name: "Principal" }).getByLabel("Relatórios").hover();
+  await expect(page.getByRole("tooltip", { name: "Sem permissão para relatórios" })).toBeVisible();
   const res = await page.goto(`/${slug}/relatorios`);
   expect(res?.status()).toBe(404);
   const res2 = await page.goto(`/${slug}/relatorios/novo`);

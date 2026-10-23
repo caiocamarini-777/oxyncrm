@@ -43,7 +43,7 @@ export default async function PresetReportPage({
 
   const lookups = await getReportLookups(empresa);
   const pipelines = lookups.fields.pipeline ?? [];
-  const spec = presetSpecFromQuery(preset, sp, pipelines[0]?.value ?? null);
+  const spec = presetSpecFromQuery(preset, sp, lookups.defaultPipeline);
   const res = spec ? await runReportResult(spec, empresa) : null;
 
   return (

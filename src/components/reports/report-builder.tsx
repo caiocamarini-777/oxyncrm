@@ -57,18 +57,20 @@ const selectCls =
   "h-9 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function Sel({
+  id,
   label,
   value,
   onChange,
   children,
 }: {
+  id?: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
   children: React.ReactNode;
 }) {
   return (
-    <select aria-label={label} className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
+    <select id={id} aria-label={label} className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
       {children}
     </select>
   );
@@ -242,8 +244,8 @@ export function ReportBuilder({
         </div>
 
         <div className="space-y-1.5">
-          <Label>Base</Label>
-          <Sel label="Base" value={base} onChange={(v) => changeBase(v as Base)}>
+          <Label htmlFor="rb-base">Base</Label>
+          <Sel id="rb-base" label="Base" value={base} onChange={(v) => changeBase(v as Base)}>
             {BASES.map((b) => (
               <option key={b.key} value={b.key}>
                 {b.label}
@@ -253,9 +255,10 @@ export function ReportBuilder({
         </div>
 
         <div className="space-y-1.5">
-          <Label>Métrica</Label>
+          <Label htmlFor="rb-metric">Métrica</Label>
           <div className="flex flex-wrap gap-2">
             <Sel
+              id="rb-metric"
               label="Métrica"
               value={op}
               onChange={(v) => {
@@ -282,8 +285,8 @@ export function ReportBuilder({
         </div>
 
         <div className="space-y-1.5">
-          <Label>Agrupar por</Label>
-          <Sel label="Agrupar por" value={groupBy} onChange={setGroupBy}>
+          <Label htmlFor="rb-group">Agrupar por</Label>
+          <Sel id="rb-group" label="Agrupar por" value={groupBy} onChange={setGroupBy}>
             <option value="">Sem agrupamento</option>
             {dims.map((d) => (
               <option key={d.key} value={d.key}>
@@ -299,9 +302,9 @@ export function ReportBuilder({
         </div>
 
         <div className="space-y-1.5">
-          <Label>Período</Label>
+          <Label htmlFor="rb-period">Período</Label>
           <div className="flex flex-wrap items-center gap-2">
-            <Sel label="Campo do período" value={periodField} onChange={setPeriodField}>
+            <Sel id="rb-period" label="Campo do período" value={periodField} onChange={setPeriodField}>
               <option value="">Todo o período</option>
               {dateFields.map((f) => (
                 <option key={f.key} value={f.key}>
@@ -319,8 +322,8 @@ export function ReportBuilder({
         </div>
 
         <div className="space-y-1.5">
-          <Label>Gráfico</Label>
-          <Sel label="Gráfico" value={chart} onChange={(v) => setChart(v as Chart)}>
+          <Label htmlFor="rb-chart">Gráfico</Label>
+          <Sel id="rb-chart" label="Gráfico" value={chart} onChange={(v) => setChart(v as Chart)}>
             {CHARTS.map((c) => (
               <option key={c} value={c}>
                 {CHART_LABEL[c]}
@@ -331,7 +334,7 @@ export function ReportBuilder({
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label>Filtros</Label>
+            <span className="text-sm font-medium">Filtros</span>
             <Button type="button" size="sm" variant="outline" onClick={addFilter} disabled={filters.length >= MAX_FILTERS_UI}>
               Adicionar filtro
             </Button>

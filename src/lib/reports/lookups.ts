@@ -10,12 +10,18 @@ export type Option = { value: string; label: string };
 /** Opções de filtro e agrupamento da tela de relatórios, por chave de campo do catálogo. */
 export type ReportLookups = {
   fields: Record<string, Option[]>;
+  /** Primeiro funil ativo (padrão da conversão por etapa); null sem funis ativos. */
+  defaultPipeline: string | null;
   /** Campos personalizados de seleção (agrupamento), só quando o escopo é uma empresa. */
   customGroups: { base: "leads" | "deals"; key: string; label: string }[];
 };
 
+function fail(what: string, error: { message: string; code?: string }): never {
+  console.error(`[relatórios] ${what}:`, error.code, error.message);
+  throw new Error(`Falha ao carregar relatórios (${what}).`);
+}
+
 const TABLES: { key: string; table: string }[] = [
-  { key: "pipeline", table: "pipelines" },
   { key: "source", table: "lead_sources" },
   { key: "lost_reason", table: "lost_reasons" },
   { key: "type", table: "activity_types" },
@@ -37,7 +43,7 @@ export async function getReportLookups(scopeSlug: string): Promise<ReportLookups
     company: inScope.map((c) => ({ value: c.id, label: c.name })),
   };
 
-  const [teams, owners, stages, tables] = await Promise.all([
+  const [teams, owners, stages, pipelines, tables] = await Promise.all([
     supabase.from("teams").select("id, name").order("name"),
     Promise.all(inScope.map((c) => listAssignableOwners(c.id))),
     supabase
@@ -46,14 +52,32 @@ export async function getReportLookups(scopeSlug: string): Promise<ReportLookups
       .in("company_id", ids)
       .is("archived_at", null)
       .order("position"),
+    supabase
+      .from("pipelines")
+      .select("id, name, company_id, position, archived_at")
+      .in("company_id", ids)
+      .order("position")
+      .order("name"),
     Promise.all(
       TABLES.map(async ({ key, table }) => {
-        const { data } = await supabase.from(table).select("id, name, company_id").in("company_id", ids).order("name");
+        const { data, error } = await supabase.from(table).select("id, name, company_id").in("company_id", ids).order("name");
+        if (error) fail(table, error);
         return [key, (data ?? []).map((r) => ({ value: r.id as string, label: withCompany(r.name as string, r.company_id as string) }))] as const;
       }),
     ),
   ]);
 
+  if (teams.error) fail("equipes", teams.error);
+  if (stages.error) fail("etapas", stages.error);
+  if (pipelines.error) fail("funis", pipelines.error);
+  const pipelineRows = [...(pipelines.data ?? [])].sort(
+    (a, b) => Number(a.archived_at !== null) - Number(b.archived_at !== null) || a.position - b.position || a.name.localeCompare(b.name, "pt-BR"),
+  );
+  fields.pipeline = pipelineRows.map((p) => ({
+    value: p.id as string,
+    label: withCompany(p.archived_at ? `${p.name} (arquivado)` : (p.name as string), p.company_id as string),
+  }));
+  const defaultPipeline = pipelineRows.find((p) => p.archived_at === null)?.id ?? null;
   fields.team = (teams.data ?? []).map((t) => ({ value: t.id, label: t.name }));
   const seen = new Set<string>();
   fields.owner = owners
@@ -77,5 +101,5 @@ export async function getReportLookups(scopeSlug: string): Promise<ReportLookups
       for (const d of defs) if (d.type === "select") customGroups.push({ base, key: d.key, label: d.label });
     }
   }
-  return { fields, customGroups };
+  return { fields, defaultPipeline, customGroups };
 }

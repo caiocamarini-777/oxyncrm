@@ -47,7 +47,11 @@ export function Sidebar({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="right">
-                  {isNavItemEnabled(item, isSuperAdmin, canViewReports) ? "Selecione uma empresa" : "Disponível em breve"}
+                  {!isNavItemEnabled(item, isSuperAdmin, true)
+                    ? "Disponível em breve"
+                    : item.scoped && !scopeSlug
+                      ? "Selecione uma empresa"
+                      : "Sem permissão para relatórios"}
                 </TooltipContent>
               </Tooltip>
             );

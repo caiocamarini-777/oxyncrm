@@ -26,7 +26,7 @@ type Def = Omit<Preset, "filters">;
 const DEFS: Def[] = [
   {
     key: "channel_funnel",
-    name: "Funil por canal",
+    name: "Funil de reuniões por canal",
     description: "Tentativas, reuniões agendadas e realizadas, oportunidades e ganhos de cada canal.",
     chart: "table",
     params: [],

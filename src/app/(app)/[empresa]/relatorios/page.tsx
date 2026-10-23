@@ -23,9 +23,14 @@ export default async function ReportsPage({ params }: { params: Promise<{ empres
     <div className="space-y-8">
       <header className="flex items-center justify-between gap-4">
         <h1 className="font-heading text-2xl font-semibold">Relatórios</h1>
-        <Button asChild>
-          <Link href={`/${empresa}/relatorios/novo`}>Novo relatório</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href={`/${empresa}/relatorios/dashboards`}>Dashboards</Link>
+          </Button>
+          <Button asChild>
+            <Link href={`/${empresa}/relatorios/novo`}>Novo relatório</Link>
+          </Button>
+        </div>
       </header>
 
       <section aria-labelledby="prontos" className="space-y-3">

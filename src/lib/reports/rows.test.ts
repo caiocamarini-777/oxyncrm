@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toGoalRow, toWidgetRow } from "./rows";
+import { defaultWidgetTitle, toGoalRow, toWidgetRow } from "./rows";
 
 describe("toWidgetRow", () => {
   it("usa a spec do relatório salvo e o nome dele como título padrão", () => {
@@ -23,5 +23,14 @@ describe("toGoalRow", () => {
       target_user_id: null, target_team_id: null, metric: "won_value", period: "month", starts_on: "2026-10-01",
       target_value: 1000, actual: 250, percent: 25, period_start: "2026-10-01", period_end: "2026-10-31" }))
       .toMatchObject({ id: "g", companyId: "c", targetValue: 1000, actual: 250, percent: 25, periodEnd: "2026-10-31" });
+  });
+});
+
+describe("defaultWidgetTitle", () => {
+  it("usa o nome do relatório quando o título está vazio", () => {
+    expect(defaultWidgetTitle("", "Receita")).toBe("Receita");
+    expect(defaultWidgetTitle("  ", "Receita")).toBe("Receita");
+    expect(defaultWidgetTitle("Meu", "Receita")).toBe("Meu");
+    expect(defaultWidgetTitle("", null)).toBe("");
   });
 });

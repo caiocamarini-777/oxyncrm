@@ -9,6 +9,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { UUID_RE } from "@/lib/uuid";
 import { shareUrl, type DashboardFilters } from "./filters";
 import { goalSchema, type GoalInput } from "./goals";
+import { defaultWidgetTitle } from "./rows";
 import { runReportResult, runWidgetResult } from "./queries";
 import { reportSpecSchema, type ReportResult, type ReportSpec } from "./spec";
 
@@ -180,6 +181,13 @@ export async function addWidget(
   }
   const w = parsed.data;
   const supabase = await createServerClient();
+  let title = w.title;
+  if (w.reportId && !title) {
+    const { data: rep, error: repError } = await supabase.from("reports").select("name").eq("id", w.reportId).maybeSingle();
+    if (repError) return { ok: false, error: translateDbError(repError) };
+    if (!rep) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+    title = defaultWidgetTitle(title, rep.name);
+  }
   const { data: last, error: lastError } = await supabase
     .from("dashboard_widgets")
     .select("position")
@@ -194,7 +202,7 @@ export async function addWidget(
       dashboard_id: dashboardId,
       report_id: w.reportId ?? null,
       spec: w.spec ?? null,
-      title: w.title,
+      title,
       position: (last?.position ?? -1) + 1,
       col_span: w.colSpan,
       row_span: w.rowSpan,
@@ -274,12 +282,14 @@ export async function unshareDashboard(dashboardId: string, userId: string): Pro
   const profile = await actor();
   if (!profile) return { ok: false, error: NO_PERMISSION };
   const supabase = await createServerClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("dashboard_shares")
     .delete()
     .eq("dashboard_id", dashboardId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .select("user_id");
   if (error) return { ok: false, error: translateDbError(error) };
+  if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
   touched();
   return { ok: true, data: undefined };
 }

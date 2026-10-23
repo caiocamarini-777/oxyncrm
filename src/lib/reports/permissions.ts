@@ -10,6 +10,11 @@ export type ReportPermissions = {
   shareDashboards: boolean;
 };
 
+function fail(what: string, error: { message: string; code?: string }): never {
+  console.error(`[relatórios] ${what}:`, error.code, error.message);
+  throw new Error(`Falha ao carregar relatórios (${what}).`);
+}
+
 const NONE: ReportPermissions = { viewReports: false, createDashboards: false, shareDashboards: false };
 
 /** Empresas do escopo (uma, ou todas as acessíveis); vazio quando o slug não existe ou não é acessível. */
@@ -30,7 +35,8 @@ export const reportCompanyIds = cache(async (scopeSlug: string): Promise<string[
   const supabase = await createServerClient();
   const checks = await Promise.all(
     ids.map(async (id) => {
-      const { data } = await supabase.rpc("has_report_setting", { p_company: id, p_setting: "view_reports" });
+      const { data, error } = await supabase.rpc("has_report_setting", { p_company: id, p_setting: "view_reports" });
+      if (error) fail("permissão de relatórios", error);
       return data === true ? id : null;
     }),
   );
@@ -51,6 +57,8 @@ export async function getReportPermissions(scopeSlug: string): Promise<ReportPer
     supabase.rpc("can_create_dashboards"),
     supabase.rpc("has_any_report_setting", { p_setting: "share_dashboards" }),
   ]);
+  if (create.error) fail("permissão de dashboards", create.error);
+  if (share.error) fail("permissão de compartilhamento", share.error);
   return {
     viewReports: view.length > 0,
     createDashboards: create.data === true,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { UUID_RE } from "@/lib/uuid";
+import type { CellType } from "./format";
 
 /**
  * Espelho do motor de relatórios do banco (migrações 20261025000003 e 000004). O banco é a autoridade:
@@ -364,7 +365,7 @@ export type PresetReportSpec = z.infer<typeof presetSchema>;
 export const isCustomSpec = (s: ReportSpec): s is CustomReportSpec => s.kind === "custom";
 
 /** Resultado de run_report e run_widget. */
-export type ResultColumn = { key: string; label: string; type: string };
+export type ResultColumn = { key: string; label: string; type: CellType };
 export type ReportResult = {
   columns: ResultColumn[];
   rows: unknown[][];

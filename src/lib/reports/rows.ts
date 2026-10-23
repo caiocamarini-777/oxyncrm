@@ -90,3 +90,7 @@ export const toGoalRow = (g: RawGoal): GoalRow => ({
   periodStart: String(g.period_start ?? ""),
   periodEnd: String(g.period_end ?? ""),
 });
+
+/** Título do widget: o informado; senão o nome do relatório salvo. */
+export const defaultWidgetTitle = (title: string, reportName: string | null | undefined): string =>
+  title.trim() || reportName || "";

@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { requireUser } from "@/lib/auth/session";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { createServerClient } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/uuid";
 import { buildWidgetFilters, type DashboardFilters } from "./filters";
 import { reportCompanyIds, scopeCompanyIds } from "./permissions";
 import {
@@ -77,6 +78,7 @@ export async function runWidget(widgetId: string, filters: DashboardFilters | nu
 export async function listReports(scopeSlug: string): Promise<ReportRow[]> {
   const profile = await requireUser();
   const companies = await scopeCompanyIds(scopeSlug);
+  if (companies.length === 0) return [];
   const supabase = await createServerClient();
   let q = supabase
     .from("reports")
@@ -90,6 +92,7 @@ export async function listReports(scopeSlug: string): Promise<ReportRow[]> {
 }
 
 export async function getReport(id: string): Promise<ReportRow | null> {
+  if (!isUuid(id)) return null;
   const profile = await requireUser();
   const supabase = await createServerClient();
   const { data, error } = await supabase
@@ -155,6 +158,7 @@ export type DashboardDetail = {
 };
 
 export async function getDashboard(id: string): Promise<DashboardDetail | null> {
+  if (!isUuid(id)) return null;
   const profile = await requireUser();
   const supabase = await createServerClient();
   const { data: d, error } = await supabase

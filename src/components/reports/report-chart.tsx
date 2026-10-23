@@ -1,7 +1,22 @@
 "use client";
 
+import { BarChart3, Table2 } from "lucide-react";
 import { useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  Tooltip,
+  XAxis,
+  YAxis,
+  type DefaultLegendContentProps,
+} from "recharts";
 import { ResponsiveContainer } from "recharts";
 import { GoalProgressList, isGoalProgressResult } from "@/components/goals/goal-progress";
 import { Button } from "@/components/ui/button";
@@ -81,6 +96,24 @@ function Funnel({ result, compact }: { result: ReportResult; compact: boolean })
   );
 }
 
+/**
+ * Legenda em HTML: o padrão do Recharts desenha um svg por item, que vira um "img" solto para leitores de tela.
+ * Aqui as amostras de cor são spans decorativos e o gráfico fica com um único img rotulado (o contêiner).
+ */
+function ChartLegend({ payload }: DefaultLegendContentProps) {
+  if (!payload?.length) return null;
+  return (
+    <ul className="flex flex-wrap justify-center gap-x-4 gap-y-1 pt-2 text-xs">
+      {payload.map((p, i) => (
+        <li key={`${String(p.value)}-${i}`} className="flex items-center gap-1.5">
+          <span aria-hidden="true" className="size-2.5 shrink-0 rounded-sm" style={{ background: p.color }} />
+          <span>{String(p.value ?? "")}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const tickStyle = { fontSize: 12, fill: "currentColor" };
 const tooltipStyle = {
   background: "var(--color-popover, #fff)",
@@ -114,7 +147,7 @@ function Plot({ result, chart, compact }: { result: ReportResult; chart: Chart; 
       <XAxis dataKey="__cat" tick={tickStyle} interval="preserveStartEnd" />
       <YAxis tick={tickStyle} width={compact ? 48 : 72} tickFormatter={fmt(first.col.key)} />
       {tip}
-      {series.length > 1 && !compact ? <Legend /> : null}
+      {series.length > 1 && !compact ? <Legend content={ChartLegend} /> : null}
     </>
   );
   return (
@@ -133,7 +166,7 @@ function Plot({ result, chart, compact }: { result: ReportResult; chart: Chart; 
             ))}
           </Pie>
           <Tooltip contentStyle={tooltipStyle} formatter={(v) => formatCell(v, first.col.type)} />
-          {!compact ? <Legend /> : null}
+          {!compact ? <Legend content={ChartLegend} /> : null}
         </PieChart>
       ) : chart === "line" ? (
         <LineChart data={data}>
@@ -217,7 +250,14 @@ export function ReportChart({
       {body}
       {result.truncated ? <p className="text-xs text-muted-foreground">{TRUNCATED_TEXT}</p> : null}
       {canToggle ? (
-        <Button type="button" variant="ghost" size="sm" onClick={() => setAsTable((v) => !v)}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="text-primary focus-visible:ring-ring"
+          onClick={() => setAsTable((v) => !v)}
+        >
+          {asTable ? <BarChart3 aria-hidden="true" /> : <Table2 aria-hidden="true" />}
           {asTable ? "Ver gráfico" : "Ver tabela"}
         </Button>
       ) : null}

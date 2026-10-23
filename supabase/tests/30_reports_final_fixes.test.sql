@@ -1,5 +1,5 @@
 begin;
-select plan(16);
+select plan(19);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -18,7 +18,9 @@ grant execute on function pg_temp.u(int), pg_temp.as_user(uuid), pg_temp.as_pg()
 insert into companies (id, name, slug) values (pg_temp.u(1), 'Volt Teste', 'tst-volt'), (pg_temp.u(2), 'Naia Teste', 'tst-naia');
 insert into auth.users (id, instance_id, aud, role, email, raw_user_meta_data) values
   (pg_temp.u(11), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-g@oxyn.test', '{"full_name":"tst-gestor"}'),
-  (pg_temp.u(13), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-v@oxyn.test', '{"full_name":"tst-vend"}');
+  (pg_temp.u(13), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-v@oxyn.test', '{"full_name":"tst-vend"}'),
+  (pg_temp.u(16), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-adm@oxyn.test', '{"full_name":"tst-admin"}');
+update profiles set is_super_admin = true where id = pg_temp.u(16);
 insert into roles (id, name, description, permissions) values
   (pg_temp.u(21), 'tst-Gestor', 'teste', '{"visibility":{"leads":"company","deals":"company","persons":"company","organizations":"company","activities":"company"},"actions":{"create":true,"edit":true,"delete":true,"export":true,"reassign_owner":true},"settings":{"manage_pipelines":true,"manage_custom_fields":true,"manage_products":true,"view_reports":true,"create_dashboards":true,"share_dashboards":true}}'::jsonb),
   (pg_temp.u(22), 'tst-SemRelatorio', 'teste', '{"visibility":{"leads":"own","deals":"own","persons":"own","organizations":"own","activities":"own"},"actions":{"create":true,"edit":true,"delete":false,"export":false,"reassign_owner":false},"settings":{"manage_pipelines":false,"manage_custom_fields":false,"manage_products":false,"view_reports":false,"create_dashboards":false,"share_dashboards":false}}'::jsonb);
@@ -99,7 +101,24 @@ select is(
     array[pg_temp.u(1)])->'total',
   'widget filtrado bate com o relatório no due_at');
 
--- 5. goal_progress ordena por rótulo e id antes do corte (M1) ---------------------------------------------
+-- 5. dono admin geral (sem vínculo) divide empresa com quem tem vínculo ativo ----------------------------
+select pg_temp.as_pg();
+insert into dashboards (id, owner_id, name) values (pg_temp.u(602), pg_temp.u(16), 'tst-painel-admin');
+insert into dashboard_widgets (id, dashboard_id, report_id, spec, title, position) values
+  (pg_temp.u(711), pg_temp.u(602), null, '{"kind":"custom","base":"deals","metric":{"op":"count"},"chart":"number"}', 'Negócios', 0);
+insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(602), pg_temp.u(13));
+select pg_temp.as_user(pg_temp.u(13));
+select is((select count(*)::int from dashboards where id = pg_temp.u(602)), 1,
+  'dashboard de admin geral sem vínculo continua visível ao destinatário com vínculo');
+select is((run_widget(pg_temp.u(711), jsonb_build_object('company', jsonb_build_array(pg_temp.u(1))))->>'total')::int, 2,
+  'destinatário roda o widget do admin geral');
+select pg_temp.as_pg();
+delete from memberships where user_id = pg_temp.u(13);
+select pg_temp.as_user(pg_temp.u(13));
+select is((select count(*)::int from dashboards where id = pg_temp.u(602)), 0,
+  'destinatário sem nenhum vínculo perde o dashboard do admin geral');
+
+-- 6. goal_progress ordena por rótulo e id antes do corte (M1) ---------------------------------------------
 -- 501 metas "Reuniões agendadas" e uma "Oportunidades criadas": por métrica, a última ficaria fora do corte.
 select pg_temp.as_pg();
 insert into goals (company_id, target_kind, metric, period, starts_on, target_value, created_by)

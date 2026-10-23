@@ -7,6 +7,7 @@
 -- 3. restrict_filters (corpo da 000006): atividades sem período usam due_at, o mesmo campo padrão de
 --    run_report_custom (000005), para o período do dashboard não mudar o eixo nem descartar linhas.
 -- 4. report_preset_goal_progress (corpo da 000010): ordena por rótulo e id (order by 2, 1 passou a ser a métrica).
+-- 5. can_share_dashboard_with (corpo da 000002): dono admin geral divide empresa com todo usuário com vínculo ativo.
 
 create or replace function public.can_read_dashboard(p_dashboard uuid) returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
@@ -188,4 +189,26 @@ language sql stable security definer set search_path = public, pg_temp as $$
     'rows', coalesce((select jsonb_agg(jsonb_build_array(gl.label, gl.p->'target', gl.p->'actual', gl.p->'percent',
         gl.p->'period_start', gl.p->'period_end', gl.metric) order by gl.label, gl.id) from gl), '[]'::jsonb),
     'total', null);
+$$;
+
+-- 5. can_share_dashboard_with (corpo da 000002): o admin geral acessa todas as empresas, então o dashboard de um
+--    dono admin geral divide empresa com qualquer usuário ativo que tenha vínculo em empresa não arquivada. Sem
+--    isso, a checagem de sobreposição acima esconderia os dashboards compartilhados por um admin geral sem vínculo.
+create or replace function public.can_share_dashboard_with(p_dashboard uuid, p_user uuid) returns boolean
+language sql stable security definer set search_path = public, pg_temp as $$
+  select public.is_active_user(p_user) and (
+    public.is_super_admin_for(p_user)
+    or exists (
+      select 1
+      from public.dashboards d
+      join public.memberships a on a.user_id = d.owner_id
+      join public.memberships b on b.company_id = a.company_id and b.user_id = p_user
+      join public.companies c on c.id = a.company_id
+      where d.id = p_dashboard and c.archived_at is null)
+    or exists (
+      select 1
+      from public.dashboards d
+      join public.memberships b on b.user_id = p_user
+      join public.companies c on c.id = b.company_id
+      where d.id = p_dashboard and public.is_super_admin_for(d.owner_id) and c.archived_at is null));
 $$;

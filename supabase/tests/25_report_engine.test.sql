@@ -101,7 +101,7 @@ update activities set deleted_at = now() where id = pg_temp.u(304);
 -- 1. visibilidade por viewer ------------------------------------------------------------------
 select pg_temp.as_user(pg_temp.u(13));
 select is(run_report_self(pg_temp.spec('leads', 'count', null, 'owner'), pg_temp.a()),
-  '{"columns":[{"key":"owner","label":"Responsável","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["tst-vend",2]],"total":2}'::jsonb,
+  '{"columns":[{"key":"owner","label":"Responsável","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["tst-vend",2]],"total":2,"truncated":false}'::jsonb,
   'vendedor own conta só os próprios leads (sem o apagado)');
 select is(run_report_self(pg_temp.spec('activities', 'count', null, 'type'), pg_temp.a())->'rows',
   '[["Ligação",1]]'::jsonb, 'vendedor vê só as próprias atividades');
@@ -120,7 +120,7 @@ select is(run_report_self(pg_temp.spec('activities', 'count', null, 'type'), pg_
 -- 2. métricas ---------------------------------------------------------------------------------
 select is(run_report_self(pg_temp.spec('deals', 'sum', 'contract_value', 'month',
   '[{"field":"status","op":"eq","value":"won"}]', '{"field":"won_at","from":"2026-01-01","to":"2026-12-31"}', 'line'), pg_temp.a()),
-  '{"columns":[{"key":"month","label":"Mês","type":"month"},{"key":"value","label":"Soma de Valor do contrato","type":"currency"}],"rows":[["2026-03-01",3100],["2026-04-01",300]],"total":3400}'::jsonb,
+  '{"columns":[{"key":"month","label":"Mês","type":"month"},{"key":"value","label":"Soma de Valor do contrato","type":"currency"}],"rows":[["2026-03-01",3100],["2026-04-01",300]],"total":3400,"truncated":false}'::jsonb,
   'soma de contract_value dos ganhos por mês (fuso São Paulo)');
 select is((run_report_self(pg_temp.spec('leads', 'conversion_rate', null, null, '[]', null, 'number'), pg_temp.a())->>'total')::numeric,
   25.0, 'conversion_rate de leads: 1 de 4 = 25.0');
@@ -148,18 +148,18 @@ select is((run_report_self(pg_temp.spec('deals', 'avg', 'contract_value', null,
 
 -- 3. dimensões ------------------------------------------------------------------------------
 select is(run_report_self(pg_temp.spec('leads', 'count', null, 'team'), pg_temp.a()),
-  '{"columns":[{"key":"team","label":"Equipe","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["Sem equipe",2],["tst-time-a",2],["tst-time-b",2]],"total":4}'::jsonb,
+  '{"columns":[{"key":"team","label":"Equipe","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["Sem equipe",2],["tst-time-a",2],["tst-time-b",2]],"total":4,"truncated":false}'::jsonb,
   'team: dono em dois times conta em cada; total não duplica');
 select is(run_report_self(pg_temp.spec('leads', 'count', null, 'label'), pg_temp.a())->'rows',
   '[["Sem etiqueta",2],["tst-quente",2]]'::jsonb, 'label com bucket Sem etiqueta');
 select is(run_report_self(pg_temp.spec('leads', 'count', null, 'custom:segmento'), pg_temp.a()),
-  '{"columns":[{"key":"custom:segmento","label":"Segmento","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["Sem valor",2],["Varejo",2]],"total":4}'::jsonb,
+  '{"columns":[{"key":"custom:segmento","label":"Segmento","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["Sem valor",2],["Varejo",2]],"total":4,"truncated":false}'::jsonb,
   'custom field select agrupa pelo valor');
 select is(run_report_self(pg_temp.spec('leads', 'count', null, 'status'), pg_temp.a())->'rows',
   '[["Aberto",3],["Convertido",1]]'::jsonb, 'status traduzido');
 select is(run_report_self(pg_temp.spec('deals', 'count', null, 'stage',
   '[{"field":"owner","op":"eq","value":"00000000-0000-4000-8000-000000000011"}]', null, 'table'), pg_temp.a()),
-  '{"columns":[{"key":"stage","label":"Etapa","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["tst-e1",4],["tst-e2",1]],"total":null}'::jsonb,
+  '{"columns":[{"key":"stage","label":"Etapa","type":"text"},{"key":"value","label":"Quantidade","type":"number"}],"rows":[["tst-e1",4],["tst-e2",1]],"total":null,"truncated":false}'::jsonb,
   'filtro por owner e tabela sem total');
 select is(run_report_self(pg_temp.spec('deals', 'count', null, null,
   '[{"field":"team","op":"in","value":["00000000-0000-4000-8000-000000000031"]}]'), pg_temp.a())->'total',

@@ -1,5 +1,5 @@
 begin;
-select plan(34);
+select plan(42);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -117,7 +117,7 @@ update activities set booked_by_activity_id = pg_temp.u(303) where id = pg_temp.
 -- 1. funil por canal -----------------------------------------------------------------------------
 select pg_temp.as_user(pg_temp.u(11));
 select is(run_report_self(pg_temp.p('channel_funnel'), pg_temp.a()),
-  '{"columns":[{"key":"channel","label":"Canal","type":"text"},{"key":"attempts","label":"Tentativas","type":"number"},{"key":"meetings_booked","label":"Reuniões agendadas","type":"number"},{"key":"meetings_held","label":"Reuniões realizadas","type":"number"},{"key":"opportunities","label":"Oportunidades","type":"number"},{"key":"won","label":"Ganhos","type":"number"},{"key":"booked_rate","label":"Taxa de agendamento","type":"percent"},{"key":"held_rate","label":"Taxa de comparecimento","type":"percent"},{"key":"opportunity_rate","label":"Taxa de oportunidade","type":"percent"},{"key":"won_rate","label":"Taxa de ganho","type":"percent"}],"rows":[["LinkedIn",3,1,1,1,1,33.3,100.0,100.0,100.0],["E-mail",2,0,0,0,0,0,0,0,0]],"total":null}'::jsonb,
+  '{"columns":[{"key":"channel","label":"Canal","type":"text"},{"key":"attempts","label":"Tentativas","type":"number"},{"key":"meetings_booked","label":"Reuniões agendadas","type":"number"},{"key":"meetings_held","label":"Reuniões realizadas","type":"number"},{"key":"opportunities","label":"Oportunidades","type":"number"},{"key":"won","label":"Ganhos","type":"number"},{"key":"booked_rate","label":"Taxa de agendamento","type":"percent"},{"key":"held_rate","label":"Taxa de comparecimento","type":"percent"},{"key":"opportunity_rate","label":"Taxa de oportunidade","type":"percent"},{"key":"won_rate","label":"Taxa de ganho","type":"percent"}],"rows":[["LinkedIn",3,1,1,1,1,33.3,100.0,100.0,100.0],["E-mail",2,0,0,0,0,0,0,0,0]],"total":null,"truncated":false}'::jsonb,
   'channel_funnel: LinkedIn 3/1/1/1/1 e e-mail 2/0/0/0/0 com taxas 0');
 select is(run_report_self(pg_temp.p('channel_funnel', '{}', '[]',
   '{"from":"2026-03-11","to":"2026-03-31"}'), pg_temp.a())->'rows',
@@ -129,23 +129,23 @@ select is(run_report_self(pg_temp.p('channel_funnel', '{}',
 
 -- 2. sucesso por canal ---------------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('channel_success'), pg_temp.a()),
-  '{"columns":[{"key":"channel","label":"Canal","type":"text"},{"key":"done","label":"Concluídas","type":"number"},{"key":"success","label":"Sucesso","type":"number"},{"key":"neutral","label":"Neutro","type":"number"},{"key":"failure","label":"Fracasso","type":"number"},{"key":"no_outcome","label":"Sem resultado","type":"number"},{"key":"success_rate","label":"Taxa de sucesso","type":"percent"}],"rows":[["LinkedIn",4,1,0,2,1,25.0],["E-mail",2,0,1,1,0,0]],"total":null}'::jsonb,
+  '{"columns":[{"key":"channel","label":"Canal","type":"text"},{"key":"done","label":"Concluídas","type":"number"},{"key":"success","label":"Sucesso","type":"number"},{"key":"neutral","label":"Neutro","type":"number"},{"key":"failure","label":"Fracasso","type":"number"},{"key":"no_outcome","label":"Sem resultado","type":"number"},{"key":"success_rate","label":"Taxa de sucesso","type":"percent"}],"rows":[["LinkedIn",4,1,0,2,1,25.0],["E-mail",2,0,1,1,0,0]],"total":null,"truncated":false}'::jsonb,
   'channel_success conta por classificação');
 
 -- 3. influência na conversão ---------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('conversion_influence'), pg_temp.a()),
-  '{"columns":[{"key":"channel","label":"Canal","type":"text"},{"key":"conversions","label":"Leads convertidos","type":"number"},{"key":"stage_advances","label":"Avanços de etapa","type":"number"},{"key":"wins","label":"Ganhos","type":"number"}],"rows":[["LinkedIn",1,1,1]],"total":null}'::jsonb,
+  '{"columns":[{"key":"channel","label":"Canal","type":"text"},{"key":"conversions","label":"Leads convertidos","type":"number"},{"key":"stage_advances","label":"Avanços de etapa","type":"number"},{"key":"wins","label":"Ganhos","type":"number"}],"rows":[["LinkedIn",1,1,1]],"total":null,"truncated":false}'::jsonb,
   'conversion_influence credita LinkedIn na conversão, no avanço e no ganho');
 
 -- 4. conversão por etapa -------------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('stage_conversion', '{"pipeline":"00000000-0000-4000-8000-000000000401"}', '[]',
   '{"from":"2026-01-01","to":"2026-12-31"}'), pg_temp.a()),
-  '{"columns":[{"key":"stage","label":"Etapa","type":"text"},{"key":"entered","label":"Entraram","type":"number"},{"key":"advanced","label":"Avançaram","type":"number"},{"key":"rate","label":"Taxa de conversão","type":"percent"}],"rows":[["tst-e1",4,2,50.0],["tst-e2",2,1,50.0],["tst-e3",0,0,0]],"total":null}'::jsonb,
+  '{"columns":[{"key":"stage","label":"Etapa","type":"text"},{"key":"entered","label":"Entraram","type":"number"},{"key":"advanced","label":"Avançaram","type":"number"},{"key":"rate","label":"Taxa de conversão","type":"percent"}],"rows":[["tst-e1",4,2,50.0],["tst-e2",2,1,50.0],["tst-e3",0,0,0]],"total":null,"truncated":false}'::jsonb,
   'stage_conversion dá as contagens por etapa (ganho conta como saída)');
 select is(run_report_self(pg_temp.p('stage_conversion',
   '{"pipeline":"00000000-0000-4000-8000-000000000401","group_by":"owner"}', '[]',
   '{"from":"2026-01-01","to":"2026-12-31"}'), pg_temp.a()),
-  '{"columns":[{"key":"owner","label":"Responsável","type":"text"},{"key":"stage","label":"Etapa","type":"text"},{"key":"entered","label":"Entraram","type":"number"},{"key":"advanced","label":"Avançaram","type":"number"},{"key":"rate","label":"Taxa de conversão","type":"percent"}],"rows":[["tst-gestor","tst-e1",2,2,100.0],["tst-gestor","tst-e2",2,1,50.0],["tst-vend","tst-e1",2,0,0]],"total":null}'::jsonb,
+  '{"columns":[{"key":"owner","label":"Responsável","type":"text"},{"key":"stage","label":"Etapa","type":"text"},{"key":"entered","label":"Entraram","type":"number"},{"key":"advanced","label":"Avançaram","type":"number"},{"key":"rate","label":"Taxa de conversão","type":"percent"}],"rows":[["tst-gestor","tst-e1",2,2,100.0],["tst-gestor","tst-e2",2,1,50.0],["tst-vend","tst-e1",2,0,0]],"total":null,"truncated":false}'::jsonb,
   'stage_conversion agrupado por owner');
 select is(run_report_self(pg_temp.p('stage_conversion',
   '{"pipeline":"00000000-0000-4000-8000-000000000401","group_by":"month"}', '[]',
@@ -155,17 +155,17 @@ select is(run_report_self(pg_temp.p('stage_conversion',
 
 -- 5. forecast ------------------------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('forecast', '{}', '[]', '{"from":"2026-03-01","to":"2026-04-30"}'), pg_temp.a()),
-  '{"columns":[{"key":"month","label":"Mês","type":"month"},{"key":"open_count","label":"Previstos","type":"number"},{"key":"open_value","label":"Valor previsto","type":"currency"},{"key":"won_count","label":"Ganhos","type":"number"},{"key":"won_value","label":"Valor realizado","type":"currency"}],"rows":[["2026-03-01",0,0,1,2200],["2026-04-01",2,1400,0,0]],"total":null}'::jsonb,
+  '{"columns":[{"key":"month","label":"Mês","type":"month"},{"key":"open_count","label":"Previstos","type":"number"},{"key":"open_value","label":"Valor previsto","type":"currency"},{"key":"won_count","label":"Ganhos","type":"number"},{"key":"won_value","label":"Valor realizado","type":"currency"}],"rows":[["2026-03-01",0,0,1,2200],["2026-04-01",2,1400,0,0]],"total":null,"truncated":false}'::jsonb,
   'forecast dá o previsto (contrato ou estimado) e o realizado no mês');
 
 -- 6. receita mês a mês ---------------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('revenue_monthly', '{}', '[]', '{"from":"2026-03-01","to":"2026-04-30"}'), pg_temp.a()),
-  '{"columns":[{"key":"month","label":"Mês","type":"month"},{"key":"setup_contracted","label":"Setup contratado","type":"currency"},{"key":"mrr_contracted","label":"MRR contratado","type":"currency"},{"key":"setup_forecast","label":"Setup previsto","type":"currency"},{"key":"mrr_forecast","label":"MRR previsto","type":"currency"},{"key":"estimated_forecast","label":"Estimado previsto (sem cronograma)","type":"currency"}],"rows":[["2026-03-01",1000,0,0,0,0],["2026-04-01",0,100,200,0,100]],"total":null}'::jsonb,
+  '{"columns":[{"key":"month","label":"Mês","type":"month"},{"key":"setup_contracted","label":"Setup contratado","type":"currency"},{"key":"mrr_contracted","label":"MRR contratado","type":"currency"},{"key":"setup_forecast","label":"Setup previsto","type":"currency"},{"key":"mrr_forecast","label":"MRR previsto","type":"currency"},{"key":"estimated_forecast","label":"Estimado previsto (sem cronograma)","type":"currency"}],"rows":[["2026-03-01",1000,0,0,0,0],["2026-04-01",0,100,200,0,100]],"total":null,"truncated":false}'::jsonb,
   'revenue_monthly: Setup e MRR contratados, previsto ponderado por 0.5 e estimado por 0.1');
 
 -- 7. visão do funil ------------------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('pipeline_overview', '{}', pg_temp.pf(), null), pg_temp.a()),
-  '{"columns":[{"key":"pipeline","label":"Funil","type":"text"},{"key":"stage","label":"Etapa","type":"text"},{"key":"count","label":"Quantidade","type":"number"},{"key":"value","label":"Valor","type":"currency"}],"rows":[["tst-funil","tst-e1",1,1000],["tst-funil","tst-e2",1,400],["tst-funil","tst-e3",0,0]],"total":null}'::jsonb,
+  '{"columns":[{"key":"pipeline","label":"Funil","type":"text"},{"key":"stage","label":"Etapa","type":"text"},{"key":"count","label":"Quantidade","type":"number"},{"key":"value","label":"Valor","type":"currency"}],"rows":[["tst-funil","tst-e1",1,1000],["tst-funil","tst-e2",1,400],["tst-funil","tst-e3",0,0]],"total":null,"truncated":false}'::jsonb,
   'pipeline_overview dá os totais dos abertos por etapa');
 select is(jsonb_array_length(run_report_self(pg_temp.p('pipeline_overview', '{}', '[]', null), pg_temp.a())->'rows'),
   8, 'pipeline_overview sem filtro lista as etapas de todos os funis');
@@ -182,12 +182,12 @@ select is(jsonb_path_query_array(run_report_self(pg_temp.p('aging', '{}', pg_tem
 
 -- 9. atividades por usuário ----------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('activities_by_user'), pg_temp.a()),
-  '{"columns":[{"key":"owner","label":"Responsável","type":"text"},{"key":"done","label":"Concluídas","type":"number"},{"key":"overdue","label":"Atrasadas","type":"number"},{"key":"open","label":"Abertas","type":"number"}],"rows":[["tst-gestor",6,1,1],["tst-vend",0,0,1]],"total":null}'::jsonb,
+  '{"columns":[{"key":"owner","label":"Responsável","type":"text"},{"key":"done","label":"Concluídas","type":"number"},{"key":"overdue","label":"Atrasadas","type":"number"},{"key":"open","label":"Abertas","type":"number"}],"rows":[["tst-gestor",6,1,1],["tst-vend",0,0,1]],"total":null,"truncated":false}'::jsonb,
   'activities_by_user conta concluídas, atrasadas e abertas');
 
 -- 10. motivos de perda ---------------------------------------------------------------------------
 select is(run_report_self(pg_temp.p('lost_reasons'), pg_temp.a()),
-  '{"columns":[{"key":"lost_reason","label":"Motivo de perda","type":"text"},{"key":"count","label":"Quantidade","type":"number"},{"key":"value","label":"Valor","type":"currency"}],"rows":[["tst-preco",1,300]],"total":null}'::jsonb,
+  '{"columns":[{"key":"lost_reason","label":"Motivo de perda","type":"text"},{"key":"count","label":"Quantidade","type":"number"},{"key":"value","label":"Valor","type":"currency"}],"rows":[["tst-preco",1,300]],"total":null,"truncated":false}'::jsonb,
   'lost_reasons dá a contagem e o valor');
 select is(run_report_self(pg_temp.p('lost_reasons', '{}',
   '[{"field":"team","op":"in","value":["00000000-0000-4000-8000-000000000031"]}]'), pg_temp.a())->'rows',
@@ -234,6 +234,70 @@ select throws_ok($$ select run_report_self(pg_temp.p('forecast', '{}', '[]',
 select throws_ok($$ select run_report_self(pg_temp.p('forecast', '{}', '[]',
   '{"from":"2026-03-31","to":"2026-03-01"}'), pg_temp.a()) $$,
   'P0001', 'OXYN_INVALID_REPORT', 'período invertido');
+
+-- 13. correções da revisão --------------------------------------------------------------------------
+select pg_temp.as_pg();
+-- aberto sem data de fechamento esperada
+insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, estimated_value) values
+  (pg_temp.u(206), pg_temp.u(1), pg_temp.u(11), 'tst-d6', pg_temp.u(401), pg_temp.u(501), 50);
+select pg_temp.as_user(pg_temp.u(11));
+select is(run_report_self(pg_temp.p('forecast', '{}', '[]', null), pg_temp.a())->'rows',
+  '[["2026-03-01",0,0,1,2200],["2026-04-01",2,1400,0,0]]'::jsonb,
+  'forecast sem período ignora abertos sem expected_close_date');
+
+-- L3 do gestor convertido em D5 (ganho). Reunião realizada do vendedor no lead (WhatsApp) e reunião do
+-- gestor criada no negócio depois da conversão, sem lead_id (origem Telefone).
+select pg_temp.as_pg();
+insert into leads (id, company_id, owner_id, title, created_at) values
+  (pg_temp.u(103), pg_temp.u(1), pg_temp.u(11), 'tst-l3', '2026-03-01 09:00-03');
+alter table deals disable trigger deals_status_fields;
+insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, status, won_at, lead_id, estimated_value) values
+  (pg_temp.u(205), pg_temp.u(1), pg_temp.u(11), 'tst-d5', pg_temp.u(401), pg_temp.u(502), 'won', '2026-03-22 12:00-03',
+   pg_temp.u(103), 500);
+alter table deals enable trigger deals_status_fields;
+select set_config('oxyn.converting', 'on', true);
+update leads set status = 'converted', converted_at = '2026-03-21 10:00-03', converted_deal_id = pg_temp.u(205)
+ where id = pg_temp.u(103);
+select set_config('oxyn.converting', 'off', true);
+insert into activities (id, company_id, owner_id, created_by, type_id, channel_id, subject, due_at, done, completed_at,
+  meeting_outcome, origin_channel_id, lead_id, deal_id)
+select pg_temp.u(n), pg_temp.u(1), o, o,
+  (select id from activity_types where company_id = pg_temp.u(1) and name = 'Reunião'),
+  (select id from activity_channels where company_id = pg_temp.u(1) and name = ch),
+  'tst-ativ-' || n, c, true, c, 'held',
+  (select id from activity_channels where company_id = pg_temp.u(1) and name = och), ld, pg_temp.u(205)
+from (values
+  (311, pg_temp.u(13), 'WhatsApp', '2026-03-18 10:00-03'::timestamptz, 'WhatsApp', pg_temp.u(103)),
+  (312, pg_temp.u(11), 'Videochamada', '2026-03-23 10:00-03', 'Telefone', null)
+) v(n, o, ch, c, och, ld);
+
+select pg_temp.as_user(pg_temp.u(13));
+select is(run_report_self(pg_temp.p('channel_funnel'), pg_temp.a())->'rows',
+  '[["WhatsApp",0,0,1,0,0,0,0,0,0]]'::jsonb,
+  'vendedor own vê a própria reunião, mas 0 oportunidades e 0 ganhos no lead e no negócio do gestor');
+select is(run_report_self(pg_temp.p('conversion_influence'), pg_temp.a())->'rows', '[]'::jsonb,
+  'conversion_influence não conta conversão nem ganho de registros que o vendedor não vê');
+
+select pg_temp.as_user(pg_temp.u(11));
+select is(run_report_self(pg_temp.p('channel_funnel'), pg_temp.a())->'rows',
+  '[["LinkedIn",3,1,1,1,1,33.3,100.0,100.0,100.0],["E-mail",2,0,0,0,0,0,0,0,0],["Telefone",0,0,1,1,1,0,0,100.0,100.0],["WhatsApp",0,0,1,1,1,0,0,100.0,100.0]]'::jsonb,
+  'reunião no negócio sem lead_id conta para o lead do negócio; crédito por canal');
+
+-- truncamento: 505 leads abertos com meses de criação distintos
+select pg_temp.as_pg();
+insert into leads (company_id, owner_id, title, created_at)
+select pg_temp.u(1), pg_temp.u(11), 'tst-massa-' || i, '1980-01-15 12:00-03'::timestamptz + make_interval(months => i)
+from generate_series(1, 505) i;
+select pg_temp.as_user(pg_temp.u(11));
+select is(run_report_self(pg_temp.p('aging', '{}', '[]', null), pg_temp.a())->'truncated', 'true'::jsonb,
+  'preset cortado no limite marca truncated');
+select is(jsonb_array_length(run_report_self(pg_temp.p('aging', '{}', '[]', null), pg_temp.a())->'rows'), 500,
+  'preset cortado devolve 500 linhas');
+select is(run_report_self('{"kind":"custom","base":"leads","metric":{"op":"count"},"group_by":"month","chart":"bar"}'::jsonb,
+  pg_temp.a()) - 'rows' - 'columns', '{"total":508,"truncated":true}'::jsonb,
+  'custom cortado no limite marca truncated e mantém o total');
+select is(jsonb_array_length(run_report_self('{"kind":"custom","base":"leads","metric":{"op":"count"},"group_by":"month","chart":"bar"}'::jsonb,
+  pg_temp.a())->'rows'), 500, 'custom cortado devolve 500 linhas');
 
 select * from finish();
 rollback;

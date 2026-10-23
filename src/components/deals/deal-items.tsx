@@ -99,6 +99,8 @@ export function DealItems({
       router.refresh();
       let undoing = false;
       toast.success("Produto removido.", {
+        // Janela maior para desfazer: com o padrão de 4s o aviso some antes de quem usa teclado ou leitor de tela alcançar o botão.
+        duration: 10_000,
         action: {
           label: "Desfazer",
           onClick: async () => {

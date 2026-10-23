@@ -1,5 +1,5 @@
 begin;
-select plan(36);
+select plan(53);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -95,8 +95,11 @@ select throws_ok($$ insert into dashboard_shares (dashboard_id, user_id) values 
 select pg_temp.as_user(pg_temp.u(13));
 select is((select count(*) from dashboards where id = pg_temp.u(601)), 1::bigint, 'destinatário lê o dashboard');
 select is((select count(*) from dashboard_widgets where dashboard_id = pg_temp.u(601)), 1::bigint, 'destinatário lê os widgets');
-update dashboards set name = 'tst-hack' where id = pg_temp.u(601);
-select is((select name from dashboards where id = pg_temp.u(601)), 'tst-d1', 'destinatário não altera o dashboard');
+with x as (update dashboards set name = 'tst-hack' where id = pg_temp.u(601) returning 1)
+select is((select count(*) from x), 0::bigint, 'destinatário não altera o dashboard (0 linhas)');
+select throws_ok($$ insert into dashboard_widgets (dashboard_id, spec, title, position) values (pg_temp.u(601), '{"a":1}', 'w', 5) $$,
+  '42501', null, 'destinatário não escreve widget');
+select is((select count(*) from dashboard_share_links), 0::bigint, 'destinatário não vê links');
 select throws_ok($$ insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(601), pg_temp.u(20)) $$,
   '42501', null, 'sem share_dashboards não compartilha');
 select pg_temp.as_user(pg_temp.u(20));
@@ -126,6 +129,42 @@ select throws_ok($$ insert into goals (company_id, target_kind, metric, period, 
 select throws_ok($$ insert into goals (company_id, target_kind, metric, period, starts_on, target_value, created_by)
   values (pg_temp.u(1), 'company', 'won_value', 'week', '2026-10-27', 100, pg_temp.u(18)) $$, '23514', null, 'starts_on desalinhado (semana: terça)');
 select throws_ok($$ insert into dashboard_widgets (dashboard_id, title, position) values (pg_temp.u(601), 'w', 1) $$, '23514', null, 'widget sem report_id e sem spec');
+
+-- 7. correções da rodada 1 ----------------------------------------------------------------------
+select pg_temp.as_pg();
+insert into reports (id, company_id, owner_id, name, spec) values
+  (pg_temp.u(701), pg_temp.u(1), pg_temp.u(11), 'tst-rg', '{}'), (pg_temp.u(702), pg_temp.u(1), pg_temp.u(13), 'tst-rv', '{}');
+select pg_temp.as_user(pg_temp.u(11));
+select throws_ok($$ insert into dashboard_widgets (dashboard_id, report_id, title, position) values (pg_temp.u(601), pg_temp.u(702), 'w', 2) $$,
+  '42501', null, 'widget não aponta para relatório de outro dono');
+select lives_ok($$ insert into dashboard_widgets (id, dashboard_id, report_id, title, position) values (pg_temp.u(801), pg_temp.u(601), pg_temp.u(701), 'w', 3) $$,
+  'widget com relatório do dono');
+select throws_ok($$ update dashboard_widgets set report_id = pg_temp.u(702) where id = pg_temp.u(801) $$,
+  '42501', null, 'update de widget para relatório alheio');
+select throws_ok($$ insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(601), pg_temp.u(12)) $$,
+  '42501', null, 'destinatário sem empresa em comum');
+select throws_ok($$ insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(601), pg_temp.u(19)) $$,
+  '42501', null, 'destinatário sem membership');
+select lives_ok($$ insert into dashboard_shares (dashboard_id, user_id) values (pg_temp.u(601), pg_temp.u(18)) $$,
+  'destinatário admin geral');
+select throws_ok($$ update dashboard_share_links set token_hash = 'tst-outro' where dashboard_id = pg_temp.u(601) $$,
+  '42501', null, 'cliente não atualiza token_hash');
+select pg_temp.as_user(pg_temp.u(13));
+select lives_ok($$ insert into dashboards (id, owner_id, name) values (pg_temp.u(602), pg_temp.u(13), 'tst-d2') $$, 'vendedor cria dashboard próprio');
+select throws_ok($$ insert into dashboard_share_links (dashboard_id, token_hash, created_by) values (pg_temp.u(602), 'tst-h2', pg_temp.u(13)) $$,
+  '42501', null, 'link sem share_dashboards');
+select pg_temp.as_user(pg_temp.u(18));
+select throws_ok($$ insert into dashboards (owner_id, name) values (pg_temp.u(11), 'tst-d3') $$, '42501', null, 'admin geral não cria dashboard em nome de outro');
+select throws_ok($$ insert into reports (owner_id, name, spec) values (pg_temp.u(11), 'tst-r9', '{}') $$, '42501', null, 'admin geral não cria relatório em nome de outro');
+select pg_temp.as_pg();
+select throws_ok($$ insert into goals (company_id, target_kind, metric, period, starts_on, target_value, created_by)
+  values (pg_temp.u(1), 'user', 'won_value', 'month', '2026-10-01', 100, pg_temp.u(18)) $$, '23514', null, 'meta user sem target_user_id');
+select throws_ok($$ insert into goals (company_id, target_kind, target_user_id, target_team_id, metric, period, starts_on, target_value, created_by)
+  values (pg_temp.u(1), 'team', pg_temp.u(11), pg_temp.u(31), 'won_value', 'month', '2026-10-01', 100, pg_temp.u(18)) $$, '23514', null, 'meta team com user e team');
+select throws_ok($$ insert into goals (company_id, target_kind, metric, period, starts_on, target_value, created_by)
+  values (pg_temp.u(1), 'company', 'won_value', 'quarter', '2026-11-01', 100, pg_temp.u(18)) $$, '23514', null, 'trimestre desalinhado');
+select throws_ok($$ insert into dashboard_widgets (dashboard_id, report_id, spec, title, position) values (pg_temp.u(601), pg_temp.u(701), '{}', 'w', 9) $$,
+  '23514', null, 'widget com report_id e spec');
 
 select * from finish();
 rollback;

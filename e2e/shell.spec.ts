@@ -99,10 +99,11 @@ test("trocar empresa mantém a seção", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Naia E2E" })).toBeVisible();
 });
 
-test("itens de fases futuras ficam desabilitados", async ({ page }) => {
+test("itens de fases futuras ficam desabilitados e Relatórios fica ativo", async ({ page }) => {
   await login(page, users.one, password);
   await expect(page).toHaveURL(/inicio/);
   await expect(page.getByRole("link", { name: "Atividades" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Relatórios" })).toBeVisible();
   await expect(page.getByRole("link", { name: "E-mail" })).toHaveCount(0);
   await page.getByRole("navigation", { name: "Principal" }).getByLabel("E-mail").hover();
   await expect(page.getByRole("tooltip", { name: "Disponível em breve" })).toBeVisible();

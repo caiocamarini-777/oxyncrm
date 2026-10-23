@@ -172,6 +172,8 @@ const CUSTOM_GROUP_RE = /^custom:[a-z][a-z0-9_]{0,39}$/;
 
 /** Mesmo limite do banco. */
 export const MAX_FILTERS = 20;
+/** Limite da tela: deixa folga para os filtros de dono e equipe que o compartilhamento de dashboard acrescenta. */
+export const MAX_FILTERS_UI = 18;
 const MAX_IN_VALUES = 500;
 
 // Presets ---------------------------------------------------------------------------------------------------

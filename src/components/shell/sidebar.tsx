@@ -12,9 +12,11 @@ const base = "flex size-10 items-center justify-center rounded-lg";
 export function Sidebar({
   scopeSlug,
   isSuperAdmin,
+  canViewReports,
 }: {
   scopeSlug: string | null;
   isSuperAdmin: boolean;
+  canViewReports: boolean;
 }) {
   const pathname = usePathname();
   const items = NAV_ITEMS.filter((i) => !i.superAdminOnly || isSuperAdmin);
@@ -31,7 +33,7 @@ export function Sidebar({
       <nav aria-label="Principal" className="flex flex-col items-center gap-1">
         {items.map((item) => {
           const Icon = item.icon;
-          if (!isNavItemEnabled(item, isSuperAdmin) || (item.scoped && !scopeSlug)) {
+          if (!isNavItemEnabled(item, isSuperAdmin, canViewReports) || (item.scoped && !scopeSlug)) {
             return (
               <Tooltip key={item.key}>
                 <TooltipTrigger asChild>
@@ -45,7 +47,7 @@ export function Sidebar({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="right">
-                  {isNavItemEnabled(item, isSuperAdmin) ? "Selecione uma empresa" : "Disponível em breve"}
+                  {isNavItemEnabled(item, isSuperAdmin, canViewReports) ? "Selecione uma empresa" : "Disponível em breve"}
                 </TooltipContent>
               </Tooltip>
             );

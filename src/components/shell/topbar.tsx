@@ -13,11 +13,13 @@ export function Topbar({
   companies,
   scopeSlug,
   allowAll,
+  canViewReports,
 }: {
   profile: MenuProfile;
   companies: CompanySummary[];
   scopeSlug: string | null;
   allowAll: boolean;
+  canViewReports: boolean;
 }) {
   return (
     <header className="flex h-14 items-center gap-3 border-b bg-background px-4">
@@ -28,6 +30,7 @@ export function Topbar({
           scopeSlug={scopeSlug}
           allowAll={allowAll}
           isSuperAdmin={profile.isSuperAdmin}
+          canViewReports={canViewReports}
         />
       </div>
       <QuickCreate isSuperAdmin={profile.isSuperAdmin} />

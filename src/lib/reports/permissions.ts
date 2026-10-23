@@ -43,6 +43,22 @@ export const reportCompanyIds = cache(async (scopeSlug: string): Promise<string[
   return checks.filter((id): id is string => id !== null);
 });
 
+/** Slugs das empresas acessíveis em que o papel libera relatórios (para o menu); o admin geral vê todas. */
+export const reportCompanySlugs = cache(async (): Promise<string[]> => {
+  const [profile, companies] = await Promise.all([getCurrentProfile(), getAccessibleCompanies()]);
+  if (!profile || !profile.active) return [];
+  if (profile.isSuperAdmin) return companies.map((c) => c.slug);
+  const supabase = await createServerClient();
+  const checks = await Promise.all(
+    companies.map(async (c) => {
+      const { data, error } = await supabase.rpc("has_report_setting", { p_company: c.id, p_setting: "view_reports" });
+      if (error) fail("permissão de relatórios", error);
+      return data === true ? c.slug : null;
+    }),
+  );
+  return checks.filter((s): s is string => s !== null);
+});
+
 /**
  * Permissões da tela de relatórios no escopo. view_reports vale por empresa (no escopo "todas", basta uma);
  * criar e compartilhar dashboards valem em qualquer empresa, como as políticas do banco.

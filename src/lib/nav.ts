@@ -10,7 +10,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export const CURRENT_PHASE = 4;
+/** Fases entregues; E-mail (fase 5) continua desativado. */
+export const DELIVERED_PHASES = [1, 2, 3, 4, 6];
 
 export type NavItem = {
   key: string;
@@ -41,7 +42,19 @@ export function navHref(item: NavItem, scopeSlug: string): string {
   return item.scoped ? `/${scopeSlug}${item.path}` : item.path;
 }
 
-export function isNavItemEnabled(item: NavItem, isSuperAdmin: boolean): boolean {
+/** Relatórios exigem view_reports (ou admin geral); o resto depende só da fase. */
+export function isNavItemEnabled(item: NavItem, isSuperAdmin: boolean, canViewReports = false): boolean {
   if (item.superAdminOnly && !isSuperAdmin) return false;
-  return item.availableFromPhase <= CURRENT_PHASE;
+  if (item.key === "relatorios" && !isSuperAdmin && !canViewReports) return false;
+  return DELIVERED_PHASES.includes(item.availableFromPhase);
+}
+
+/** view_reports no escopo: na empresa escolhida, ou em qualquer uma no escopo "todas". */
+export function scopeCanViewReports(
+  scopeSlug: string | null,
+  allSlug: string,
+  reportSlugs: string[],
+): boolean {
+  if (!scopeSlug) return false;
+  return scopeSlug === allSlug ? reportSlugs.length > 0 : reportSlugs.includes(scopeSlug);
 }

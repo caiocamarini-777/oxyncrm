@@ -28,11 +28,13 @@ export function CommandPalette({
   scopeSlug,
   allowAll,
   isSuperAdmin,
+  canViewReports,
 }: {
   companies: CompanySummary[];
   scopeSlug: string | null;
   allowAll: boolean;
   isSuperAdmin: boolean;
+  canViewReports: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -79,7 +81,7 @@ export function CommandPalette({
     ? [{ id: "all", name: "Todas as empresas", slug: ALL_COMPANIES_SLUG }, ...companies]
     : companies;
   const pages = [...NAV_ITEMS, ...PALETTE_EXTRA_ITEMS].filter(
-    (i) => isNavItemEnabled(i, isSuperAdmin) && (!i.scoped || scopeSlug),
+    (i) => isNavItemEnabled(i, isSuperAdmin, canViewReports) && (!i.scoped || scopeSlug),
   );
 
   return (

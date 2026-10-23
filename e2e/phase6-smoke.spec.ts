@@ -22,7 +22,6 @@ let companyId = "";
 let leadId = "";
 let emailLeadId = "";
 let dealId = "";
-let dashboardId = "";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
@@ -198,7 +197,6 @@ test("o gestor cria o dashboard com os dois widgets e gera o link público", asy
   await page.getByLabel("Nome").fill(dashName);
   await page.getByRole("button", { name: "Criar" }).click();
   await expect(page.getByRole("heading", { level: 1, name: dashName })).toBeVisible();
-  dashboardId = page.url().split("/").pop()!.split("?")[0]!;
 
   for (const name of [FUNNEL, REVENUE]) {
     await page.getByRole("button", { name: "Adicionar widget" }).click();

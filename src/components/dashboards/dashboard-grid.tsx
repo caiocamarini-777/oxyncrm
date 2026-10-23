@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import type { Spans } from "@/lib/dashboards/layout";
+import { SaveQueue } from "@/lib/dashboards/save-queue";
 import { removeWidget, updateWidgetLayout } from "@/lib/reports/actions";
 import { WidgetCard } from "./widget-card";
 
@@ -106,7 +107,7 @@ export function DashboardGrid({
   const [layout, setLayout] = useState<Slot[]>(() => toSlots(items));
   // Salvamentos em andamento: enquanto houver, a resposta do servidor é parcial e não substitui o layout local.
   const [saving, setSaving] = useState(0);
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const [queue] = useState(() => new SaveQueue());
   const latest = useRef(items);
   useEffect(() => {
     latest.current = items;
@@ -125,26 +126,24 @@ export function DashboardGrid({
   const title = (id: string | number) => byId.get(String(id))?.title ?? "";
   const visible = layout.filter((s) => byId.has(s.id));
 
-  // Salvamentos em fila: cada um espera o anterior, então chegam ao banco na ordem em que foram feitos.
+  // Salvamentos em fila: cada um espera o anterior (chegam ao banco na ordem) e uma falha descarta os que
+  // esperavam atrás dela, para não reenviar layouts mais velhos que o revertido.
   function persist(next: Slot[]) {
     setSaving((n) => n + 1);
-    queue.current = queue.current.then(async () => {
-      try {
+    queue.enqueue(
+      async () => {
         const res = await updateWidgetLayout(
           dashboardId,
           next.map((s, i) => ({ id: s.id, position: i, colSpan: s.colSpan, rowSpan: s.rowSpan })),
         );
-        if (!res.ok) {
-          toast.error(res.error);
-          setLayout(toSlots(latest.current)); // volta ao que o servidor tem
-        }
-      } catch {
-        toast.error("Não foi possível salvar o layout.");
-        setLayout(toSlots(latest.current));
-      } finally {
+        if (!res.ok) toast.error(res.error);
+        return res.ok;
+      },
+      (outcome) => {
+        if (outcome === "failed") setLayout(toSlots(latest.current)); // volta ao que o servidor tem
         setSaving((n) => n - 1);
-      }
-    });
+      },
+    );
   }
 
   function onDragEnd(e: DragEndEvent) {

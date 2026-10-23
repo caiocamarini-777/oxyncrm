@@ -68,19 +68,22 @@ export function resolveDashboardFilters(
   const period = urlPeriod ?? defaults.period ?? null;
   if (period) out.period = period;
 
+  // Lista presente é filtro, mesmo vazia: chave ausente = sem filtro, `[]` = nada. Ids inválidos do padrão saem;
+  // se nada válido sobrar, fica `[]` (nunca "sem filtro").
+  const clean = (v: string[] | null | undefined): string[] | undefined =>
+    v === undefined || v === null ? undefined : [...new Set((Array.isArray(v) ? v : []).filter(isUuid))];
+
   const slug = params.empresa;
   const urlCompany = companyBySlug && slug ? companyBySlug.get(slug) : undefined;
-  if (urlCompany) out.company = [urlCompany];
-  else if (defaults.company && defaults.company.length > 0) out.company = defaults.company.filter(isUuid);
-  if (out.company && out.company.length === 0) delete out.company;
+  let company = urlCompany ? [urlCompany] : clean(defaults.company);
   if (scopeCompanyId) {
-    // Escopo de uma empresa: o filtro nunca amplia. A interseção com o padrão do dashboard é a própria empresa
-    // do escopo (ou vazia, e lista vazia seria omitida e liberaria tudo), então vale sempre só ela.
-    out.company = [scopeCompanyId];
+    // Escopo de uma empresa: o filtro só restringe. Interseção com o padrão do dashboard; vazia vira `[]`.
+    company = company === undefined ? [scopeCompanyId] : company.filter((c) => c === scopeCompanyId);
   }
+  if (company !== undefined) out.company = company;
   for (const key of ["owner", "team"] as const) {
-    const ids = (defaults[key] ?? []).filter(isUuid);
-    if (ids.length > 0) out[key] = ids;
+    const ids = clean(defaults[key]);
+    if (ids !== undefined) out[key] = ids;
   }
   return out;
 }

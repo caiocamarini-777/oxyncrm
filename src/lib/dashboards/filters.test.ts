@@ -39,9 +39,17 @@ describe("resolveDashboardFilters", () => {
   it("sem mapa de empresas (escopo de uma empresa) ignora o parâmetro empresa", () => {
     expect(resolveDashboardFilters({ empresa: "alfa" }, {}, null)).toEqual({});
   });
-  it("escopo de uma empresa força o filtro de empresa, mesmo com padrão de outra", () => {
+  it("escopo de uma empresa intersecta com o padrão; interseção vazia vira lista vazia", () => {
     expect(resolveDashboardFilters({}, {}, null, C1)).toEqual({ company: [C1] });
-    expect(resolveDashboardFilters({ empresa: "alfa" }, { company: [C2] }, null, C1)).toEqual({ company: [C1] });
     expect(resolveDashboardFilters({}, { company: [C1, C2] }, null, C1)).toEqual({ company: [C1] });
+    expect(resolveDashboardFilters({ empresa: "alfa" }, { company: [C2] }, null, C1)).toEqual({ company: [] });
+    expect(resolveDashboardFilters({}, { company: [C2] }, null, C1)).toEqual({ company: [] });
+  });
+  it("padrão com chave presente nunca vira sem filtro", () => {
+    expect(resolveDashboardFilters({}, { company: [] }, bySlug)).toEqual({ company: [] });
+    expect(resolveDashboardFilters({}, { owner: ["x", "y"] }, bySlug)).toEqual({ owner: [] });
+    expect(resolveDashboardFilters({}, { team: [C1, "lixo"] }, bySlug)).toEqual({ team: [C1] });
+    expect(resolveDashboardFilters({}, { company: [] }, null, C1)).toEqual({ company: [] });
+    expect(resolveDashboardFilters({}, { company: null as never }, bySlug)).toEqual({});
   });
 });

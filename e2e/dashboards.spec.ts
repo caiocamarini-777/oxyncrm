@@ -119,8 +119,8 @@ async function expectHealthyWidgets(page: Page, count: number) {
   await expect(all).toHaveCount(count);
   for (let i = 0; i < count; i++) {
     const w = all.nth(i);
-    await expect(w.getByRole("alert")).toHaveCount(0);
     await expect(w.getByRole("status")).toHaveCount(0); // carregamento terminou
+    await expect(w.getByRole("alert")).toHaveCount(0);
     await expect.poll(async () => (await w.locator("div.overflow-auto").first().innerText()).trim().length).toBeGreaterThan(0);
   }
 }
@@ -233,11 +233,12 @@ test("o período global recalcula o widget e a URL inválida não quebra", async
   await expect(widget(page, reportName).getByRole("img")).toContainText("3");
   await filters.getByLabel("Empresa").selectOption({ label: `Dashboards E2E B ${stamp}` });
   await expect(page).toHaveURL(new RegExp(`empresa=${slug2}`));
-  await expect(widget(page, reportName).getByRole("img")).toContainText("2");
+  // O relatório salvo é da empresa A: na B ele não conta nada (nem os 2 negócios dela).
+  await expect(widget(page, reportName).getByRole("img")).toContainText("0");
 
-  // Segunda empresa no escopo único: lista só os dela
+  // Escopo único da segunda empresa: mesma regra, e nada da A vaza.
   await page.goto(`/${slug2}/relatorios/dashboards/${dashboardId}`);
-  await expect(widget(page, reportName).getByRole("img")).toContainText("2");
+  await expect(widget(page, reportName).getByRole("img")).toContainText("0");
 });
 
 test("usuário sem create_dashboards não vê Novo dashboard", async ({ page }) => {

@@ -153,8 +153,9 @@ describe("reportSpecSchema rejeita", () => {
 
 describe("toReportResult", () => {
   it("normaliza a saída do banco", () => {
-    expect(toReportResult({ columns: [{ key: "a", label: "A", type: "text" }], rows: [["x"]], total: 3, truncated: true }))
-      .toEqual({ columns: [{ key: "a", label: "A", type: "text" }], rows: [["x"]], total: 3, truncated: true });
-    expect(toReportResult(null)).toEqual({ columns: [], rows: [], total: null, truncated: false });
+    expect(toReportResult({ columns: [{ key: "a", label: "A", type: "text" }], rows: [["x"]], total: 3, truncated: true, chart: "pie" }))
+      .toEqual({ columns: [{ key: "a", label: "A", type: "text" }], rows: [["x"]], total: 3, truncated: true, chart: "pie" });
+    expect(toReportResult(null)).toEqual({ columns: [], rows: [], total: null, truncated: false, chart: null });
+    expect(toReportResult({ chart: "radar" }).chart).toBeNull();
   });
 });

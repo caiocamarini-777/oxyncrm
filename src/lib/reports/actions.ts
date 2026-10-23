@@ -228,21 +228,11 @@ export async function updateWidgetLayout(
   const parsed = layoutSchema.safeParse(items);
   if (!parsed.success) return INVALID;
   const supabase = await createServerClient();
-  const results = await Promise.all(
-    parsed.data.map((i) =>
-      supabase
-        .from("dashboard_widgets")
-        .update({ position: i.position, col_span: i.colSpan, row_span: i.rowSpan })
-        .eq("id", i.id)
-        .eq("dashboard_id", dashboardId)
-        .select("id"),
-    ),
-  );
-  const failed = results.find((r) => r.error);
-  if (failed?.error) return { ok: false, error: translateDbError(failed.error) };
-  if (results.some((r) => !r.data || r.data.length === 0)) {
-    return { ok: false, error: "Registro não encontrado ou sem permissão." };
-  }
+  const { error } = await supabase.rpc("update_widget_layout", {
+    p_dashboard: dashboardId,
+    p_items: parsed.data.map((i) => ({ id: i.id, position: i.position, col_span: i.colSpan, row_span: i.rowSpan })),
+  });
+  if (error) return { ok: false, error: translateDbError(error) };
   touched();
   return { ok: true, data: undefined };
 }
@@ -313,27 +303,16 @@ export async function createShareLink(
   const profile = await actor();
   if (!profile) return { ok: false, error: NO_PERMISSION };
   const supabase = await createServerClient();
-  const { data: token, error } = await supabase.rpc("create_share_link", {
+  const { data, error } = await supabase.rpc("create_share_link", {
     p_dashboard: dashboardId,
     p_expires_at: exp.data ?? null,
   });
-  if (error || typeof token !== "string") {
+  const created = data as { id?: string; token?: string } | null;
+  if (error || !created?.id || !created.token) {
     return { ok: false, error: error ? translateDbError(error) : "Não foi possível concluir. Tente novamente." };
   }
-  // A RPC devolve só o token; o id é o do link mais recente criado por mim neste dashboard.
-  const { data: link, error: linkError } = await supabase
-    .from("dashboard_share_links")
-    .select("id")
-    .eq("dashboard_id", dashboardId)
-    .eq("created_by", profile.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (linkError || !link) {
-    return { ok: false, error: "Link criado, mas não foi possível carregá-lo. Atualize a página." };
-  }
   touched();
-  return { ok: true, data: { url: shareUrl(siteEnv ?? "http://localhost:3000", token), linkId: link.id } };
+  return { ok: true, data: { url: shareUrl(siteEnv ?? "http://localhost:3000", created.token), linkId: created.id } };
 }
 
 export async function revokeShareLink(linkId: string): Promise<ActionResult> {

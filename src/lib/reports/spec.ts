@@ -370,6 +370,8 @@ export type ReportResult = {
   rows: unknown[][];
   total: number | null;
   truncated: boolean;
+  /** Gráfico efetivo do widget (run_widget); null em run_report e em preset sem gráfico na spec. */
+  chart: Chart | null;
 };
 
 /** Normaliza a saída crua do banco (campos ausentes viram valores seguros). */
@@ -380,5 +382,6 @@ export function toReportResult(raw: unknown): ReportResult {
     rows: Array.isArray(r.rows) ? r.rows : [],
     total: typeof r.total === "number" ? r.total : null,
     truncated: r.truncated === true,
+    chart: CHARTS.includes(r.chart as Chart) ? (r.chart as Chart) : null,
   };
 }

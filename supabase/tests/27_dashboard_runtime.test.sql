@@ -135,7 +135,7 @@ select throws_ok($$ select run_widget('00000000-0000-4000-8000-000000009999', '{
 -- 2. restrict_filters --------------------------------------------------------------------------------
 select pg_temp.as_user(pg_temp.u(11));
 select is(run_widget(pg_temp.u(701), '{"company":["00000000-0000-4000-8000-000000000002"]}'),
-  '{"columns":[{"key":"value","label":"Quantidade","type":"number"}],"rows":[[0]],"total":0,"truncated":false}'::jsonb,
+  '{"columns":[{"key":"value","label":"Quantidade","type":"number"}],"rows":[[0]],"total":0,"truncated":false,"chart":"number"}'::jsonb,
   'empresa que o dono não acessa dá resultado vazio');
 select is(run_widget(pg_temp.u(701), '{"company":["00000000-0000-4000-8000-000000000001","00000000-0000-4000-8000-000000000002"]}')->'total',
   '4'::jsonb, 'filtro de empresa é recortado às empresas do dono');
@@ -187,8 +187,8 @@ select pg_temp.as_user(pg_temp.u(11));
 select throws_ok($$ select create_share_link(pg_temp.u(603), null) $$, 'P0001', 'OXYN_FORBIDDEN', 'só o dono cria link');
 select throws_ok($$ select create_share_link(pg_temp.u(601), now() - interval '1 day') $$, 'P0001', 'OXYN_INVALID_INPUT',
   'validade no passado');
-insert into tok values (1, create_share_link(pg_temp.u(601), null)), (2, create_share_link(pg_temp.u(601), now() + interval '7 days')),
-  (3, create_share_link(pg_temp.u(601), null));
+insert into tok values (1, create_share_link(pg_temp.u(601), null)->>'token'),
+  (2, create_share_link(pg_temp.u(601), now() + interval '7 days')->>'token'), (3, create_share_link(pg_temp.u(601), null)->>'token');
 select ok((select token ~ '^[A-Za-z0-9_-]{43}$' from tok where n = 1), 'token em base64url de 32 bytes');
 
 select pg_temp.as_pg();

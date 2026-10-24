@@ -37,6 +37,7 @@ describe("translateDbError", () => {
     ["OXYN_NEXT_ACTIVITY_REQUIRED", "Agende a próxima atividade para concluir."],
     ["OXYN_LINK_FORBIDDEN", "Você não tem acesso a um dos registros vinculados."],
     ["OXYN_INVALID_INPUT", "Dados inválidos. Confira os campos e tente novamente."],
+    ["OXYN_INVALID_REPORT", "Relatório inválido. Revise os campos escolhidos."],
     ["OXYN_FORBIDDEN", "Você não tem permissão para esta ação."],
   ])("%s", (code, text) => expect(translateDbError({ message: `x ${code}` })).toBe(text));
   it("genérico", () =>

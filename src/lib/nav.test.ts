@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_PHASE, NAV_ITEMS, PALETTE_EXTRA_ITEMS, isNavItemEnabled, navHref } from "./nav";
+import {
+  DELIVERED_PHASES,
+  NAV_ITEMS,
+  PALETTE_EXTRA_ITEMS,
+  isNavItemEnabled,
+  navHref,
+  reportsSharedOnly,
+  scopeCanViewReports,
+} from "./nav";
 
 const get = (key: string) => NAV_ITEMS.find((i) => i.key === key)!;
 
 describe("nav", () => {
-  it("fase atual é 4", () => expect(CURRENT_PHASE).toBe(4));
+  it("fases entregues pulam a 5", () => expect(DELIVERED_PHASES).toEqual([1, 2, 3, 4, 6]));
   it("itens de fases futuras ficam desabilitados", () => {
     expect(isNavItemEnabled(get("email"), true)).toBe(false);
   });
@@ -13,6 +21,31 @@ describe("nav", () => {
     expect(isNavItemEnabled(get("atividades"), false)).toBe(true);
     expect(isNavItemEnabled(get("leads"), false)).toBe(true);
     expect(isNavItemEnabled(get("contatos"), false)).toBe(true);
+  });
+  it("relatórios exigem view_reports, dashboards compartilhados ou admin geral", () => {
+    const none = { canViewReports: false, hasSharedDashboards: false };
+    expect(isNavItemEnabled(get("relatorios"), false)).toBe(false);
+    expect(isNavItemEnabled(get("relatorios"), false, none)).toBe(false);
+    expect(isNavItemEnabled(get("relatorios"), false, { canViewReports: true, hasSharedDashboards: false })).toBe(true);
+    expect(isNavItemEnabled(get("relatorios"), false, { canViewReports: false, hasSharedDashboards: true })).toBe(true);
+    expect(isNavItemEnabled(get("relatorios"), true, none)).toBe(true);
+  });
+  it("sem view_reports e com compartilhados, relatórios leva aos dashboards", () => {
+    const shared = { canViewReports: false, hasSharedDashboards: true };
+    expect(reportsSharedOnly(false, shared)).toBe(true);
+    expect(reportsSharedOnly(true, shared)).toBe(false);
+    expect(reportsSharedOnly(false, { canViewReports: true, hasSharedDashboards: true })).toBe(false);
+    expect(reportsSharedOnly(false, { canViewReports: false, hasSharedDashboards: false })).toBe(false);
+    expect(navHref(get("relatorios"), "volt", true)).toBe("/volt/relatorios/dashboards");
+    expect(navHref(get("relatorios"), "volt", false)).toBe("/volt/relatorios");
+    expect(navHref(get("leads"), "volt", true)).toBe("/volt/leads");
+  });
+  it("view_reports no escopo todas vale se alguma empresa libera", () => {
+    expect(scopeCanViewReports("todas", "todas", ["volt"])).toBe(true);
+    expect(scopeCanViewReports("todas", "todas", [])).toBe(false);
+    expect(scopeCanViewReports("naia", "todas", ["volt"])).toBe(false);
+    expect(scopeCanViewReports("volt", "todas", ["volt"])).toBe(true);
+    expect(scopeCanViewReports(null, "todas", ["volt"])).toBe(false);
   });
   it("configurações só para admin geral", () => {
     expect(isNavItemEnabled(get("configuracoes"), false)).toBe(false);

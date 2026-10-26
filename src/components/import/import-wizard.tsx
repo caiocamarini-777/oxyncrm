@@ -537,10 +537,17 @@ export function ImportWizard({
           {simulation && (
             <div data-testid="simulation" className="flex flex-col gap-3 rounded-md border p-3">
               <p className="font-medium">
-                {simulation.status === "done"
-                  ? "Simulação concluída"
-                  : `Simulação terminou com status: ${STATUS_LABELS[simulation.status] ?? simulation.status}`}
+                {simulation.partial
+                  ? simulation.message
+                  : simulation.status === "done"
+                    ? "Simulação concluída"
+                    : `Simulação terminou com status: ${STATUS_LABELS[simulation.status] ?? simulation.status}`}
               </p>
+              {simulation.partial && (
+                <p className="text-sm text-muted-foreground">
+                  A simulação tem um limite de tempo; os números abaixo cobrem só o que foi lido até aqui.
+                </p>
+              )}
               <CountersTable counters={simulation.counters} />
               <LogList
                 items={simulation.logs}

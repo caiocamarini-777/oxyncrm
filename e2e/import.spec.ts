@@ -13,6 +13,8 @@ const stamp = Date.now();
 const password = "senha-teste-123";
 const adminEmail = `tst-e2e-import-admin-${stamp}@oxyn.test`;
 const sellerEmail = `tst-e2e-import-vendedor-${stamp}@oxyn.test`;
+const outsiderEmail = `tst-e2e-import-semacesso-${stamp}@oxyn.test`;
+const outsiderName = `Sem Acesso ${stamp}`;
 const fakeToken = `token-falso-${stamp}`;
 const port = Number(process.env.E2E_IMPORT_PORT ?? 3101);
 
@@ -23,6 +25,8 @@ let fake: FakePipedrive;
 let next: TempNext;
 let adminId = "";
 let sellerId = "";
+let outsiderId = "";
+let draftJob = "";
 let betaId = "";
 let alfaId = "";
 let firstJob = "";
@@ -32,6 +36,8 @@ test.beforeAll(async () => {
   const a = admin();
   adminId = await createTestUser({ email: adminEmail, password, fullName: `Admin Importação ${stamp}`, superAdmin: true });
   sellerId = await createTestUser({ email: sellerEmail, password, fullName: `Vendedor Importação ${stamp}` });
+  // ativo, mas sem acesso a nenhuma empresa
+  outsiderId = await createTestUser({ email: outsiderEmail, password, fullName: outsiderName });
   const c = await a.from("companies").insert({ name: beta, slug: `tst-e2e-import-beta-${stamp}` }).select("id").single();
   if (c.error) throw c.error;
   betaId = c.data.id;
@@ -59,7 +65,7 @@ test.afterAll(async () => {
     alfaId = found.data?.id ?? "";
   }
   for (const id of [alfaId, betaId]) if (id) await a.from("companies").delete().eq("id", id);
-  for (const id of [adminId, sellerId]) if (id) await deleteTestUser(id).catch(() => {});
+  for (const id of [adminId, sellerId, outsiderId]) if (id) await deleteTestUser(id).catch(() => {});
 });
 
 async function newPage(browser: Browser, email = adminEmail): Promise<Page> {
@@ -248,6 +254,35 @@ test("pausar e retomar continuam de onde parou", async ({ browser }) => {
   }
 });
 
+test("dono sem acesso à empresa de destino: a importação para e lista os pares", async ({ browser }) => {
+  test.setTimeout(240_000);
+  const page = await newPage(browser);
+  await page.goto("/configuracoes/importacao");
+  await page.getByRole("button", { name: "Nova importação" }).click();
+  await page.waitForURL(/\/configuracoes\/importacao\/[0-9a-f-]{36}$/, { timeout: 60_000 });
+  draftJob = page.url().split("/").pop()!;
+  // agora a empresa e o funil Alfa existem: sugeridos pelo nome
+  await expect(page.getByLabel(`Empresa de destino de ${alfa}`)).toHaveValue(alfaId, { timeout: 60_000 });
+  await page.getByRole("button", { name: "Próximo" }).click();
+  // o vendedor do Pipedrive vai para um perfil sem acesso à empresa Beta (dona do negócio e do lead dele)
+  await page.getByLabel("Usuário do Oxyn para Vendedor Pipedrive").selectOption(outsiderId);
+  await page.getByRole("button", { name: "Próximo" }).click();
+  await page.getByRole("button", { name: "Próximo" }).click();
+  await page.getByLabel("Empresa padrão").selectOption(betaId);
+  await page.getByRole("button", { name: "Próximo" }).click();
+  await page.getByRole("button", { name: "Próximo" }).click();
+  await page.getByRole("button", { name: "Iniciar importação" }).click();
+  await expect(visible(page, "import-status")).toHaveText("Falhou", { timeout: 120_000 });
+  const pairs = visible(page, "users-check-pairs");
+  await expect(pairs.getByRole("listitem")).toHaveText([`${outsiderName} (${beta})`]);
+
+  // nada foi gravado para o vendedor; volta ao rascunho para corrigir
+  await page.getByRole("button", { name: "Revisar mapeamentos" }).click();
+  await expect(page.getByRole("group", { name: alfa })).toBeVisible({ timeout: 60_000 });
+  const job = await admin().from("import_jobs").select("status, counters").eq("id", draftJob).single();
+  expect(job.data?.status).toBe("draft");
+});
+
 test("usuário que não é admin geral recebe 404", async ({ browser }) => {
   const page = await newPage(browser, sellerEmail);
   const res = await page.goto("/configuracoes/importacao");
@@ -266,6 +301,11 @@ test("token recusado pelo Pipedrive dá mensagem clara", async ({ browser }) => 
     await page.goto("/configuracoes/importacao");
     await page.getByRole("button", { name: "Nova importação" }).click();
     await expect(page.getByRole("alert").filter({ hasText: "O Pipedrive recusou o token (401)" })).toBeVisible({ timeout: 60_000 });
+    // rascunho aberto com o token recusado: a mesma mensagem, sem erro 500
+    const draft = await page.goto(`/configuracoes/importacao/${draftJob}`);
+    expect(draft?.status()).toBe(200);
+    await expect(page.getByRole("alert").filter({ hasText: "O Pipedrive recusou o token (401)" })).toBeVisible({ timeout: 60_000 });
+    // importação concluída não depende do Pipedrive para mostrar o relatório
     await page.goto(`/configuracoes/importacao/${firstJob}`);
     await expect(visible(page, "import-status")).toHaveText("Concluída");
     expect(fake.rejected).toBeGreaterThan(rejectedBefore);

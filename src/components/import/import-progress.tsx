@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { continueImport, createImportJob, pauseImport, resumeImport, reviseImport } from "@/lib/import/actions";
+import { usersCheckPairs } from "@/lib/import/constants";
 import { STATUS_LABELS, STEP_LABELS } from "@/lib/import/wizard";
 import { CountersTable, LogList, type LogEntry } from "./import-report";
 
@@ -210,15 +211,24 @@ export function ImportProgress({ job }: { job: ProgressJob }) {
       {status === "failed" && jobErrors.length > 0 && (
         <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
           <p className="font-medium text-destructive">A importação parou.</p>
-          {jobErrors.map((e, i) => (
-            <p key={i}>{e.reason}</p>
-          ))}
-          {jobErrors.some((e) => e.reason.startsWith("Usuários sem acesso")) && (
-            <p className="text-muted-foreground">
-              Dê acesso a esses usuários nas empresas indicadas (Configurações, Usuários) ou mapeie os donos para outra pessoa, e
-              então clique em Revisar mapeamentos.
-            </p>
-          )}
+          {jobErrors.map((e, i) => {
+            const pairs = usersCheckPairs(e.reason);
+            if (!pairs) return <p key={i}>{e.reason}</p>;
+            return (
+              <div key={i} className="flex flex-col gap-1">
+                <p>Estes usuários não têm acesso ativo à empresa de destino dos registros deles:</p>
+                <ul data-testid="users-check-pairs" className="list-disc pl-5">
+                  {pairs.map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+                <p className="text-muted-foreground">
+                  Dê acesso a esses usuários nas empresas indicadas (Configurações, Usuários) ou mapeie os donos para outra
+                  pessoa, e então clique em Revisar mapeamentos.
+                </p>
+              </div>
+            );
+          })}
         </div>
       )}
 

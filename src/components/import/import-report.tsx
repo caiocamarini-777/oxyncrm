@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { LOG_LIMIT } from "@/lib/import/constants";
 import { COUNTER_KEYS, COUNTER_LABELS, ENTITY_LABELS } from "@/lib/import/wizard";
 
 type Counters = Record<string, Record<string, number>>;
@@ -60,7 +61,8 @@ export function LogList({ items, title, emptyText, testId, total }: { items: Log
   const pages = Math.max(1, Math.ceil(items.length / PAGE));
   const current = Math.min(page, pages - 1);
   const slice = items.slice(current * PAGE, current * PAGE + PAGE);
-  const hidden = (total ?? items.length) - items.length;
+  // o banco guarda até LOG_LIMIT itens; os demais só contam
+  const hidden = items.length >= LOG_LIMIT ? (total ?? items.length) - items.length : 0;
   return (
     <section className="flex flex-col gap-2" aria-label={title}>
       <h3 className="font-heading text-base font-semibold">
@@ -92,7 +94,7 @@ export function LogList({ items, title, emptyText, testId, total }: { items: Log
               </Button>
             </div>
           )}
-          {hidden > 0 && <p className="text-xs text-muted-foreground">Mais {hidden} itens não guardados no log (o limite é 1000).</p>}
+          {hidden > 0 && <p className="text-xs text-muted-foreground">Mais {hidden} itens não guardados no log (o limite é {LOG_LIMIT}).</p>}
         </>
       )}
     </section>

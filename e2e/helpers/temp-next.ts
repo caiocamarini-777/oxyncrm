@@ -1,12 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import net from "node:net";
 import path from "node:path";
 
 /**
  * Servidor Next temporário (next dev) numa cópia do projeto, com ambiente próprio. Serve para specs que precisam
- * de variáveis diferentes das do servidor de dev em :3000 (que não é tocado). A cópia fica em E2E_TMP_DIR (ou no
- * diretório temporário do sistema) e é reaproveitada entre execuções para manter o cache de compilação.
+ * de variáveis diferentes das do servidor de dev em :3000 (que não é tocado). A cópia fica em E2E_TMP_DIR (padrão:
+ * .e2e-tmp/ dentro do projeto, ignorado pelo git) e é reaproveitada entre execuções para manter o cache de compilação.
  * O .env.local copiado não leva as variáveis PIPEDRIVE_*.
  */
 export type TempNext = { url: string; pid: number; stop(): Promise<void> };
@@ -25,6 +25,7 @@ const EXCLUDES = [
   "/supabase",
   "/docs",
   "/.node_modules.lock",
+  "/.e2e-tmp",
 ];
 
 function prepareCopy(root: string, dir: string) {
@@ -55,15 +56,32 @@ function prepareCopy(root: string, dir: string) {
   writeFileSync(path.join(dir, ".env.local"), env);
 }
 
-async function waitUp(url: string, child: ChildProcess, timeoutMs: number) {
+/** true se algo já atende na porta (um servidor antigo não pode passar pelo novo). */
+function portInUse(port: number): Promise<boolean> {
+  const probe = (host: string) =>
+    new Promise<boolean>((resolve) => {
+      const socket = net.connect({ port, host });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => resolve(false));
+    });
+  return Promise.all([probe("127.0.0.1"), probe("::1")]).then((r) => r.some(Boolean));
+}
+
+/** Espera a linha "Ready" do próprio processo e depois uma resposta HTTP dele. */
+async function waitUp(url: string, child: ChildProcess, isReady: () => boolean, timeoutMs: number) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     if (child.exitCode !== null) throw new Error(`next dev terminou com código ${child.exitCode}`);
-    try {
-      const res = await fetch(`${url}/entrar`, { signal: AbortSignal.timeout(60_000) });
-      if (res.status < 500) return;
-    } catch {
-      // ainda subindo
+    if (isReady()) {
+      try {
+        const res = await fetch(`${url}/entrar`, { signal: AbortSignal.timeout(60_000) });
+        if (res.status < 500) return;
+      } catch {
+        // compilando
+      }
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
@@ -72,7 +90,10 @@ async function waitUp(url: string, child: ChildProcess, timeoutMs: number) {
 
 export async function startTempNext(opts: { name: string; port: number; env: Record<string, string> }): Promise<TempNext> {
   const root = process.cwd();
-  const dir = path.join(process.env.E2E_TMP_DIR || os.tmpdir(), `oxyn-e2e-${opts.name}`);
+  if (await portInUse(opts.port)) {
+    throw new Error(`A porta ${opts.port} já está em uso. Encerre o processo nela ou defina E2E_IMPORT_PORT.`);
+  }
+  const dir = path.join(process.env.E2E_TMP_DIR || path.join(root, ".e2e-tmp"), `oxyn-e2e-${opts.name}`);
   prepareCopy(root, dir);
   const child = spawn(process.execPath, [path.join(dir, "node_modules/next/dist/bin/next"), "dev", "--port", String(opts.port)], {
     cwd: dir,
@@ -82,8 +103,15 @@ export async function startTempNext(opts: { name: string; port: number; env: Rec
     env: { ...process.env, ...opts.env, PORT: String(opts.port), NEXT_TELEMETRY_DISABLED: "1" },
   });
   const log: string[] = [];
-  child.stdout?.on("data", (d) => log.push(String(d)));
-  child.stderr?.on("data", (d) => log.push(String(d)));
+  let ready = false;
+  child.stdout?.on("data", (d) => {
+    const text = String(d);
+    if (/\bReady in\b/.test(text)) ready = true;
+    if (log.length < 2000) log.push(text);
+  });
+  child.stderr?.on("data", (d) => {
+    if (log.length < 2000) log.push(String(d));
+  });
   const url = `http://localhost:${opts.port}`;
   const stop = async () => {
     if (child.exitCode !== null || !child.pid) return;
@@ -104,7 +132,7 @@ export async function startTempNext(opts: { name: string; port: number; env: Rec
     clearTimeout(timer);
   };
   try {
-    await waitUp(url, child, 180_000);
+    await waitUp(url, child, () => ready, 180_000);
   } catch (e) {
     await stop();
     throw new Error(`${(e as Error).message}\n${log.join("").slice(-3000)}`);

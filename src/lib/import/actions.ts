@@ -8,20 +8,17 @@ import type { ActionResult } from "@/lib/db-errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
-import { createDryRunStore, runImportSlice, runImportToEnd, type LogItem } from "./engine";
-import { loadDiscovery, PIPEDRIVE_MESSAGES, pipedriveFromEnv } from "./discovery";
+import { SIMULATION_TOTAL_MS, SLICE_BUDGET_MS, continueJob, simulateUntil, type ContinueResult } from "./continue";
+import { createDryRunStore, runImportSlice, type LogItem } from "./engine";
+import { loadDiscovery, PIPEDRIVE_MESSAGES, pipedriveErrorMessage, pipedriveFromEnv } from "./discovery";
 import { loadOxynData } from "./queries";
 import { createSupabaseStore } from "./store";
 import { DraftMappings, suggestDraft, toMappings, validateDraft } from "./wizard";
 
 const PATH = "/configuracoes/importacao";
-/** Orçamento de cada fatia chamada pela tela de progresso. */
-const SLICE_BUDGET_MS = 10_000;
 
 type Counters = Record<string, Record<string, number>>;
-export type ContinueResult =
-  | { ok: true; status: string; step: string; counters: Counters; done: boolean; busy: boolean }
-  | { ok: false; error: string };
+export type { ContinueResult };
 
 const NOT_FOUND = { ok: false as const, error: "Importação não encontrada." };
 
@@ -126,24 +123,35 @@ export async function startImport(jobId: string): Promise<ActionResult> {
   return { ok: true, data: undefined };
 }
 
-/** Roda uma fatia (~10s) com o cliente admin. busy = outra fatia está com a concessão do job. */
+/**
+ * Roda uma fatia (~10s mais uma unidade) com o cliente admin, só com o job em running. Pausado, concluído ou com
+ * falha: devolve o estado atual. Rascunho: erro. busy = outra fatia está com a concessão do job.
+ */
 export async function continueImport(jobId: string): Promise<ContinueResult> {
   await requireSuperAdmin();
-  if (!(await jobStatus(jobId))) return NOT_FOUND;
-  const client = pipedriveFromEnv();
-  if (!client) return { ok: false, error: PIPEDRIVE_MESSAGES.missing };
+  if (!isUuid(jobId)) return NOT_FOUND;
+  const store = createSupabaseStore(createAdminClient());
   try {
-    const r = await runImportSlice(jobId, {
-      budgetMs: SLICE_BUDGET_MS,
-      deps: { client, store: createSupabaseStore(createAdminClient()) },
+    return await continueJob(jobId, {
+      load: async (id) => {
+        const job = await store.loadJob(id);
+        return job && { status: job.status, step: job.cursor?.step ?? "index", counters: job.counters ?? {} };
+      },
+      run: async (id) => {
+        const client = pipedriveFromEnv();
+        if (!client) throw new MissingToken();
+        return runImportSlice(id, { budgetMs: SLICE_BUDGET_MS, deps: { client, store } });
+      },
     });
-    return { ok: true, status: r.status, step: r.step, counters: r.counters, done: r.done, busy: r.busy === true };
   } catch (e) {
+    if (e instanceof MissingToken) return { ok: false, error: PIPEDRIVE_MESSAGES.missing };
     // o job continua em andamento e retoma do último cursor gravado
     console.error("importação: falha na fatia", e instanceof Error ? e.message : e);
     return { ok: false, error: "A etapa atual falhou. A importação continua de onde parou ao tentar de novo." };
   }
 }
+
+class MissingToken extends Error {}
 
 async function setStatus(jobId: string, from: string, to: string, extra: Record<string, unknown> = {}): Promise<boolean> {
   if (!isUuid(jobId)) return false;
@@ -194,13 +202,18 @@ export async function reviseImport(jobId: string): Promise<ActionResult> {
 
 export type SimulationResult = {
   status: string;
+  step: string;
   counters: Counters;
+  /** parou no teto de tempo: contadores parciais */
+  partial: boolean;
+  message: string | null;
   logs: LogItem[];
   logTotal: number;
 };
 
 /** Simulação: lê o Pipedrive e mapeia tudo com o rascunho atual, sem gravar nada no banco. */
 export async function simulateImport(jobId: string): Promise<ActionResult<SimulationResult>> {
+  const t0 = Date.now();
   await requireSuperAdmin();
   if ((await jobStatus(jobId)) !== "draft") return { ok: false, error: "A simulação só roda em rascunho." };
   const client = pipedriveFromEnv();
@@ -224,10 +237,14 @@ export async function simulateImport(jobId: string): Promise<ActionResult<Simula
   } };
   const dry = createDryRunStore(base);
   try {
-    const r = await runImportToEnd(jobId, { client, store: dry.store }, undefined, 60_000);
-    return { ok: true, data: { status: r.status, counters: r.counters, logs: dry.logs.slice(0, 200), logTotal: dry.logs.length } };
+    // teto de ~45s contando desde o início da action (a página exporta maxDuration = 60)
+    const r = await simulateUntil(
+      (budgetMs) => runImportSlice(jobId, { budgetMs, deps: { client, store: dry.store } }),
+      { totalMs: SIMULATION_TOTAL_MS - (Date.now() - t0) },
+    );
+    return { ok: true, data: { ...r, logs: dry.logs.slice(0, 200), logTotal: dry.logs.length } };
   } catch (e) {
     console.error("importação: falha na simulação", e instanceof Error ? e.message : e);
-    return { ok: false, error: PIPEDRIVE_MESSAGES.other };
+    return { ok: false, error: pipedriveErrorMessage(e) };
   }
 }

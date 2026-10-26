@@ -9,6 +9,8 @@ import { DraftMappings, emptyDraft } from "@/lib/import/wizard";
 import { isUuid } from "@/lib/uuid";
 
 export const instant = false;
+// as actions da página (fatias de ~10s e simulação com teto de ~45s, mais uma unidade) cabem neste limite
+export const maxDuration = 60;
 
 export default async function ImportJobPage({ params }: { params: Promise<{ id: string }> }) {
   await requireSuperAdmin();

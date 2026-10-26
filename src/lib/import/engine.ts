@@ -1,4 +1,5 @@
 import "server-only";
+import { USERS_CHECK_FAILURE } from "./constants";
 import { PipedriveAuthError } from "./pipedrive/client";
 import { ImportMappings, type PdFieldDef, type PdItem, type PdPage, type PdPageEntity } from "./pipedrive/types";
 import {
@@ -342,7 +343,7 @@ async function usersCheck(env: ImportEnv, cursor: ImportCursor): Promise<ImportC
     for (const i of idx) need(user, cache.companies[i]);
   }
   if (pairs.size) {
-    throw new StepFailure(`Usuários sem acesso ativo à empresa de destino: ${[...pairs.values()].join("; ")}`);
+    throw new StepFailure(`${USERS_CHECK_FAILURE} ${[...pairs.values()].join("; ")}`);
   }
   return advance(cache, "users_check");
 }

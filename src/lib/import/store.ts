@@ -82,6 +82,8 @@ export function createSupabaseStore(admin: SupabaseClient): ImportStore {
         name: string;
       }[];
       const profiles = new Map([...admins, ...others].map((p) => [p.id, p]));
+      // nomes de todos os perfis: o users_check cita também quem não é membro de nenhuma empresa de destino
+      const named = (must("profiles", await admin.from("profiles").select("id, full_name, email")) ?? []) as Profile[];
       const active: Record<string, string[]> = {};
       for (const c of companyIds) {
         const users = new Set(admins.filter((p) => p.active).map((p) => p.id));
@@ -90,7 +92,7 @@ export function createSupabaseStore(admin: SupabaseClient): ImportStore {
       }
       return {
         active,
-        userNames: Object.fromEntries([...profiles.values()].map((p) => [p.id, p.full_name || p.email])),
+        userNames: Object.fromEntries([...named, ...profiles.values()].map((p) => [p.id, p.full_name || p.email])),
         companyNames: Object.fromEntries(companies.map((c) => [c.id, c.name])),
       };
     },

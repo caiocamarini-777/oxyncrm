@@ -14,7 +14,7 @@ import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/sco
 import { BOARD_STAGE_LIMIT, DEAL_SORTS, FORECAST_LIMIT, getBoard, getForecast, listActiveLostReasons, listDeals } from "@/lib/deals/queries";
 import type { DealListQuery } from "@/lib/deals/queries";
 import { parseDealListQuery, parseDealView } from "@/lib/deals/query";
-import { listPipelinesWithStages } from "@/lib/pipelines/queries";
+import { listPipelineDirectory, listPipelinesWithStages } from "@/lib/pipelines/queries";
 import { listActiveCustomFieldDefs, listCompanyLabels, listTeams } from "@/lib/records/lookups";
 import { listAssignableOwners } from "@/lib/records/owners";
 import { getEntityPermissions } from "@/lib/records/permissions";
@@ -47,7 +47,7 @@ export default async function DealsPage({
 
   const view = parseDealView(sp.get("visao"));
   const company = scope.company;
-  const [allPipelines, permissions, owners, labels, defs, teams, lostReasons] = await Promise.all([
+  const [allPipelines, permissions, owners, labels, defs, teams, lostReasons, directory] = await Promise.all([
     listPipelinesWithStages(company.id),
     getEntityPermissions(company.id, "deals"),
     listAssignableOwners(company.id),
@@ -55,6 +55,7 @@ export default async function DealsPage({
     listActiveCustomFieldDefs(company.id, "deals"),
     listTeams(),
     listActiveLostReasons(company.id),
+    listPipelineDirectory(companies),
   ]);
   const pipelines = allPipelines.filter((p) => !p.archived);
   const requested = sp.get("funil");
@@ -91,6 +92,8 @@ export default async function DealsPage({
       ) : null}
       <Suspense>
         <DealsToolbar
+          directory={directory}
+          companySlug={company.slug}
           pipelines={pipelines.map((p) => ({ id: p.id, name: p.name }))}
           pipelineId={pipeline?.id ?? null}
           view={view}
@@ -163,7 +166,7 @@ async function AllCompaniesDeals({
   query: Required<DealListQuery>;
   companies: CompanySummary[];
 }) {
-  const [result, perCompany, teams] = await Promise.all([
+  const [result, perCompany, teams, directory] = await Promise.all([
     listDeals(scope, query),
     Promise.all(
       companies.map(async (company) => {
@@ -176,6 +179,7 @@ async function AllCompaniesDeals({
       }),
     ),
     listTeams(),
+    listPipelineDirectory(companies),
   ]);
   const ownerMap = new Map<string, string>();
   for (const c of perCompany) for (const o of c.owners) ownerMap.set(o.id, o.fullName);
@@ -193,6 +197,7 @@ async function AllCompaniesDeals({
       </Suspense>
       <Suspense>
         <DealsToolbar
+          directory={directory}
           pipelines={[]}
           pipelineId={null}
           view="lista"

@@ -53,14 +53,14 @@ export type ImportCache = {
   leads: Record<string, number>;
   /** "person:12" / "org:5" -> empresas vistas pelos negócios e leads do contato (a primeira é a principal) */
   contacts: Record<string, number[]>;
-  /** id do usuário do Pipedrive dono de negócios -> empresas desses negócios */
-  dealOwners: Record<string, number[]>;
+  /** id do usuário do Pipedrive dono de negócios ou leads -> empresas desses registros */
+  owners: Record<string, number[]>;
   /** funis mapeados como null, criados na etapa custom_fields */
   pipelines?: Record<string, { pipelineId: string; stages: Record<string, string> }>;
   /** "<empresa>:<entidade>:<customFieldKey>" -> tipo do campo no Oxyn */
   fieldTypes?: Record<string, OxynFieldType>;
-  /** "<perfil>:<empresa>" -> contatos copiados para empresa secundária com o dono padrão (avisos da etapa) */
-  ownerSwaps?: Record<string, number>;
+  /** trocas pelo dono padrão na etapa: "<perfil>:<empresa>" -> registros (um aviso por par no fim da etapa) */
+  ownerSwaps?: { step: Step; counts: Record<string, number> };
 };
 
 export type ImportCursor = { step?: Step; start?: number; sub?: number; cache?: ImportCache };
@@ -231,7 +231,7 @@ async function loadMeta(client: ImportSource): Promise<Meta> {
 }
 
 function emptyCache(companies: string[]): ImportCache {
-  return { companies: [...companies], deals: {}, ignoredDeals: {}, leads: {}, contacts: {}, dealOwners: {} };
+  return { companies: [...companies], deals: {}, ignoredDeals: {}, leads: {}, contacts: {}, owners: {} };
 }
 
 function companyIdx(cache: ImportCache, id: string): number {
@@ -307,10 +307,12 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
       link("person", refId(item.person_id), ci);
       link("org", refId(item.org_id), ci);
       const owner = refId(item.owner_id ?? item.user_id);
-      if (owner) add(cache.dealOwners, owner, ci);
+      if (owner) add(cache.owners, owner, ci);
     } else {
       const ci = companyIdx(cache, leadCompany(item, m));
       cache.leads[id] = ci;
+      const owner = refId(item.owner_id);
+      if (owner) add(cache.owners, owner, ci);
       link("person", refId(item.person_id), ci);
       link("org", refId(item.organization_id ?? item.org_id), ci);
     }
@@ -322,7 +324,7 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
 
 /**
  * O dono padrão precisa de acesso ativo a todas as empresas de destino; o dono (mapeado) de cada negócio de funil
- * mapeado precisa de acesso à empresa desse funil. Lista os pares (usuário, empresa) que faltam.
+ * mapeado e de cada lead (aberto ou arquivado) precisa de acesso à empresa do registro. Lista os pares que faltam.
  */
 async function usersCheck(env: ImportEnv, cursor: ImportCursor): Promise<ImportCursor> {
   const cache = cursor.cache ?? emptyCache(env.companies);
@@ -335,7 +337,7 @@ async function usersCheck(env: ImportEnv, cursor: ImportCursor): Promise<ImportC
     }
   };
   for (const c of env.companies) need(m.fallbackOwnerId, c);
-  for (const [pdUser, idx] of Object.entries(cache.dealOwners ?? {})) {
+  for (const [pdUser, idx] of Object.entries(cache.owners ?? {})) {
     const user = m.users[pdUser] ?? m.fallbackOwnerId;
     for (const i of idx) need(user, cache.companies[i]);
   }
@@ -534,7 +536,10 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
   const [meta, members] = await Promise.all([env.meta(), env.members()]);
   const base: MapCtx = { mappings: env.mappings, ...meta, resolvedPipelines: cache.pipelines };
   const fallbackOwner = env.mappings.fallbackOwnerId;
-  const isContact = step === "organizations" || step === "persons";
+  // contatos (todas as cópias) e atividades: dono sem acesso vira o dono padrão; negócios e leads ficam no users_check
+  const swapsOwner = step === "organizations" || step === "persons" || step === "activities";
+  // trocas de etapa anterior (já registradas) são descartadas
+  const swaps: Record<string, number> = cache.ownerSwaps?.step === step ? { ...cache.ownerSwaps.counts } : {};
   const rows: Row[] = [];
   const logs: LogItem[] = [];
   let skipped = 0;
@@ -547,7 +552,7 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
       continue;
     }
     let failed = false;
-    for (const [i, r] of results.entries()) {
+    for (const r of results) {
       if (!r.ok) {
         // a mesma falha se repetiria em cada empresa: registra uma vez
         if (!failed) logs.push({ entity: spec.entity, external_id: ext, reason: r.error });
@@ -556,11 +561,10 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
       }
       const row = { ...r.row };
       for (const w of r.warnings) logs.push({ entity: spec.entity, external_id: ext, reason: `aviso: ${w}` });
-      // cópia de contato em empresa secundária: dono sem acesso a ela vira o dono padrão (aviso agregado)
       const company = typeof row.company_id === "string" ? row.company_id : null;
-      if (isContact && i > 0 && company && typeof row.owner_id === "string" && !members.active[company]?.includes(row.owner_id)) {
+      if (swapsOwner && company && typeof row.owner_id === "string" && !members.active[company]?.includes(row.owner_id)) {
         const k = `${row.owner_id}:${companyIdx(cache, company)}`;
-        cache.ownerSwaps = { ...cache.ownerSwaps, [k]: (cache.ownerSwaps?.[k] ?? 0) + 1 };
+        swaps[k] = (swaps[k] ?? 0) + 1;
         row.owner_id = fallbackOwner;
       }
       rows.push(row);
@@ -576,8 +580,8 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
     total.unchanged += res.unchanged ?? 0;
   }
   const last = page.nextStart === null;
-  if (last && cache.ownerSwaps) {
-    for (const [k, n] of Object.entries(cache.ownerSwaps)) {
+  if (last) {
+    for (const [k, n] of Object.entries(swaps)) {
       const [user, ci] = k.split(":");
       const company = cache.companies[Number(ci)];
       logs.push({
@@ -586,8 +590,11 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
         reason: `aviso: ${members.userNames[user] || user} sem acesso à empresa ${members.companyNames[company] || company}; dono padrão usado em ${n} ${n === 1 ? "registro" : "registros"}`,
       });
     }
-    delete cache.ownerSwaps;
   }
+  // fica no cache até o cursor ser gravado (a página refeita soma de novo a partir do que foi gravado);
+  // runImportSlice limpa depois que o aviso e o cursor foram gravados
+  if (Object.keys(swaps).length) cache.ownerSwaps = { step, counts: swaps };
+  else delete cache.ownerSwaps;
   if (logs.length) await deps.store.log(jobId, logs);
   if (rows.length || skipped) await deps.store.count(jobId, spec.entity, total);
 
@@ -650,7 +657,7 @@ export async function runImportSlice(
   const token = deps.token?.() ?? crypto.randomUUID();
   if (!(await store.claim(jobId, token, LEASE_SECONDS))) {
     // outra fatia está rodando este job: em andamento, nada a fazer agora
-    return { ...resultOf(job), status: "running", done: false, busy: true };
+    return { ...resultOf(job), done: false, busy: true };
   }
   try {
     if (!(await store.start(jobId))) return await reload(store, jobId);
@@ -666,6 +673,13 @@ export async function runImportSlice(
         cursor = await runUnit(env, cursor, deps, jobId);
         const unitMs = now() - u0;
         if (!(await store.saveCursor(jobId, token, cursor))) break; // pausado ou concessão perdida
+        // avisos de troca de dono já registrados e cursor gravado: limpa as trocas da etapa encerrada
+        if (cursor.cache?.ownerSwaps && cursor.cache.ownerSwaps.step !== cursor.step) {
+          delete cursor.cache.ownerSwaps;
+          if (!(await store.saveCursor(jobId, token, cursor))) break;
+        }
+        // renova a concessão; se outra fatia a tomou, para
+        if (!(await store.claim(jobId, token, LEASE_SECONDS))) break;
         if (cursor.step === "done") continue;
         // para antes de estourar: a próxima unidade deve levar o mesmo que a última
         if (now() - t0 + unitMs >= budgetMs) break;

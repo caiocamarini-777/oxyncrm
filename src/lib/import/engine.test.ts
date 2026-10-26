@@ -341,7 +341,8 @@ describe("motor de importação", () => {
     expect(cache.companies).toEqual([A, B]);
     expect(cache.deals).toEqual({ "1": 0, "2": 1 });
     expect(cache.ignoredDeals).toEqual({ "3": 1, "4": 1 });
-    expect(cache.dealOwners).toEqual({ "100": [0], "101": [1] });
+    // donos de negócios e de leads (abertos e arquivados) pela empresa do registro
+    expect(cache.owners).toEqual({ "100": [0, 1], "101": [1] });
     expect(cache.leads).toEqual({ l1: 1, la1: 0 });
     expect(cache.contacts).toEqual({ "person:1": [0, 1], "org:1": [0], "person:2": [1], "person:3": [0] });
   });
@@ -388,7 +389,7 @@ describe("motor de importação", () => {
     expect(calls.every((c) => /^(deals|leads|archivedLeads)@/.test(c))).toBe(true);
   });
 
-  it("dono sem acesso só é trocado em cópia de contato em empresa secundária, com aviso agregado", async () => {
+  it("dono sem acesso vira o dono padrão em toda cópia de contato, com um aviso agregado por par", async () => {
     const data = {
       persons: [
         { id: 1, name: "P1", owner_id: 102 },
@@ -397,19 +398,87 @@ describe("motor de importação", () => {
       ],
     };
     const cache: ImportCache = {
-      companies: [A, B], deals: {}, ignoredDeals: {}, leads: {}, dealOwners: {},
+      companies: [A, B], deals: {}, ignoredDeals: {}, leads: {}, owners: {},
       contacts: { "person:1": [0, 1], "person:2": [0, 1], "person:3": [1, 0] },
     };
     const { client } = fakeClient(data);
     const f = fakeStore({ job: { status: "running", cursor: { step: "persons", start: 0, cache } } });
     await runImportToEnd("job", { client, store: f.store });
     expect(rowsOf(f.upserts, "persons").map((p) => `${p.external_id}:${ab(p.company_id)}:${p.owner_id === U1 ? "padrão" : "Carla"}`))
-      .toEqual(["1:A:Carla", "1:B:padrão", "2:A:Carla", "2:B:padrão", "3:B:Carla", "3:A:Carla"]);
+      .toEqual(["1:A:Carla", "1:B:padrão", "2:A:Carla", "2:B:padrão", "3:B:padrão", "3:A:Carla"]);
     const warnings = f.logs.filter((l) => l.entity === "persons");
     expect(warnings).toEqual([
-      { entity: "persons", external_id: null, reason: "aviso: Carla sem acesso à empresa Beta; dono padrão usado em 2 registros" },
+      { entity: "persons", external_id: null, reason: "aviso: Carla sem acesso à empresa Beta; dono padrão usado em 3 registros" },
     ]);
     expect(f.job.cursor.cache!.ownerSwaps).toBeUndefined();
+  });
+
+  it("users_check exige acesso do dono de lead (aberto ou arquivado) à empresa do lead", async () => {
+    const data = {
+      ...DATA,
+      leads: [{ id: "l1", title: "L1", label_ids: [10], owner_id: 102 }],
+      archivedLeads: [{ id: "la1", title: "LA1", label_ids: [10], owner_id: 102 }],
+    };
+    const { client } = fakeClient(data);
+    const f = fakeStore({ members: { [A]: [U1, U2, U3], [B]: [U1, U2] } });
+    const r = await runImportToEnd("job", { client, store: f.store });
+    expect(r).toMatchObject({ status: "failed", step: "users_check" });
+    expect(f.logs.at(-1)!.reason).toBe("Usuários sem acesso ativo à empresa de destino: Carla (Beta)");
+  });
+
+  it("atividade com dono sem acesso à empresa usa o dono padrão com aviso agregado", async () => {
+    const cache: ImportCache = {
+      companies: [A, B], deals: {}, ignoredDeals: {}, leads: {}, owners: {},
+      contacts: { "person:1": [0, 1] },
+    };
+    const data = {
+      activities: [
+        { id: 1, type: "call", subject: "A1", person_id: 1, user_id: 102 },
+        { id: 2, type: "call", subject: "A2", person_id: 1, user_id: 102 },
+      ],
+    };
+    const { client } = fakeClient(data);
+    const f = fakeStore({ job: { status: "running", cursor: { step: "activities", start: 0, cache } } });
+    await runImportToEnd("job", { client, store: f.store });
+    expect(rowsOf(f.upserts, "activities").map((a) => `${a.external_id}:${ab(a.company_id)}:${a.owner_id === U1 ? "padrão" : "Carla"}`))
+      .toEqual(["1:A:Carla", "1:B:padrão", "2:A:Carla", "2:B:padrão"]);
+    expect(f.logs).toEqual([
+      { entity: "activities", external_id: null, reason: "aviso: Carla sem acesso à empresa Beta; dono padrão usado em 2 registros" },
+    ]);
+  });
+
+  it("trocas de dono: página refeita não duplica a contagem e o cache é limpo depois de gravar", async () => {
+    const data = {
+      persons: [
+        { id: 1, name: "P1", owner_id: 102 },
+        { id: 2, name: "P2", owner_id: 102 },
+        { id: 3, name: "P3", owner_id: 102 },
+      ],
+    };
+    const cache: ImportCache = {
+      companies: [A, B], deals: {}, ignoredDeals: {}, leads: {}, owners: {},
+      contacts: { "person:1": [0, 1], "person:2": [0, 1], "person:3": [1] },
+    };
+    const { client } = fakeClient(data);
+    const f = fakeStore({ job: { status: "running", cursor: { step: "persons", start: 0, cache } } });
+    const deps = { client, store: f.store };
+    await runImportSlice("job", { budgetMs: 0, deps });
+    expect(f.job.cursor.cache!.ownerSwaps).toEqual({ step: "persons", counts: { [`${U3}:1`]: 2 } });
+
+    const log = f.store.log;
+    f.store.log = async () => {
+      throw new Error("falha ao registrar");
+    };
+    await expect(runImportSlice("job", { budgetMs: 0, deps })).rejects.toThrow("falha ao registrar");
+    expect(f.job.cursor).toMatchObject({ step: "persons", start: 2 });
+
+    f.store.log = log;
+    await runImportSlice("job", { budgetMs: 0, deps });
+    expect(f.job.cursor.step).toBe("leads");
+    expect(f.job.cursor.cache!.ownerSwaps).toBeUndefined();
+    expect(f.logs).toEqual([
+      { entity: "persons", external_id: null, reason: "aviso: Carla sem acesso à empresa Beta; dono padrão usado em 3 registros" },
+    ]);
   });
 
   it("mapeamentos inválidos marcam o job como failed", async () => {
@@ -437,7 +506,8 @@ describe("motor de importação", () => {
       const f = fakeStore();
       await runImportSlice("job", { budgetMs: 0, deps: { client, store: f.store, token: () => "t1" } });
       expect(LEASE_SECONDS).toBe(120);
-      expect(f.lease.claims).toEqual([120]);
+      // toma no início e renova depois de gravar o cursor
+      expect(f.lease.claims).toEqual([120, 120]);
       expect(f.lease.owner).toBeNull();
     });
 
@@ -452,6 +522,28 @@ describe("motor de importação", () => {
       expect(f.events).toEqual([]);
       expect(f.lease.owner).toBe("outra");
       await expect(runImportToEnd("job", { client, store: f.store })).rejects.toThrow("Outra execução");
+    });
+
+    it("ocupada: mantém o status carregado do job", async () => {
+      const { client } = fakeClient();
+      const f = fakeStore();
+      f.lease.owner = "outra";
+      f.lease.until = Date.now() + 60_000;
+      const r = await runImportSlice("job", { deps: { client, store: f.store } });
+      expect(r).toMatchObject({ status: "draft", done: false, busy: true });
+    });
+
+    it("renovação recusada para a fatia depois de gravar o cursor", async () => {
+      const { client, calls } = fakeClient();
+      const f = fakeStore();
+      const claim = f.store.claim;
+      let n = 0;
+      f.store.claim = async (id, token, secs) => (++n === 1 ? claim(id, token, secs) : false);
+      const r = await runImportSlice("job", { deps: { client, store: f.store } });
+      expect(n).toBe(2);
+      expect(f.job.cursor).toMatchObject({ step: "index", sub: 0, start: 2 });
+      expect(calls).toEqual(["deals@0"]);
+      expect(r.status).toBe("running");
     });
 
     it("concessão vencida é tomada", async () => {

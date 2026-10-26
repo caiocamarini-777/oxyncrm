@@ -311,7 +311,8 @@ export function mapPerson(item: PdItem, ctx: MapCtx): MapResult {
     owner_id: ownerOf(item.owner_id, ctx.mappings),
     name,
     emails: contacts(item.email),
-    phones: contacts(item.phone),
+    // o banco guarda só os dígitos do telefone: valor sem dígito ficaria vazio e seria recusado
+    phones: contacts(item.phone).filter((c) => /\d/.test(String(c.value))),
     organization_external_id: refId(item.org_id),
     custom_fields: custom,
     created_at: toIso(item.add_time),

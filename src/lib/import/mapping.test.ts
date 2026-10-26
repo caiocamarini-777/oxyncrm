@@ -5,7 +5,6 @@ import {
   clampMonths,
   companiesForContact,
   dueAt,
-  isError,
   leadCompany,
   mapActivity,
   mapDeal,
@@ -13,10 +12,10 @@ import {
   mapNote,
   mapOrganization,
   mapProduct,
-  warningsOf,
   mapPerson,
   toIso,
   type MapCtx,
+  type MapResult,
 } from "./mapping";
 import { ImportMappings } from "./pipedrive/types";
 
@@ -58,6 +57,11 @@ const ctx: MapCtx = {
   activityTypeNames: { task: "Whatsapp", deadline: "Prazo" },
   leadLabelNames: { L1: "OXYN", L3: "Hot" },
 };
+
+function rowOf(r: MapResult) {
+  if (!r.ok) throw new Error(r.error);
+  return r.row;
+}
 
 const baseDeal = {
   id: 100,
@@ -111,8 +115,8 @@ describe("mapDeal", () => {
       { ...baseDeal, hash_setup: 3000, hash_mrr: 1500.5, hash_months: 11.6, hash_temp: 7, hash_stack: "1,2" },
       ctx,
     );
-    expect(isError(r)).toBe(false);
-    expect(r).toMatchObject({
+    expect(r.ok).toBe(true);
+    expect(rowOf(r)).toMatchObject({
       external_id: "100",
       company_id: C1,
       owner_id: U1,
@@ -129,12 +133,12 @@ describe("mapDeal", () => {
     });
   });
   it("contract_months ausente vira null", () => {
-    expect(mapDeal(baseDeal, ctx)).toMatchObject({ contract_months: null, setup_total: 0, mrr: 0 });
+    expect(rowOf(mapDeal(baseDeal, ctx))).toMatchObject({ contract_months: null, setup_total: 0, mrr: 0 });
   });
   it("funil ignorado e etapa não mapeada dão erro", () => {
-    expect(isError(mapDeal({ ...baseDeal, pipeline_id: 9, stage_id: 90 }, ctx))).toBe(true);
-    expect(isError(mapDeal({ ...baseDeal, stage_id: 11 }, ctx))).toBe(true);
-    expect(isError(mapDeal({ ...baseDeal, stage_id: 999 }, ctx))).toBe(true);
+    expect(mapDeal({ ...baseDeal, pipeline_id: 9, stage_id: 90 }, ctx).ok).toBe(false);
+    expect(mapDeal({ ...baseDeal, stage_id: 11 }, ctx).ok).toBe(false);
+    expect(mapDeal({ ...baseDeal, stage_id: 999 }, ctx).ok).toBe(false);
   });
   it("usa funil/etapa criados quando o mapeamento é null", () => {
     const m2 = ImportMappings.parse({
@@ -142,28 +146,28 @@ describe("mapDeal", () => {
       pipelines: { "1": { companyId: C1, pipelineId: null, stages: { "10": null } } },
     });
     const r = mapDeal(baseDeal, { ...ctx, mappings: m2, resolvedPipelines: { "1": { pipelineId: P1, stages: { "10": S1 } } } });
-    expect(r).toMatchObject({ pipeline_id: P1, stage_id: S1 });
-    expect(isError(mapDeal(baseDeal, { ...ctx, mappings: m2 }))).toBe(true);
+    expect(rowOf(r)).toMatchObject({ pipeline_id: P1, stage_id: S1 });
+    expect(mapDeal(baseDeal, { ...ctx, mappings: m2 }).ok).toBe(false);
   });
   it("lost preserva o texto do motivo e won_at só em won", () => {
     const lost = mapDeal({ ...baseDeal, status: "lost", lost_time: "2024-04-01 10:00:00", lost_reason: "Sem orçamento" }, ctx);
-    expect(lost).toMatchObject({ status: "lost", lost_reason: "Sem orçamento", lost_at: "2024-04-01T10:00:00Z", won_at: null });
+    expect(rowOf(lost)).toMatchObject({ status: "lost", lost_reason: "Sem orçamento", lost_at: "2024-04-01T10:00:00Z", won_at: null });
     const won = mapDeal({ ...baseDeal, status: "won", won_time: "2024-04-02 10:00:00" }, ctx);
-    expect(won).toMatchObject({ won_at: "2024-04-02T10:00:00Z", lost_at: null, lost_reason: null });
+    expect(rowOf(won)).toMatchObject({ won_at: "2024-04-02T10:00:00Z", lost_at: null, lost_reason: null });
   });
   it("usuário sem mapeamento cai em fallbackOwnerId", () => {
-    expect(mapDeal({ ...baseDeal, owner_id: 99 }, ctx)).toMatchObject({ owner_id: FB });
-    expect(mapDeal({ ...baseDeal, owner_id: undefined }, ctx)).toMatchObject({ owner_id: FB });
+    expect(rowOf(mapDeal({ ...baseDeal, owner_id: 99 }, ctx))).toMatchObject({ owner_id: FB });
+    expect(rowOf(mapDeal({ ...baseDeal, owner_id: undefined }, ctx))).toMatchObject({ owner_id: FB });
   });
 });
 
 describe("vínculo com lead de origem", () => {
   it("usa source_lead_id (lead pode não estar mais em /v1/leads) e ignora lead_id/origin", () => {
-    expect(mapDeal({ ...baseDeal, source_lead_id: "uuid-convertido", lead_id: "x", origin: "Leads", origin_id: "y" }, ctx)).toMatchObject({ lead_external_id: "uuid-convertido" });
-    expect(mapDeal({ ...baseDeal, origin: "Import", origin_id: "y" }, ctx)).toMatchObject({ lead_external_id: null });
+    expect(rowOf(mapDeal({ ...baseDeal, source_lead_id: "uuid-convertido", lead_id: "x", origin: "Leads", origin_id: "y" }, ctx))).toMatchObject({ lead_external_id: "uuid-convertido" });
+    expect(rowOf(mapDeal({ ...baseDeal, origin: "Import", origin_id: "y" }, ctx))).toMatchObject({ lead_external_id: null });
   });
   it("lead de /v1/leads/archived entra como archived", () => {
-    expect(mapLead({ id: "u2", title: "Velho" }, { ...ctx, archived: true })).toMatchObject({ status: "archived" });
+    expect(rowOf(mapLead({ id: "u2", title: "Velho" }, { ...ctx, archived: true }))).toMatchObject({ status: "archived" });
   });
 });
 
@@ -171,7 +175,7 @@ describe("mapActivity", () => {
   const act = { id: 1, type: "reuniao_realizada", subject: "Call", done: true, due_date: "2024-03-10", due_time: "", deal_id: 100, user_id: 5 };
   it("reunião realizada concluída recebe held", () => {
     const r = mapActivity({ ...act, marked_as_done_time: "2024-03-10 18:00:00" }, ctx);
-    expect(r).toMatchObject({
+    expect(rowOf(r)).toMatchObject({
       type: "meeting",
       meeting_outcome: "held",
       done: true,
@@ -183,26 +187,26 @@ describe("mapActivity", () => {
     });
   });
   it("task Whatsapp vira canal WhatsApp", () => {
-    expect(mapActivity({ id: 2, type: "task", person_id: 7 }, ctx)).toMatchObject({ type: "task", channel_name: "WhatsApp", done: false, meeting_outcome: null });
+    expect(rowOf(mapActivity({ id: 2, type: "task", person_id: 7 }, ctx))).toMatchObject({ type: "task", channel_name: "WhatsApp", done: false, meeting_outcome: null });
   });
   it("sem vínculo dá erro", () => {
-    expect(isError(mapActivity({ id: 3, type: "call" }, ctx))).toBe(true);
+    expect(mapActivity({ id: 3, type: "call" }, ctx).ok).toBe(false);
   });
 });
 
 describe("outros mapeadores", () => {
   it("mapOrganization e mapPerson", () => {
-    expect(mapOrganization({ id: 8, name: "Acme", owner_id: 5, address: "Rua 1" }, ctx)).toMatchObject({ name: "Acme", address: "Rua 1", owner_id: U1 });
+    expect(rowOf(mapOrganization({ id: 8, name: "Acme", owner_id: 5, address: "Rua 1" }, ctx))).toMatchObject({ name: "Acme", address: "Rua 1", owner_id: U1 });
     const p = mapPerson({ id: 7, name: "Beto", org_id: { value: 8 }, email: [{ value: "b@x.com", label: "work", primary: true }, { value: "" }], phone: [{ value: "11999" }] }, ctx);
-    expect(p).toMatchObject({ organization_external_id: "8", emails: [{ value: "b@x.com", label: "work" }], phones: [{ value: "11999" }] });
+    expect(rowOf(p)).toMatchObject({ organization_external_id: "8", emails: [{ value: "b@x.com", label: "work" }], phones: [{ value: "11999" }] });
   });
   it("mapLead: empresa pela etiqueta, etiquetas sem as de empresa", () => {
     const r = mapLead({ id: "uuid-1", title: "L", label_ids: ["L3", "L1"], value: { amount: 10, currency: "BRL" }, owner_id: 5, person_id: 7, is_archived: false }, ctx);
-    expect(r).toMatchObject({ company_id: C1, labels: ["Hot"], value: 10, status: "open", person_external_id: "7" });
+    expect(rowOf(r)).toMatchObject({ company_id: C1, labels: ["Hot"], value: 10, status: "open", person_external_id: "7" });
   });
   it("mapNote escolhe o vínculo e exige conteúdo", () => {
-    expect(mapNote({ id: 1, content: "oi", deal_id: 100, user_id: 5 }, ctx)).toMatchObject({ entity: "deals", record_external_id: "100", author_id: U1 });
-    expect(isError(mapNote({ id: 2, content: "oi" }, ctx))).toBe(true);
+    expect(rowOf(mapNote({ id: 1, content: "oi", deal_id: 100, user_id: 5 }, ctx))).toMatchObject({ entity: "deals", record_external_id: "100", author_id: U1 });
+    expect(mapNote({ id: 2, content: "oi" }, ctx).ok).toBe(false);
   });
 });
 
@@ -230,11 +234,11 @@ describe("empresas", () => {
 
 describe("campos personalizados por tipo", () => {
   it("set é sempre array de rótulos e enum é sempre escalar", () => {
-    expect(mapDeal({ ...baseDeal, hash_stack: "2", hash_temp: "8" }, ctx)).toMatchObject({
+    expect(rowOf(mapDeal({ ...baseDeal, hash_stack: "2", hash_temp: "8" }, ctx))).toMatchObject({
       custom_fields: { stack: ["Supabase"], temperatura: "Frio" },
     });
-    expect(mapDeal({ ...baseDeal, hash_stack: 2 }, ctx)).toMatchObject({ custom_fields: { stack: ["Supabase"] } });
-    expect(mapDeal({ ...baseDeal, hash_stack: [1, 2] }, ctx)).toMatchObject({ custom_fields: { stack: ["Next", "Supabase"] } });
+    expect(rowOf(mapDeal({ ...baseDeal, hash_stack: 2 }, ctx))).toMatchObject({ custom_fields: { stack: ["Supabase"] } });
+    expect(rowOf(mapDeal({ ...baseDeal, hash_stack: [1, 2] }, ctx))).toMatchObject({ custom_fields: { stack: ["Next", "Supabase"] } });
   });
   const m2 = ImportMappings.parse({
     ...mappings,
@@ -247,15 +251,20 @@ describe("campos personalizados por tipo", () => {
   });
   const c2: MapCtx = { ...ctx, mappings: m2, fieldTypes: { f_num: "double", f_user: "user", f_date: "date" } };
   it("converte número, usuário e data; chave inválida é omitida com aviso, sem derrubar a linha", () => {
-    const ok = mapDeal({ ...baseDeal, f_num: "12,5", f_user: { value: 5, name: "Ana" }, f_date: "2024-01-02" }, c2) as Record<string, unknown>;
-    expect(ok.custom_fields).toEqual({ n: 12.5, resp: U1, d: "2024-01-02" });
-    expect(warningsOf(ok)).toEqual([]);
-    const bad = mapDeal({ ...baseDeal, f_num: "abc", f_user: 99, f_date: "ontem", hash_mrr: "x" }, c2) as Record<string, unknown>;
-    expect(isError(bad)).toBe(false);
-    expect(bad.custom_fields).toEqual({});
-    expect(bad.mrr).toBe(0);
-    expect(warningsOf(bad)).toHaveLength(4);
-    expect(JSON.stringify(bad)).not.toContain("warnings");
+    const good = mapDeal({ ...baseDeal, f_num: "12,5", f_user: { value: 5, name: "Ana" }, f_date: "2024-01-02" }, c2);
+    expect(good).toMatchObject({ ok: true, warnings: [] });
+    expect(rowOf(good).custom_fields).toEqual({ n: 12.5, resp: U1, d: "2024-01-02" });
+    const bad = mapDeal({ ...baseDeal, f_num: "abc", f_user: 99, f_date: "ontem", hash_mrr: "x" }, c2);
+    expect(bad.ok).toBe(true);
+    expect(rowOf(bad).custom_fields).toEqual({});
+    expect(rowOf(bad).mrr).toBe(0);
+    expect(bad.ok && bad.warnings).toHaveLength(4);
+  });
+  it("lista em campo sem tipo é unida por vírgula, com aviso", () => {
+    const m3 = ImportMappings.parse({ ...mappings, customFields: { f_any: { target: "custom", customFieldKey: "livre" } } });
+    const r = mapDeal({ ...baseDeal, f_any: ["a", "b"] }, { ...ctx, mappings: m3 });
+    expect(rowOf(r).custom_fields).toEqual({ livre: "a, b" });
+    expect(r.ok && r.warnings).toHaveLength(1);
   });
   it("customFieldKey é obrigatório quando o destino é custom", () => {
     expect(() => ImportMappings.parse({ ...mappings, customFields: { x: { target: "custom" } } })).toThrow();
@@ -264,10 +273,10 @@ describe("campos personalizados por tipo", () => {
 
 describe("mapProduct e contato só em funil ignorado", () => {
   it("mapProduct", () => {
-    expect(mapProduct({ id: 3, name: "Plano", prices: [{ price: 99.9, currency: "BRL" }] }, ctx)).toEqual({
+    expect(rowOf(mapProduct({ id: 3, name: "Plano", prices: [{ price: 99.9, currency: "BRL" }] }, ctx))).toEqual({
       external_id: "3", company_id: C1, name: "Plano", kind: "setup", price: 99.9,
     });
-    expect(isError(mapProduct({ id: 4 }, ctx))).toBe(true);
+    expect(mapProduct({ id: 4 }, ctx).ok).toBe(false);
   });
   it("contato ligado só a funis ignorados cai na empresa padrão", () => {
     const c = { ...ctx, contactLinks: { "person:1": [{ type: "deal" as const, pipelineId: 9 }] } };

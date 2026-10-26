@@ -132,7 +132,8 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       const given = pg?.next_start ?? body.additional_data?.next_start;
       const more = pg?.more_items_in_collection ?? typeof given === "number";
       // sem next_start, segue de onde parou; página vazia encerra (evita laço infinito)
-      const next = typeof given === "number" ? given : start + items.length;
+      // next_start que não avança (<= start) também cai no fallback, evitando laço infinito
+      const next = typeof given === "number" && given > start ? given : start + items.length;
       return { items, nextStart: more && items.length > 0 ? next : null };
     },
   };

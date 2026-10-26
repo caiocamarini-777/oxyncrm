@@ -107,4 +107,13 @@ describe("cliente do Pipedrive", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect((fetchImpl.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
+
+  it("next_start que não avança cai em start + itens", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementation(async () => json({ data: [{ id: 1 }, { id: 2 }], additional_data: { pagination: { more_items_in_collection: true, next_start: 10 } } }));
+    const c = createPipedriveClient({ token: "t", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect((await c.page("persons", 10, 2)).nextStart).toBe(12);
+    expect((await c.page("persons", 20, 2)).nextStart).toBe(22);
+  });
 });

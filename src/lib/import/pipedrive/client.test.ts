@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPipedriveClient, retryAfterMs, PipedriveAuthError, PipedriveError } from "./client";
+import { createPipedriveClient, retryAfterMs, PipedriveAuthError, PipedriveError, REQUEST_TOTAL_MS } from "./client";
 
 vi.mock("server-only", () => ({}));
 
@@ -44,6 +44,49 @@ describe("cliente do Pipedrive", () => {
     expect(String(err.message)).not.toContain("SEGREDO");
     expect(waits).toEqual([1000, 2000, 4000, 8000, 16000]);
     expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it("teto total por chamada: tentativas e esperas não passam de 90 s", async () => {
+    let clock = 0;
+    const waits: number[] = [];
+    // cada tentativa leva 20 s até falhar (5xx lento)
+    const fetchImpl = vi.fn().mockImplementation(async () => {
+      clock += 20_000;
+      return new Response("", { status: 503 });
+    });
+    const c = createPipedriveClient({
+      token: "t", fetchImpl: fetchImpl as unknown as typeof fetch, nowImpl: () => clock,
+      sleepImpl: async (ms) => {
+        waits.push(ms);
+        clock += ms;
+      },
+    });
+    const err = await c.users().catch((e) => e);
+    expect(err).toBeInstanceOf(PipedriveError);
+    expect(REQUEST_TOTAL_MS).toBe(90_000);
+    expect(clock).toBeLessThanOrEqual(REQUEST_TOTAL_MS);
+    // 20 + 1 + 20 + 2 + 20 + 4 + 20 = 87 s; a próxima espera (8 s) passaria do teto: para
+    expect(waits).toEqual([1000, 2000, 4000]);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("Retry-After maior que o tempo restante: desiste sem esperar", async () => {
+    let clock = 0;
+    const waits: number[] = [];
+    const fetchImpl = vi.fn().mockImplementation(async () => {
+      clock += 40_000;
+      return new Response("", { status: 429, headers: { "retry-after": "60" } });
+    });
+    const c = createPipedriveClient({
+      token: "t", fetchImpl: fetchImpl as unknown as typeof fetch, nowImpl: () => clock,
+      sleepImpl: async (ms) => {
+        waits.push(ms);
+        clock += ms;
+      },
+    });
+    await expect(c.users()).rejects.toBeInstanceOf(PipedriveError);
+    expect(waits).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("pagina seguindo next_start e usa os filtros de negócios e atividades", async () => {

@@ -24,6 +24,8 @@ export type PipedriveClientOptions = {
   fetchImpl?: typeof fetch;
   /** Espera entre tentativas (injetável nos testes). */
   sleepImpl?: (ms: number) => Promise<void>;
+  /** Relógio (injetável nos testes). */
+  nowImpl?: () => number;
 };
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
@@ -50,6 +52,11 @@ type Envelope = {
 
 const MAX_WAIT_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Teto de uma chamada com todas as tentativas e esperas: uma unidade do motor (página) fica bem abaixo da
+ * concessão de 120 s do job.
+ */
+export const REQUEST_TOTAL_MS = 90_000;
 
 /** Retry-After em segundos ou em data HTTP; ms de espera (0 se ausente/inválido). */
 export function retryAfterMs(res: Response, now = Date.now()): number {
@@ -65,16 +72,21 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   const base = (opts.baseUrl ?? "https://api.pipedrive.com").replace(/\/+$/, "");
   const doFetch = opts.fetchImpl ?? fetch;
   const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.nowImpl ?? Date.now;
 
-  /** Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede. Nunca inclui headers em erros. */
+  /**
+   * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de REQUEST_TOTAL_MS somando
+   * tentativas e esperas. Nunca inclui headers em erros.
+   */
   async function request(path: string): Promise<Envelope> {
     const url = `${base}${path}`;
+    const deadline = now() + REQUEST_TOTAL_MS;
     for (let attempt = 0; ; attempt++) {
       let res: Response | null = null;
       try {
         res = await doFetch(url, {
           headers: { "x-api-token": opts.token, accept: "application/json" },
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - now()))),
         });
       } catch {
         res = null;
@@ -93,14 +105,18 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       }
       // corpo não lido é descartado antes de repetir ou falhar (libera a conexão)
       if (res) await res.body?.cancel().catch(() => {});
-      if (!retryable || attempt >= BACKOFF_MS.length) {
+      const wait = attempt < BACKOFF_MS.length
+        ? Math.min(MAX_WAIT_MS, Math.max(BACKOFF_MS[attempt], res ? retryAfterMs(res) : 0))
+        : 0;
+      // sem tempo para esperar e tentar de novo dentro do teto: desiste agora
+      if (!retryable || attempt >= BACKOFF_MS.length || now() + wait >= deadline) {
         const where = path.split("?")[0];
         throw new PipedriveError(
           res ? `Pipedrive respondeu ${res.status} em ${where}` : `Falha de rede ao chamar o Pipedrive em ${where}`,
           res?.status,
         );
       }
-      await sleep(Math.min(MAX_WAIT_MS, Math.max(BACKOFF_MS[attempt], res ? retryAfterMs(res) : 0)));
+      await sleep(wait);
     }
   }
 

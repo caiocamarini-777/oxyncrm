@@ -48,10 +48,17 @@ type Envelope = {
   };
 };
 
-function retryAfterMs(res: Response): number {
-  const raw = res.headers.get("retry-after");
-  const secs = raw === null ? NaN : Number(raw);
-  return Number.isFinite(secs) && secs > 0 ? secs * 1000 : 0;
+const MAX_WAIT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Retry-After em segundos ou em data HTTP; ms de espera (0 se ausente/inválido). */
+export function retryAfterMs(res: Response, now = Date.now()): number {
+  const raw = res.headers.get("retry-after")?.trim();
+  if (!raw) return 0;
+  const secs = Number(raw);
+  if (Number.isFinite(secs)) return secs > 0 ? secs * 1000 : 0;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - now) : 0;
 }
 
 export function createPipedriveClient(opts: PipedriveClientOptions) {
@@ -65,11 +72,17 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     for (let attempt = 0; ; attempt++) {
       let res: Response | null = null;
       try {
-        res = await doFetch(url, { headers: { "x-api-token": opts.token, accept: "application/json" } });
+        res = await doFetch(url, {
+          headers: { "x-api-token": opts.token, accept: "application/json" },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
       } catch {
         res = null;
       }
-      if (res && res.status === 401) throw new PipedriveAuthError();
+      if (res && res.status === 401) {
+        await res.body?.cancel().catch(() => {});
+        throw new PipedriveAuthError();
+      }
       const retryable = res === null || res.status === 429 || res.status >= 500;
       if (res && res.ok) {
         try {
@@ -78,6 +91,8 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
           throw new PipedriveError(`Resposta inválida do Pipedrive em ${path.split("?")[0]}`, res.status);
         }
       }
+      // corpo não lido é descartado antes de repetir ou falhar (libera a conexão)
+      if (res) await res.body?.cancel().catch(() => {});
       if (!retryable || attempt >= BACKOFF_MS.length) {
         const where = path.split("?")[0];
         throw new PipedriveError(
@@ -85,7 +100,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
           res?.status,
         );
       }
-      await sleep(Math.max(BACKOFF_MS[attempt], res ? retryAfterMs(res) : 0));
+      await sleep(Math.min(MAX_WAIT_MS, Math.max(BACKOFF_MS[attempt], res ? retryAfterMs(res) : 0)));
     }
   }
 
@@ -113,12 +128,12 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       const sep = base0.includes("?") ? "&" : "?";
       const body = await request(`${base0}${sep}start=${start}&limit=${limit}`);
       const pg = body.additional_data?.pagination;
-      const more = pg?.more_items_in_collection ?? body.additional_data?.next_start !== undefined;
-      const next = pg?.next_start ?? body.additional_data?.next_start;
-      return {
-        items: Array.isArray(body.data) ? (body.data as PdItem[]) : [],
-        nextStart: more && typeof next === "number" ? next : null,
-      };
+      const items = Array.isArray(body.data) ? (body.data as PdItem[]) : [];
+      const given = pg?.next_start ?? body.additional_data?.next_start;
+      const more = pg?.more_items_in_collection ?? typeof given === "number";
+      // sem next_start, segue de onde parou; página vazia encerra (evita laço infinito)
+      const next = typeof given === "number" ? given : start + items.length;
+      return { items, nextStart: more && items.length > 0 ? next : null };
     },
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPipedriveClient, PipedriveAuthError, PipedriveError } from "./client";
+import { createPipedriveClient, retryAfterMs, PipedriveAuthError, PipedriveError } from "./client";
 
 vi.mock("server-only", () => ({}));
 
@@ -67,5 +67,44 @@ describe("cliente do Pipedrive", () => {
     const c = createPipedriveClient({ token: "t", baseUrl: "https://x.test", fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(await c.page("archivedLeads", 0, 5)).toEqual({ items: [{ id: "u" }], nextStart: 5 });
     expect(fetchImpl.mock.calls[0][0]).toBe("https://x.test/v1/leads/archived?start=0&limit=5");
+  });
+
+  it("sem next_start usa start + itens; página vazia encerra", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(json({ data: [{ id: 1 }, { id: 2 }], additional_data: { pagination: { more_items_in_collection: true } } }))
+      .mockResolvedValueOnce(json({ data: [], additional_data: { pagination: { more_items_in_collection: true } } }));
+    const c = createPipedriveClient({ token: "t", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect((await c.page("persons", 10, 2)).nextStart).toBe(12);
+    expect((await c.page("persons", 12, 2)).nextStart).toBeNull();
+  });
+
+  it("Retry-After em data HTTP e espera limitada a 60s", async () => {
+    const at = new Date(Date.now() + 10_000).toUTCString();
+    const ms = retryAfterMs(new Response("", { headers: { "retry-after": at } }));
+    expect(ms).toBeGreaterThan(7000);
+    expect(ms).toBeLessThanOrEqual(10_000);
+    const waits: number[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "3600" } }))
+      .mockResolvedValueOnce(json({ data: [] }));
+    const c = createPipedriveClient({ token: "t", fetchImpl: fetchImpl as unknown as typeof fetch, sleepImpl: async (m) => void waits.push(m) });
+    await c.stages();
+    expect(waits).toEqual([60_000]);
+  });
+
+  it("usa timeout, repete após erro de rede e cancela o corpo antes de repetir", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const bad = { status: 502, ok: false, headers: new Headers(), body: { cancel } } as unknown as Response;
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("timeout", "TimeoutError"))
+      .mockResolvedValueOnce(bad)
+      .mockResolvedValueOnce(json({ data: [{ id: 1 }] }));
+    const c = createPipedriveClient({ token: "t", fetchImpl: fetchImpl as unknown as typeof fetch, sleepImpl: async () => {} });
+    expect(await c.leadLabels()).toEqual([{ id: 1 }]);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
 });

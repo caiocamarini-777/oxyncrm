@@ -12,6 +12,8 @@ import {
   mapLead,
   mapNote,
   mapOrganization,
+  mapProduct,
+  warningsOf,
   mapPerson,
   toIso,
   type MapCtx,
@@ -52,6 +54,7 @@ const ctx: MapCtx = {
     hash_temp: { "7": "Quente", "8": "Frio" },
     hash_stack: { "1": "Next", "2": "Supabase" },
   },
+  fieldTypes: { hash_temp: "enum", hash_stack: "set" },
   activityTypeNames: { task: "Whatsapp", deadline: "Prazo" },
   leadLabelNames: { L1: "OXYN", L3: "Hot" },
 };
@@ -222,5 +225,52 @@ describe("empresas", () => {
     expect(companiesForContact("person:7", c).sort()).toEqual([C1, C2].sort());
     expect(companiesForContact("person:404", c)).toEqual([C2]);
     expect(companiesForContact("x", { ...ctx, contactLinks: { x: [{ type: "lead", labelIds: ["L1"] }] } })).toEqual([C1]);
+  });
+});
+
+describe("campos personalizados por tipo", () => {
+  it("set é sempre array de rótulos e enum é sempre escalar", () => {
+    expect(mapDeal({ ...baseDeal, hash_stack: "2", hash_temp: "8" }, ctx)).toMatchObject({
+      custom_fields: { stack: ["Supabase"], temperatura: "Frio" },
+    });
+    expect(mapDeal({ ...baseDeal, hash_stack: 2 }, ctx)).toMatchObject({ custom_fields: { stack: ["Supabase"] } });
+    expect(mapDeal({ ...baseDeal, hash_stack: [1, 2] }, ctx)).toMatchObject({ custom_fields: { stack: ["Next", "Supabase"] } });
+  });
+  const m2 = ImportMappings.parse({
+    ...mappings,
+    customFields: {
+      f_num: { target: "custom", customFieldKey: "n" },
+      f_user: { target: "custom", customFieldKey: "resp" },
+      f_date: { target: "custom", customFieldKey: "d" },
+      hash_mrr: { target: "native:mrr" },
+    },
+  });
+  const c2: MapCtx = { ...ctx, mappings: m2, fieldTypes: { f_num: "double", f_user: "user", f_date: "date" } };
+  it("converte número, usuário e data; chave inválida é omitida com aviso, sem derrubar a linha", () => {
+    const ok = mapDeal({ ...baseDeal, f_num: "12,5", f_user: { value: 5, name: "Ana" }, f_date: "2024-01-02" }, c2) as Record<string, unknown>;
+    expect(ok.custom_fields).toEqual({ n: 12.5, resp: U1, d: "2024-01-02" });
+    expect(warningsOf(ok)).toEqual([]);
+    const bad = mapDeal({ ...baseDeal, f_num: "abc", f_user: 99, f_date: "ontem", hash_mrr: "x" }, c2) as Record<string, unknown>;
+    expect(isError(bad)).toBe(false);
+    expect(bad.custom_fields).toEqual({});
+    expect(bad.mrr).toBe(0);
+    expect(warningsOf(bad)).toHaveLength(4);
+    expect(JSON.stringify(bad)).not.toContain("warnings");
+  });
+  it("customFieldKey é obrigatório quando o destino é custom", () => {
+    expect(() => ImportMappings.parse({ ...mappings, customFields: { x: { target: "custom" } } })).toThrow();
+  });
+});
+
+describe("mapProduct e contato só em funil ignorado", () => {
+  it("mapProduct", () => {
+    expect(mapProduct({ id: 3, name: "Plano", prices: [{ price: 99.9, currency: "BRL" }] }, ctx)).toEqual({
+      external_id: "3", company_id: C1, name: "Plano", kind: "setup", price: 99.9,
+    });
+    expect(isError(mapProduct({ id: 4 }, ctx))).toBe(true);
+  });
+  it("contato ligado só a funis ignorados cai na empresa padrão", () => {
+    const c = { ...ctx, contactLinks: { "person:1": [{ type: "deal" as const, pipelineId: 9 }] } };
+    expect(companiesForContact("person:1", c)).toEqual([C2]);
   });
 });

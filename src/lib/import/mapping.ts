@@ -21,6 +21,10 @@ export type MapCtx = {
   fieldOptions?: Record<string, Record<string, string>>;
   /** key_string do tipo de atividade -> nome (para task "Whatsapp") */
   activityTypeNames?: Record<string, string>;
+  /** campo (key) -> field_type do Pipedrive (enum, set, user, double, monetary...) */
+  fieldTypes?: Record<string, string>;
+  /** customFieldKey -> tipo do campo no Oxyn; tem precedência sobre fieldTypes */
+  oxynFieldTypes?: Record<string, OxynFieldType>;
   /** id da etiqueta de lead -> nome */
   leadLabelNames?: Record<string, string>;
   /** chave do contato (ex.: "person:12") -> vínculos */
@@ -138,49 +142,97 @@ export function activityKind(typeKey: string): "meeting" | "task" {
 
 // ---- campos personalizados -----------------------------------------------------------------------------------
 
-function customValue(raw: unknown, options: Record<string, string> | undefined): unknown {
-  const label = (id: string) => options?.[id] ?? id;
-  if (Array.isArray(raw)) {
-    return raw.map((e) => (typeof e === "object" && e ? str((e as Row).label ?? (e as Row).name) ?? label(refId(e) ?? "") : label(String(e))));
+export type OxynFieldType = "text" | "number" | "money" | "date" | "select" | "multiselect" | "user";
+
+const PD_TO_OXYN: Record<string, OxynFieldType> = {
+  enum: "select",
+  set: "multiselect",
+  user: "user",
+  double: "number",
+  int: "number",
+  monetary: "money",
+  date: "date",
+};
+
+/** Avisos de um mapeamento ficam numa propriedade não enumerável (não vai no JSON do import_upsert). */
+export function warningsOf(row: Row): string[] {
+  return ((row as { warnings?: string[] }).warnings ?? []).slice();
+}
+
+function withWarnings(row: Row, warnings: string[]): Row {
+  if (warnings.length) Object.defineProperty(row, "warnings", { value: warnings, enumerable: false });
+  return row;
+}
+
+function scalarLabel(e: unknown, options: Record<string, string> | undefined): string | null {
+  if (e && typeof e === "object") {
+    const o = e as Row;
+    return str(o.label) ?? str(o.name) ?? scalarLabel(refId(o), options);
   }
-  if (raw && typeof raw === "object") {
-    const o = raw as Row;
-    return str(o.name) ?? str(o.label) ?? label(refId(o) ?? "");
-  }
-  if (typeof raw === "number") return options ? label(String(raw)) : raw;
-  if (typeof raw === "string") {
-    if (options && /^\d+(,\d+)*$/.test(raw)) {
-      const parts = raw.split(",").map(label);
-      return parts.length === 1 ? parts[0] : parts;
+  const id = str(e);
+  return id === null ? null : (options?.[id] ?? id);
+}
+
+function listOf(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string") return raw.split(",").map((p) => p.trim()).filter(Boolean);
+  return [raw];
+}
+
+/** Converte pelo tipo do Oxyn; devolve undefined (e um aviso) quando não há valor válido. */
+function coerce(raw: unknown, type: OxynFieldType, ctx: MapCtx, options: Record<string, string> | undefined, warn: (m: string) => void, key: string): unknown {
+  switch (type) {
+    case "multiselect": {
+      const out = listOf(raw).map((e) => scalarLabel(e, options)).filter((x): x is string => !!x);
+      return out.length ? out : undefined;
     }
-    return raw;
+    case "select": {
+      const v = scalarLabel(Array.isArray(raw) ? raw[0] : raw, options);
+      return v ?? undefined;
+    }
+    case "number":
+    case "money": {
+      const n = num(raw);
+      if (n === null) warn(`campo ${key}: valor não numérico descartado`);
+      return n ?? undefined;
+    }
+    case "date": {
+      const d = dateOnly(raw);
+      if (!d) warn(`campo ${key}: data inválida descartada`);
+      return d ?? undefined;
+    }
+    case "user": {
+      const id = refId(raw);
+      const profile = id ? ctx.mappings.users[id] : undefined;
+      if (!profile) warn(`campo ${key}: usuário ${id ?? "?"} sem mapeamento, valor descartado`);
+      return profile;
+    }
+    default:
+      return scalarLabel(raw, options) ?? undefined;
   }
-  return raw;
 }
 
 type Natives = { setup_total?: number; mrr?: number; contract_months?: number };
 
-function applyCustom(item: PdItem, ctx: MapCtx): { custom: Row; natives: Natives } {
+function applyCustom(item: PdItem, ctx: MapCtx): { custom: Row; natives: Natives; warnings: string[] } {
   const custom: Row = {};
   const natives: Natives = {};
+  const warnings: string[] = [];
   for (const [key, target] of Object.entries(ctx.mappings.customFields)) {
     const raw = item[key];
     if (raw === null || raw === undefined || raw === "") continue;
-    if (target.target === "native:setup_total") {
-      const n = num(raw);
-      if (n !== null) natives.setup_total = n;
-    } else if (target.target === "native:mrr") {
-      const n = num(raw);
-      if (n !== null) natives.mrr = n;
-    } else if (target.target === "native:contract_months") {
-      const n = clampMonths(raw);
-      if (n !== null) natives.contract_months = n;
+    if (target.target === "native:setup_total" || target.target === "native:mrr" || target.target === "native:contract_months") {
+      const field = target.target.slice(7) as keyof Natives;
+      const n = field === "contract_months" ? clampMonths(raw) : num(raw);
+      if (n === null) warnings.push(`campo ${key}: valor não numérico descartado`);
+      else natives[field] = n;
     } else if (target.customFieldKey) {
-      const v = customValue(raw, ctx.fieldOptions?.[key]);
-      if (v !== "" && !(Array.isArray(v) && v.length === 0)) custom[target.customFieldKey] = v;
+      const type = ctx.oxynFieldTypes?.[target.customFieldKey] ?? PD_TO_OXYN[ctx.fieldTypes?.[key] ?? ""] ?? "text";
+      const v = coerce(raw, type, ctx, ctx.fieldOptions?.[key], (m) => warnings.push(m), key);
+      if (v !== undefined) custom[target.customFieldKey] = v;
     }
   }
-  return { custom, natives };
+  return { custom, natives, warnings };
 }
 
 // ---- empresas ------------------------------------------------------------------------------------------------
@@ -224,8 +276,8 @@ export function mapOrganization(item: PdItem, ctx: MapCtx): MapResult {
   if (typeof company_id !== "string") return company_id;
   const name = str(item.name);
   if (!name) return { error: "organização sem nome" };
-  const { custom } = applyCustom(item, ctx);
-  return {
+  const { custom, warnings } = applyCustom(item, ctx);
+  return withWarnings({
     external_id,
     company_id,
     owner_id: ownerOf(item.owner_id, ctx.mappings),
@@ -233,7 +285,7 @@ export function mapOrganization(item: PdItem, ctx: MapCtx): MapResult {
     address: str(item.address) ?? {},
     custom_fields: custom,
     created_at: toIso(item.add_time),
-  };
+  }, warnings);
 }
 
 export function mapPerson(item: PdItem, ctx: MapCtx): MapResult {
@@ -243,8 +295,8 @@ export function mapPerson(item: PdItem, ctx: MapCtx): MapResult {
   if (typeof company_id !== "string") return company_id;
   const name = str(item.name);
   if (!name) return { error: "pessoa sem nome" };
-  const { custom } = applyCustom(item, ctx);
-  return {
+  const { custom, warnings } = applyCustom(item, ctx);
+  return withWarnings({
     external_id,
     company_id,
     owner_id: ownerOf(item.owner_id, ctx.mappings),
@@ -254,7 +306,7 @@ export function mapPerson(item: PdItem, ctx: MapCtx): MapResult {
     organization_external_id: refId(item.org_id),
     custom_fields: custom,
     created_at: toIso(item.add_time),
-  };
+  }, warnings);
 }
 
 export function mapLead(item: PdItem, ctx: MapCtx): MapResult {
@@ -268,8 +320,8 @@ export function mapLead(item: PdItem, ctx: MapCtx): MapResult {
     .filter((id) => !m.leadLabelCompany[id])
     .map((id) => ctx.leadLabelNames?.[id])
     .filter((n): n is string => !!n);
-  const { custom } = applyCustom(item, ctx);
-  return {
+  const { custom, warnings } = applyCustom(item, ctx);
+  return withWarnings({
     external_id,
     company_id: leadCompany(item, m),
     owner_id: ownerOf(item.owner_id, m),
@@ -282,7 +334,7 @@ export function mapLead(item: PdItem, ctx: MapCtx): MapResult {
     status: ctx.archived === true || item.is_archived === true ? "archived" : "open",
     custom_fields: custom,
     created_at: toIso(item.add_time),
-  };
+  }, warnings);
 }
 
 export function mapDeal(item: PdItem, ctx: MapCtx): MapResult {
@@ -305,10 +357,10 @@ export function mapDeal(item: PdItem, ctx: MapCtx): MapResult {
   const status = str(item.status);
   if (status !== "open" && status !== "won" && status !== "lost") return { error: `status inválido: ${status ?? "vazio"}` };
 
-  const { custom, natives } = applyCustom(item, ctx);
+  const { custom, natives, warnings } = applyCustom(item, ctx);
   // lead de origem; pode apontar para lead que já saiu de /v1/leads (convertido): o banco descarta o vínculo ausente
   const lead = str(item.source_lead_id);
-  return {
+  return withWarnings({
     external_id,
     company_id: pm.companyId,
     owner_id: ownerOf(item.owner_id ?? item.user_id, m),
@@ -330,7 +382,7 @@ export function mapDeal(item: PdItem, ctx: MapCtx): MapResult {
     lead_external_id: lead,
     custom_fields: custom,
     created_at: toIso(item.add_time),
-  };
+  }, warnings);
 }
 
 export function mapActivity(item: PdItem, ctx: MapCtx): MapResult {

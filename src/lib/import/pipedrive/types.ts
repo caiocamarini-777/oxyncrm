@@ -37,10 +37,15 @@ export const ImportMappings = z.object({
   defaultCompanyId: uuid,
   customFields: z.record(
     z.string(),
-    z.object({
-      target: z.enum(["native:setup_total", "native:mrr", "native:contract_months", "custom"]),
-      customFieldKey: z.string().min(1).optional(),
-    }),
+    z
+      .object({
+        target: z.enum(["native:setup_total", "native:mrr", "native:contract_months", "custom"]),
+        customFieldKey: z.string().min(1).optional(),
+      })
+      .refine((v) => v.target !== "custom" || !!v.customFieldKey, {
+        message: "customFieldKey é obrigatório quando o destino é custom",
+        path: ["customFieldKey"],
+      }),
   ),
   ignorePipelines: z.array(z.string()),
 });

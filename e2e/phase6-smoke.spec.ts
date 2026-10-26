@@ -74,13 +74,38 @@ async function workLead(page: Page, id: string, subject: string, channel: string
   await planned(page, subject).getByRole("button", { name: /^Concluir/ }).click();
 }
 
+let roleId = "";
+const MANAGER_PERMISSIONS = {
+  visibility: { leads: "company", deals: "company", persons: "company", organizations: "company", activities: "company" },
+  actions: { create: true, edit: true, delete: true, export: true, reassign_owner: true },
+  settings: {
+    manage_pipelines: true,
+    manage_custom_fields: true,
+    manage_products: true,
+    view_reports: true,
+    create_dashboards: true,
+    share_dashboards: true,
+  },
+};
+
 test.beforeAll(async () => {
   sdrId = await createTestUser({ email: sdrEmail, password, fullName: "Sara SDR", superAdmin: true });
-  managerId = await createTestUser({ email: managerEmail, password, fullName: "Gil Gestor", superAdmin: true });
+  // O gestor é membro só da empresa do teste: o link público roda no alcance de quem criou o dashboard,
+  // e um admin geral enxergaria também as empresas reais do banco de dev.
+  managerId = await createTestUser({ email: managerEmail, password, fullName: "Gil Gestor" });
   const a = admin();
   const c = await a.from("companies").insert({ name: `Fase 6 E2E ${stamp}`, slug }).select("id").single();
   if (c.error) throw c.error;
   companyId = c.data.id;
+  const r = await a
+    .from("roles")
+    .insert({ name: `tst-e2e-p6-gestor-${stamp}`, description: "Papel de teste", permissions: MANAGER_PERMISSIONS })
+    .select("id")
+    .single();
+  if (r.error) throw r.error;
+  roleId = r.data.id;
+  const m = await a.from("memberships").insert({ user_id: managerId, company_id: companyId, role_id: roleId });
+  if (m.error) throw m.error;
 
   const p = await a.from("persons").insert({ company_id: companyId, owner_id: sdrId, full_name: personName }).select("id").single();
   if (p.error) throw p.error;
@@ -118,6 +143,7 @@ test.afterAll(async () => {
   }
   if (sdrId) await deleteTestUser(sdrId).catch(() => {});
   if (managerId) await deleteTestUser(managerId).catch(() => {});
+  if (roleId) await a.from("roles").delete().eq("id", roleId);
 });
 
 let before: Funnel;

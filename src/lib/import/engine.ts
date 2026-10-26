@@ -20,8 +20,8 @@ import {
 // ---- contratos ---------------------------------------------------------------------------------------------------
 
 export const STEPS = [
-  "users_check",
   "index",
+  "users_check",
   "custom_fields",
   "products",
   "organizations",
@@ -47,14 +47,20 @@ export type ImportCache = {
   companies: string[];
   /** id do negócio no Pipedrive -> empresa (só negócios de funis mapeados e não ignorados) */
   deals: Record<string, number>;
+  /** negócios de funis ignorados ou sem mapeamento: atividades e anotações deles são puladas */
+  ignoredDeals: Record<string, 1>;
   /** id do lead -> empresa */
   leads: Record<string, number>;
-  /** "person:12" / "org:5" -> empresas vistas pelos negócios e leads do contato */
+  /** "person:12" / "org:5" -> empresas vistas pelos negócios e leads do contato (a primeira é a principal) */
   contacts: Record<string, number[]>;
+  /** id do usuário do Pipedrive dono de negócios -> empresas desses negócios */
+  dealOwners: Record<string, number[]>;
   /** funis mapeados como null, criados na etapa custom_fields */
   pipelines?: Record<string, { pipelineId: string; stages: Record<string, string> }>;
-  /** customFieldKey -> tipo do campo no Oxyn */
+  /** "<empresa>:<entidade>:<customFieldKey>" -> tipo do campo no Oxyn */
   fieldTypes?: Record<string, OxynFieldType>;
+  /** "<perfil>:<empresa>" -> contatos copiados para empresa secundária com o dono padrão (avisos da etapa) */
+  ownerSwaps?: Record<string, number>;
 };
 
 export type ImportCursor = { step?: Step; start?: number; sub?: number; cache?: ImportCache };
@@ -79,6 +85,11 @@ export type MembersInfo = {
   userNames: Record<string, string>;
   companyNames: Record<string, string>;
 };
+export type ExistingPipeline = {
+  id: string;
+  archived: boolean;
+  stages: { id: string; name: string; position: number; archived: boolean }[];
+};
 
 /** Leitura do Pipedrive usada pelo motor (o cliente real satisfaz este tipo). */
 export type ImportSource = {
@@ -95,11 +106,18 @@ export type ImportSource = {
 /** Gravação e leitura do banco usadas pelo motor (implementação real em store.ts). */
 export type ImportStore = {
   loadJob(id: string): Promise<JobRecord | null>;
+  /** concessão exclusiva do job por `seconds` (import_claim); false se outra fatia a detém */
+  claim(id: string, token: string, seconds: number): Promise<boolean>;
+  release(id: string, token: string): Promise<void>;
   /** draft/running -> running; false se o job não pode rodar */
   start(id: string): Promise<boolean>;
-  /** grava o cursor se o job está running ou paused (o trabalho da unidade já foi feito); false se não está mais running */
-  saveCursor(id: string, cursor: ImportCursor): Promise<boolean>;
-  finish(id: string, status: "done" | "failed"): Promise<void>;
+  /**
+   * Grava o cursor se a concessão é de `token` e o job está running ou paused (o trabalho da unidade já foi
+   * feito); devolve false se o job não está mais running ou a concessão foi perdida.
+   */
+  saveCursor(id: string, token: string, cursor: ImportCursor): Promise<boolean>;
+  /** encerra só se a concessão é de `token` */
+  finish(id: string, token: string, status: "done" | "failed"): Promise<void>;
   upsert(id: string, entity: DbEntity, rows: Row[]): Promise<UpsertCounts>;
   /** soma created/updated/skipped/unchanged (errors e warnings o banco já conta) */
   count(id: string, entity: string, counts: Omit<UpsertCounts, "errors">): Promise<void>;
@@ -109,19 +127,25 @@ export type ImportStore = {
   customFieldDefs(companyIds: string[]): Promise<CustomFieldDef[]>;
   createCustomFieldDef(def: NewCustomFieldDef): Promise<void>;
   setCustomFieldOptions(id: string, options: string[]): Promise<void>;
-  findPipeline(companyId: string, name: string): Promise<{ id: string; stages: { id: string; name: string }[] } | null>;
+  /** funil com este nome na empresa, arquivado ou não, com todas as etapas */
+  findPipeline(companyId: string, name: string): Promise<ExistingPipeline | null>;
   createPipeline(companyId: string, name: string): Promise<string>;
   createStage(pipelineId: string, companyId: string, stage: { name: string; position: number; probability: number }): Promise<string>;
 };
 
-export type EngineDeps = { client: ImportSource; store: ImportStore; now?: () => number };
+export type EngineDeps = { client: ImportSource; store: ImportStore; now?: () => number; token?: () => string };
 export type SliceResult = {
   status: JobStatus;
   step: Step;
   counters: Record<string, Record<string, number>>;
   /** true quando não há mais o que rodar agora (done, failed ou paused) */
   done: boolean;
+  /** outra fatia está com a concessão do job (em andamento): nada rodou nesta chamada */
+  busy?: boolean;
 };
+
+/** Duração da concessão: maior que o orçamento padrão (40s) mais uma unidade. */
+export const LEASE_SECONDS = 120;
 
 const PAGE_STEPS: Partial<Record<Step, { source: PdPageEntity; entity: DbEntity }>> = {
   products: { source: "products", entity: "products" },
@@ -207,7 +231,7 @@ async function loadMeta(client: ImportSource): Promise<Meta> {
 }
 
 function emptyCache(companies: string[]): ImportCache {
-  return { companies: [...companies], deals: {}, leads: {}, contacts: {} };
+  return { companies: [...companies], deals: {}, ignoredDeals: {}, leads: {}, contacts: {}, dealOwners: {} };
 }
 
 function companyIdx(cache: ImportCache, id: string): number {
@@ -221,19 +245,28 @@ function contactCompanies(cache: ImportCache, key: string, fallback: string): st
   return idx?.length ? idx.map((i) => cache.companies[i]) : [fallback];
 }
 
-/** Empresa de atividade/anotação: negócio ou lead vinculado; senão as empresas da pessoa e da organização. */
-function recordCompanies(item: PdItem, cache: ImportCache, fallback: string): string[] {
+/**
+ * Empresa de atividade/anotação: negócio ou lead vinculado; senão as empresas da pessoa (as da organização só
+ * quando não há pessoa). null = vinculada a negócio de funil ignorado ou sem mapeamento: pular.
+ */
+function recordCompanies(item: PdItem, cache: ImportCache, fallback: string): string[] | null {
   const deal = refId(item.deal_id);
+  if (deal && cache.ignoredDeals?.[deal]) return null;
   if (deal && cache.deals[deal] !== undefined) return [cache.companies[cache.deals[deal]]];
   const lead = refId(item.lead_id);
   if (lead && cache.leads[lead] !== undefined) return [cache.companies[cache.leads[lead]]];
   const person = refId(item.person_id);
+  if (person) return contactCompanies(cache, `person:${person}`, fallback);
   const org = refId(item.org_id);
-  const out = uniq([
-    ...(person ? contactCompanies(cache, `person:${person}`, fallback) : []),
-    ...(org ? contactCompanies(cache, `org:${org}`, fallback) : []),
-  ]);
-  return out.length ? out : [fallback];
+  return org ? contactCompanies(cache, `org:${org}`, fallback) : [fallback];
+}
+
+/** customFieldKey -> tipo, para uma empresa e entidade */
+function typesFor(cache: ImportCache, company: string, entity: string): Record<string, OxynFieldType> {
+  const prefix = `${cache.companies.indexOf(company)}:${entity}:`;
+  const out: Record<string, OxynFieldType> = {};
+  for (const [k, t] of Object.entries(cache.fieldTypes ?? {})) if (k.startsWith(prefix)) out[k.slice(prefix.length)] = t;
+  return out;
 }
 
 // ---- etapas ------------------------------------------------------------------------------------------------------
@@ -242,49 +275,39 @@ function nextStep(step: Step): Step {
   return STEPS[Math.min(STEPS.indexOf(step) + 1, STEPS.length - 1)];
 }
 
-function advance(cursor: ImportCursor, step: Step): ImportCursor {
-  return { step: nextStep(step), start: 0, cache: cursor.cache };
-}
-
-async function usersCheck(env: ImportEnv): Promise<ImportCursor> {
-  const { active, userNames, companyNames } = await env.members();
-  const m = env.mappings;
-  const name = (id: string) => userNames[id] || id;
-  const missing: string[] = [];
-  const noAccess = env.companies.filter((c) => !active[c]?.includes(m.fallbackOwnerId));
-  if (noAccess.length) missing.push(`${name(m.fallbackOwnerId)} (${noAccess.map((c) => companyNames[c] || c).join(", ")})`);
-  for (const user of uniq(Object.values(m.users))) {
-    if (user === m.fallbackOwnerId) continue;
-    if (!env.companies.some((c) => active[c]?.includes(user))) missing.push(`${name(user)} (nenhuma empresa de destino)`);
-  }
-  if (missing.length) {
-    throw new StepFailure(`Usuários mapeados sem acesso ativo às empresas de destino: ${missing.join("; ")}`);
-  }
-  return { step: "index", start: 0, sub: 0, cache: emptyCache(env.companies) };
+function advance(cache: ImportCache, step: Step): ImportCursor {
+  return { step: nextStep(step), start: 0, cache };
 }
 
 async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSource): Promise<ImportCursor> {
   const m = env.mappings;
-  const cache = cursor.cache ?? emptyCache(env.companies);
   const sub = cursor.sub ?? 0;
+  const start = cursor.start ?? 0;
+  // começo do índice: sempre do zero
+  const cache = cursor.cache && (sub > 0 || start > 0) ? cursor.cache : emptyCache(env.companies);
   const source = INDEX_SOURCES[sub];
-  const page = await client.page(source, cursor.start ?? 0);
-  const link = (key: string, id: string | null, ci: number) => {
-    if (!id) return;
-    const list = (cache.contacts[`${key}:${id}`] ??= []);
+  const page = await client.page(source, start);
+  const add = (map: Record<string, number[]>, key: string, ci: number) => {
+    const list = (map[key] ??= []);
     if (!list.includes(ci)) list.push(ci);
   };
+  const link = (kind: string, id: string | null, ci: number) => id && add(cache.contacts, `${kind}:${id}`, ci);
   for (const item of page.items) {
     const id = refId(item.id);
     if (!id) continue;
     if (source === "deals") {
       const p = refId(item.pipeline_id);
       const pm = p ? m.pipelines[p] : undefined;
-      if (!p || !pm || m.ignorePipelines.includes(p)) continue;
+      if (!p || !pm || m.ignorePipelines.includes(p)) {
+        cache.ignoredDeals[id] = 1;
+        continue;
+      }
       const ci = companyIdx(cache, pm.companyId);
       cache.deals[id] = ci;
       link("person", refId(item.person_id), ci);
       link("org", refId(item.org_id), ci);
+      const owner = refId(item.owner_id ?? item.user_id);
+      if (owner) add(cache.dealOwners, owner, ci);
     } else {
       const ci = companyIdx(cache, leadCompany(item, m));
       cache.leads[id] = ci;
@@ -292,9 +315,34 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
       link("org", refId(item.organization_id ?? item.org_id), ci);
     }
   }
-  if (page.nextStart !== null) return { ...cursor, cache, start: page.nextStart };
-  if (sub + 1 < INDEX_SOURCES.length) return { ...cursor, cache, sub: sub + 1, start: 0 };
-  return advance({ cache }, "index");
+  if (page.nextStart !== null) return { step: "index", cache, sub, start: page.nextStart };
+  if (sub + 1 < INDEX_SOURCES.length) return { step: "index", cache, sub: sub + 1, start: 0 };
+  return advance(cache, "index");
+}
+
+/**
+ * O dono padrão precisa de acesso ativo a todas as empresas de destino; o dono (mapeado) de cada negócio de funil
+ * mapeado precisa de acesso à empresa desse funil. Lista os pares (usuário, empresa) que faltam.
+ */
+async function usersCheck(env: ImportEnv, cursor: ImportCursor): Promise<ImportCursor> {
+  const cache = cursor.cache ?? emptyCache(env.companies);
+  const { active, userNames, companyNames } = await env.members();
+  const m = env.mappings;
+  const pairs = new Map<string, string>();
+  const need = (user: string, company: string) => {
+    if (!active[company]?.includes(user)) {
+      pairs.set(`${user}:${company}`, `${userNames[user] || user} (${companyNames[company] || company})`);
+    }
+  };
+  for (const c of env.companies) need(m.fallbackOwnerId, c);
+  for (const [pdUser, idx] of Object.entries(cache.dealOwners ?? {})) {
+    const user = m.users[pdUser] ?? m.fallbackOwnerId;
+    for (const i of idx) need(user, cache.companies[i]);
+  }
+  if (pairs.size) {
+    throw new StepFailure(`Usuários sem acesso ativo à empresa de destino: ${[...pairs.values()].join("; ")}`);
+  }
+  return advance(cache, "users_check");
 }
 
 /** Tipos do Pipedrive -> tipo do campo no Oxyn (fase 2: text, number, money, date, select, multiselect, user). */
@@ -312,28 +360,62 @@ const FIELD_TYPE: Record<string, OxynFieldType> = {
 };
 const FIELD_KEY = /^[a-z][a-z0-9_]{0,39}$/;
 
+/** "Nome", "Nome (2)", "Nome (3)"... sempre dentro do limite de tamanho. */
+function variant(base: string, n: number, max: number): string {
+  const suffix = n === 1 ? "" : ` (${n})`;
+  return base.slice(0, max - suffix.length).trimEnd() + suffix;
+}
+
 async function resolvePipelines(env: ImportEnv, client: ImportSource, store: ImportStore) {
   const m = env.mappings;
   const pending = Object.entries(m.pipelines).filter(([id, p]) => !m.ignorePipelines.includes(id) && !p.pipelineId);
   const resolved: NonNullable<ImportCache["pipelines"]> = {};
   if (!pending.length) return resolved;
   const [pdPipes, pdStages] = await Promise.all([client.pipelines(), client.stages()]);
+  const claimed = new Set<string>(); // "<empresa>:<nome>" já usado nesta etapa
+
   for (const [pdId, pm] of pending) {
     const raw = pdPipes.find((p) => refId(p.id) === pdId)?.name;
-    const name = (typeof raw === "string" && raw.trim() ? raw.trim() : `Funil ${pdId}`).slice(0, 80);
-    const existing = await store.findPipeline(pm.companyId, name);
-    const pipelineId = existing?.id ?? (await store.createPipeline(pm.companyId, name));
+    const base = typeof raw === "string" && raw.trim() ? raw.trim() : `Funil ${pdId}`;
+    let pipelineId = "";
+    let existing: ExistingPipeline | null = null;
+    // funil ativo com o nome é reaproveitado; nome de funil arquivado ou já usado ganha sufixo
+    for (let n = 1; !pipelineId; n++) {
+      const name = variant(base, n, 80);
+      if (claimed.has(`${pm.companyId}:${name}`)) continue;
+      const found = await store.findPipeline(pm.companyId, name);
+      if (found?.archived) continue;
+      claimed.add(`${pm.companyId}:${name}`);
+      existing = found;
+      pipelineId = found?.id ?? (await store.createPipeline(pm.companyId, name));
+    }
+
+    const current = [...(existing?.stages ?? [])];
+    let position = current.reduce((max, s) => Math.max(max, s.position), -1);
+    const used = new Set<string>();
     const stages: Record<string, string> = {};
     const list = pdStages
       .filter((s) => refId(s.pipeline_id) === pdId)
       .sort((a, b) => Number(a.order_nr ?? 0) - Number(b.order_nr ?? 0));
-    for (const [position, s] of list.entries()) {
+    for (const s of list) {
       const sid = refId(s.id);
       if (!sid || pm.stages[sid]) continue;
-      const sname = (typeof s.name === "string" && s.name.trim() ? s.name.trim() : `Etapa ${sid}`).slice(0, 60);
-      const found = existing?.stages.find((x) => x.name === sname);
+      const sbase = typeof s.name === "string" && s.name.trim() ? s.name.trim() : `Etapa ${sid}`;
       const prob = Math.min(100, Math.max(0, Math.round(Number(s.deal_probability ?? 0)) || 0));
-      stages[sid] = found?.id ?? (await store.createStage(pipelineId, pm.companyId, { name: sname, position, probability: prob }));
+      for (let n = 1; !stages[sid]; n++) {
+        const name = variant(sbase, n, 60);
+        if (used.has(name)) continue;
+        const found = current.find((x) => x.name === name);
+        if (found?.archived) continue;
+        used.add(name);
+        if (found) {
+          stages[sid] = found.id;
+        } else {
+          position += 1;
+          stages[sid] = await store.createStage(pipelineId, pm.companyId, { name, position, probability: prob });
+          current.push({ id: stages[sid], name, position, archived: false });
+        }
+      }
     }
     resolved[pdId] = { pipelineId, stages };
   }
@@ -384,9 +466,10 @@ async function customFields(env: ImportEnv, cursor: ImportCursor, deps: EngineDe
       for (const company of env.companies) {
         for (const [entity, companies] of Object.entries(entities)) {
           if (!companies.includes(company)) continue;
+          const slot = `${companyIdx(cache, company)}:${entity}:${key}`;
           const found = defs.find((d) => d.company_id === company && d.entity === entity && d.key === key);
           if (found) {
-            fieldTypes[key] ??= found.type as OxynFieldType;
+            fieldTypes[slot] = found.type as OxynFieldType;
             if ((found.type === "select" || found.type === "multiselect") && options.some((o) => !found.options.includes(o))) {
               found.options = uniq([...found.options, ...options]);
               await store.setCustomFieldOptions(found.id, found.options);
@@ -395,7 +478,7 @@ async function customFields(env: ImportEnv, cursor: ImportCursor, deps: EngineDe
             const def = { company_id: company, entity, key, label, type, options: type === "select" || type === "multiselect" ? options : [] };
             await store.createCustomFieldDef(def);
             defs.push({ ...def, id: "" });
-            fieldTypes[key] ??= type;
+            fieldTypes[slot] = type;
           }
         }
       }
@@ -403,38 +486,43 @@ async function customFields(env: ImportEnv, cursor: ImportCursor, deps: EngineDe
     if (errors.length) await store.log(jobId, errors);
   }
   cache.fieldTypes = fieldTypes;
-  return advance({ cache }, "custom_fields");
+  return advance(cache, "custom_fields");
 }
 
-type Mapped = { results: MapResult[]; skipped: boolean };
-
-function mapItem(step: Step, item: PdItem, env: ImportEnv, ctx: MapCtx, cache: ImportCache): Mapped {
+/** null = pular o item (conta como skipped) */
+function mapItem(step: Step, item: PdItem, env: ImportEnv, base: MapCtx, cache: ImportCache): MapResult[] | null {
   const m = env.mappings;
   const fallback = m.defaultCompanyId;
-  const perCompany = (companies: string[], fn: (i: PdItem, c: MapCtx) => MapResult) =>
-    companies.map((companyId) => fn(item, { ...ctx, companyId }));
+  const ctxFor = (companyId: string, entity: string): MapCtx => ({
+    ...base,
+    companyId,
+    oxynFieldTypes: typesFor(cache, companyId, entity),
+  });
   switch (step) {
     case "products":
-      return { results: [mapProduct(item, { ...ctx, companyId: fallback })], skipped: false };
+      return [mapProduct(item, ctxFor(fallback, "products"))];
     case "organizations":
-      return { results: perCompany(contactCompanies(cache, `org:${refId(item.id)}`, fallback), mapOrganization), skipped: false };
+      return contactCompanies(cache, `org:${refId(item.id)}`, fallback).map((c) => mapOrganization(item, ctxFor(c, "organizations")));
     case "persons":
-      return { results: perCompany(contactCompanies(cache, `person:${refId(item.id)}`, fallback), mapPerson), skipped: false };
+      return contactCompanies(cache, `person:${refId(item.id)}`, fallback).map((c) => mapPerson(item, ctxFor(c, "persons")));
     case "leads":
-      return { results: [mapLead(item, ctx)], skipped: false };
     case "archived_leads":
-      return { results: [mapLead(item, { ...ctx, archived: true })], skipped: false };
+      return [mapLead(item, { ...ctxFor(leadCompany(item, m), "leads"), archived: step === "archived_leads" })];
     case "deals": {
       const p = refId(item.pipeline_id);
-      if (p && m.ignorePipelines.includes(p)) return { results: [], skipped: true };
-      return { results: [mapDeal(item, ctx)], skipped: false };
+      if (p && m.ignorePipelines.includes(p)) return null;
+      const company = p ? m.pipelines[p]?.companyId : undefined;
+      return [mapDeal(item, company ? ctxFor(company, "deals") : base)];
     }
     case "activities":
-      return { results: perCompany(recordCompanies(item, cache, fallback), mapActivity), skipped: false };
-    case "notes":
-      return { results: perCompany(recordCompanies(item, cache, fallback), mapNote), skipped: false };
+    case "notes": {
+      const companies = recordCompanies(item, cache, fallback);
+      if (!companies) return null;
+      const fn = step === "activities" ? mapActivity : mapNote;
+      return companies.map((c) => fn(item, ctxFor(c, step)));
+    }
     default:
-      return { results: [], skipped: true };
+      return null;
   }
 }
 
@@ -444,26 +532,22 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
   const cache = cursor.cache ?? emptyCache(env.companies);
   const page = await deps.client.page(spec.source, cursor.start ?? 0);
   const [meta, members] = await Promise.all([env.meta(), env.members()]);
-  const ctx: MapCtx = {
-    mappings: env.mappings,
-    ...meta,
-    resolvedPipelines: cache.pipelines,
-    oxynFieldTypes: cache.fieldTypes,
-  };
+  const base: MapCtx = { mappings: env.mappings, ...meta, resolvedPipelines: cache.pipelines };
   const fallbackOwner = env.mappings.fallbackOwnerId;
+  const isContact = step === "organizations" || step === "persons";
   const rows: Row[] = [];
   const logs: LogItem[] = [];
   let skipped = 0;
 
   for (const item of page.items) {
     const ext = refId(item.id);
-    const { results, skipped: skip } = mapItem(step, item, env, ctx, cache);
-    if (skip) {
+    const results = mapItem(step, item, env, base, cache);
+    if (!results) {
       skipped++;
       continue;
     }
     let failed = false;
-    for (const r of results) {
+    for (const [i, r] of results.entries()) {
       if (!r.ok) {
         // a mesma falha se repetiria em cada empresa: registra uma vez
         if (!failed) logs.push({ entity: spec.entity, external_id: ext, reason: r.error });
@@ -472,13 +556,11 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
       }
       const row = { ...r.row };
       for (const w of r.warnings) logs.push({ entity: spec.entity, external_id: ext, reason: `aviso: ${w}` });
+      // cópia de contato em empresa secundária: dono sem acesso a ela vira o dono padrão (aviso agregado)
       const company = typeof row.company_id === "string" ? row.company_id : null;
-      if (company && typeof row.owner_id === "string" && row.owner_id !== fallbackOwner && !members.active[company]?.includes(row.owner_id)) {
-        logs.push({
-          entity: spec.entity,
-          external_id: ext,
-          reason: `aviso: dono ${members.userNames[row.owner_id] || row.owner_id} sem acesso à empresa ${members.companyNames[company] || company}; usado o dono padrão`,
-        });
+      if (isContact && i > 0 && company && typeof row.owner_id === "string" && !members.active[company]?.includes(row.owner_id)) {
+        const k = `${row.owner_id}:${companyIdx(cache, company)}`;
+        cache.ownerSwaps = { ...cache.ownerSwaps, [k]: (cache.ownerSwaps?.[k] ?? 0) + 1 };
         row.owner_id = fallbackOwner;
       }
       rows.push(row);
@@ -493,26 +575,38 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
     total.skipped += res.skipped ?? 0;
     total.unchanged += res.unchanged ?? 0;
   }
+  const last = page.nextStart === null;
+  if (last && cache.ownerSwaps) {
+    for (const [k, n] of Object.entries(cache.ownerSwaps)) {
+      const [user, ci] = k.split(":");
+      const company = cache.companies[Number(ci)];
+      logs.push({
+        entity: spec.entity,
+        external_id: null,
+        reason: `aviso: ${members.userNames[user] || user} sem acesso à empresa ${members.companyNames[company] || company}; dono padrão usado em ${n} ${n === 1 ? "registro" : "registros"}`,
+      });
+    }
+    delete cache.ownerSwaps;
+  }
   if (logs.length) await deps.store.log(jobId, logs);
   if (rows.length || skipped) await deps.store.count(jobId, spec.entity, total);
 
-  if (page.nextStart !== null) return { ...cursor, cache, start: page.nextStart };
-  return advance({ cache }, step);
+  return last ? advance(cache, step) : { step, cache, start: page.nextStart! };
 }
 
 async function runUnit(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps, jobId: string): Promise<ImportCursor> {
-  const step = cursor.step ?? "users_check";
+  const step = cursor.step ?? STEPS[0];
   const c = { ...cursor, step };
   switch (step) {
-    case "users_check":
-      return usersCheck(env);
     case "index":
       return indexPage(env, c, deps.client);
+    case "users_check":
+      return usersCheck(env, c);
     case "custom_fields":
       return customFields(env, c, deps, jobId);
     case "derivatives":
       await deps.store.rebuildDerivatives(jobId);
-      return advance(c, step);
+      return advance(c.cache ?? emptyCache(env.companies), step);
     case "done":
       return c;
     default:
@@ -525,7 +619,7 @@ async function runUnit(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps, j
 function resultOf(job: JobRecord): SliceResult {
   return {
     status: job.status,
-    step: job.cursor?.step ?? "users_check",
+    step: job.cursor?.step ?? STEPS[0],
     counters: job.counters ?? {},
     done: job.status !== "running",
   };
@@ -537,14 +631,10 @@ async function reload(store: ImportStore, jobId: string): Promise<SliceResult> {
   return resultOf(job);
 }
 
-async function fail(store: ImportStore, jobId: string, reason: string) {
-  await store.log(jobId, [{ entity: "job", external_id: null, reason }]);
-  await store.finish(jobId, "failed");
-}
-
 /**
- * Roda o job por no máximo ~budgetMs (sempre ao menos uma unidade: uma página ou uma etapa curta).
- * O cursor é gravado após cada unidade; rodar de novo a partir dele não duplica (import_upsert é idempotente).
+ * Roda o job por no máximo ~budgetMs (sempre ao menos uma unidade: uma página ou uma etapa curta), com a
+ * concessão exclusiva do job. O cursor é gravado após cada unidade; rodar de novo a partir dele não duplica
+ * (import_upsert é idempotente).
  */
 export async function runImportSlice(
   jobId: string,
@@ -556,35 +646,46 @@ export async function runImportSlice(
   const job = await store.loadJob(jobId);
   if (!job) throw new Error("Importação não encontrada");
   if (job.status !== "draft" && job.status !== "running") return resultOf(job);
-  if (!(await store.start(jobId))) return reload(store, jobId);
 
-  let cursor: ImportCursor = { ...(job.cursor ?? {}), step: job.cursor?.step ?? "users_check" };
-  try {
-    const env = prepareContext(job, deps);
-    for (;;) {
-      if (cursor.step === "done") {
-        await store.finish(jobId, "done");
-        break;
-      }
-      const u0 = now();
-      cursor = await runUnit(env, cursor, deps, jobId);
-      const unitMs = now() - u0;
-      if (!(await store.saveCursor(jobId, cursor))) break; // pausado
-      if (cursor.step === "done") continue;
-      // para antes de estourar: a próxima unidade deve levar o mesmo que a última
-      if (now() - t0 + unitMs >= budgetMs) break;
-    }
-  } catch (e) {
-    if (e instanceof PipedriveAuthError || e instanceof StepFailure) {
-      await fail(store, jobId, e.message);
-    } else {
-      const current = await store.loadJob(jobId);
-      // pausado no meio da página (import_upsert recusa job fora de running): para sem erro
-      if (current && current.status !== "running") return resultOf(current);
-      throw e;
-    }
+  const token = deps.token?.() ?? crypto.randomUUID();
+  if (!(await store.claim(jobId, token, LEASE_SECONDS))) {
+    // outra fatia está rodando este job: em andamento, nada a fazer agora
+    return { ...resultOf(job), status: "running", done: false, busy: true };
   }
-  return reload(store, jobId);
+  try {
+    if (!(await store.start(jobId))) return await reload(store, jobId);
+    let cursor: ImportCursor = { ...(job.cursor ?? {}), step: job.cursor?.step ?? STEPS[0] };
+    try {
+      const env = prepareContext(job, deps);
+      for (;;) {
+        if (cursor.step === "done") {
+          await store.finish(jobId, token, "done");
+          break;
+        }
+        const u0 = now();
+        cursor = await runUnit(env, cursor, deps, jobId);
+        const unitMs = now() - u0;
+        if (!(await store.saveCursor(jobId, token, cursor))) break; // pausado ou concessão perdida
+        if (cursor.step === "done") continue;
+        // para antes de estourar: a próxima unidade deve levar o mesmo que a última
+        if (now() - t0 + unitMs >= budgetMs) break;
+      }
+    } catch (e) {
+      if (e instanceof PipedriveAuthError || e instanceof StepFailure) {
+        await store.log(jobId, [{ entity: "job", external_id: null, reason: e.message }]);
+        await store.finish(jobId, token, "failed");
+      } else {
+        const current = await store.loadJob(jobId);
+        // pausado no meio da página (import_upsert recusa job fora de running): para sem erro
+        if (current && current.status !== "running") return resultOf(current);
+        // outros erros: o job continua running e retoma do último cursor gravado
+        throw e;
+      }
+    }
+    return await reload(store, jobId);
+  } finally {
+    await store.release(jobId, token).catch(() => {}); // se falhar, a concessão vence sozinha
+  }
 }
 
 /** Roda fatias até o job sair de running (script de linha de comando). */
@@ -597,6 +698,7 @@ export async function runImportToEnd(
   for (;;) {
     const r = await runImportSlice(jobId, { budgetMs, deps });
     onSlice?.(r);
+    if (r.busy) throw new Error("Outra execução está processando esta importação. Tente de novo em instantes.");
     if (r.done) return r;
   }
 }
@@ -612,7 +714,7 @@ export function createDryRunStore(base: ImportStore) {
   const rows: Partial<Record<DbEntity, number>> = {};
   const logs: LogItem[] = [];
   const defs: CustomFieldDef[] = [];
-  const pipes: { id: string; company_id: string; name: string; stages: { id: string; name: string }[] }[] = [];
+  const pipes: (ExistingPipeline & { company_id: string; name: string })[] = [];
   let seq = 0;
   const bump = (entity: string, key: string, n: number) => {
     if (!job) return;
@@ -625,17 +727,21 @@ export function createDryRunStore(base: ImportStore) {
       job ??= await base.loadJob(id);
       return job && structuredClone(job);
     },
+    async claim() {
+      return true;
+    },
+    async release() {},
     async start() {
       if (!job || (job.status !== "draft" && job.status !== "running")) return false;
       job.status = "running";
       return true;
     },
-    async saveCursor(_id, cursor) {
+    async saveCursor(_id, _token, cursor) {
       if (!job || (job.status !== "running" && job.status !== "paused")) return false;
       job.cursor = structuredClone(cursor);
       return job.status === "running";
     },
-    async finish(_id, status) {
+    async finish(_id, _token, status) {
       if (job) job.status = status;
     },
     async upsert(_id, entity, list) {
@@ -663,12 +769,12 @@ export function createDryRunStore(base: ImportStore) {
     },
     async createPipeline(companyId, name) {
       const id = `dry-${++seq}`;
-      pipes.push({ id, company_id: companyId, name, stages: [] });
+      pipes.push({ id, company_id: companyId, name, archived: false, stages: [] });
       return id;
     },
     async createStage(pipelineId, _companyId, stage) {
       const id = `dry-${++seq}`;
-      pipes.find((p) => p.id === pipelineId)?.stages.push({ id, name: stage.name });
+      pipes.find((p) => p.id === pipelineId)?.stages.push({ id, name: stage.name, position: stage.position, archived: false });
       return id;
     },
   };

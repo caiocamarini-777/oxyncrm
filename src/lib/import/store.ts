@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { CustomFieldDef, ImportStore, JobRecord, UpsertCounts } from "./engine";
+import type { CustomFieldDef, ExistingPipeline, ImportStore, JobRecord, UpsertCounts } from "./engine";
 
 type Res<T> = { data: T | null; error: { message: string } | null };
 
@@ -17,6 +17,12 @@ export function createSupabaseStore(admin: SupabaseClient): ImportStore {
       const r = await admin.from("import_jobs").select("id, status, mappings, cursor, counters").eq("id", id).maybeSingle();
       return must("loadJob", r) as JobRecord | null;
     },
+    async claim(id, token, seconds) {
+      return must("import_claim", await admin.rpc("import_claim", { p_job: id, p_owner: token, p_seconds: seconds })) === true;
+    },
+    async release(id, token) {
+      must("import_release", await admin.rpc("import_release", { p_job: id, p_owner: token }));
+    },
     async start(id) {
       const r = await admin
         .from("import_jobs")
@@ -28,18 +34,27 @@ export function createSupabaseStore(admin: SupabaseClient): ImportStore {
       if (ok) must("start", await admin.from("import_jobs").update({ started_at: nowIso() }).eq("id", id).is("started_at", null));
       return ok;
     },
-    async saveCursor(id, cursor) {
+    async saveCursor(id, token, cursor) {
       const r = await admin
         .from("import_jobs")
         .update({ cursor })
         .eq("id", id)
+        .eq("lease_owner", token)
         .in("status", ["running", "paused"])
         .select("status");
       const rows = (must("saveCursor", r) ?? []) as { status: string }[];
       return rows[0]?.status === "running";
     },
-    async finish(id, status) {
-      must("finish", await admin.from("import_jobs").update({ status, finished_at: nowIso() }).eq("id", id).eq("status", "running"));
+    async finish(id, token, status) {
+      must(
+        "finish",
+        await admin
+          .from("import_jobs")
+          .update({ status, finished_at: nowIso() })
+          .eq("id", id)
+          .eq("status", "running")
+          .eq("lease_owner", token),
+      );
     },
     async upsert(id, entity, rows) {
       return must("import_upsert", await admin.rpc("import_upsert", { p_job: id, p_entity: entity, p_rows: rows })) as UpsertCounts;
@@ -90,8 +105,21 @@ export function createSupabaseStore(admin: SupabaseClient): ImportStore {
       must("custom_field_defs", await admin.from("custom_field_defs").update({ options }).eq("id", id));
     },
     async findPipeline(companyId, name) {
-      const r = await admin.from("pipelines").select("id, stages(id, name)").eq("company_id", companyId).eq("name", name).maybeSingle();
-      return must("pipelines", r) as { id: string; stages: { id: string; name: string }[] } | null;
+      const r = await admin
+        .from("pipelines")
+        .select("id, archived_at, stages(id, name, position, archived_at)")
+        .eq("company_id", companyId)
+        .eq("name", name)
+        .maybeSingle();
+      type Raw = { id: string; archived_at: string | null; stages: { id: string; name: string; position: number; archived_at: string | null }[] };
+      const p = must("pipelines", r) as Raw | null;
+      if (!p) return null;
+      const out: ExistingPipeline = {
+        id: p.id,
+        archived: p.archived_at !== null,
+        stages: (p.stages ?? []).map((s) => ({ id: s.id, name: s.name, position: s.position, archived: s.archived_at !== null })),
+      };
+      return out;
     },
     async createPipeline(companyId, name) {
       const r = await admin.from("pipelines").insert({ company_id: companyId, name }).select("id").single();

@@ -214,6 +214,10 @@ describe("outros mapeadores", () => {
     const p = mapPerson({ id: 7, name: "Beto", org_id: { value: 8 }, email: [{ value: "b@x.com", label: "work", primary: true }, { value: "" }], phone: [{ value: "11999" }] }, ctx);
     expect(rowOf(p)).toMatchObject({ organization_external_id: "8", emails: [{ value: "b@x.com", label: "work" }], phones: [{ value: "11999" }] });
   });
+  it("mapPerson descarta telefones sem nenhum dígito", () => {
+    const p = mapPerson({ id: 9, name: "Ana", phone: [{ value: "não tem" }, { value: "+55 (11) 9999-0000", label: "work" }, "N/A"] }, ctx);
+    expect(rowOf(p)).toMatchObject({ phones: [{ value: "+55 (11) 9999-0000", label: "work" }] });
+  });
   it("mapLead: empresa pela etiqueta, etiquetas sem as de empresa", () => {
     const r = mapLead({ id: "uuid-1", title: "L", label_ids: ["L3", "L1"], value: { amount: 10, currency: "BRL" }, owner_id: 5, person_id: 7, is_archived: false }, ctx);
     expect(rowOf(r)).toMatchObject({ company_id: C1, labels: ["Hot"], value: 10, status: "open", person_external_id: "7" });

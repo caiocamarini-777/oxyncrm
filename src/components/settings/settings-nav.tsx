@@ -17,6 +17,7 @@ const ITEMS = [
   { href: "/configuracoes/produtos", label: "Produtos" },
   { href: "/configuracoes/motivos-perda", label: "Motivos de perda" },
   { href: "/configuracoes/atividades", label: "Atividades" },
+  { href: "/configuracoes/importacao", label: "Importação" },
 ];
 
 export function SettingsNav() {

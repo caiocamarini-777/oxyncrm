@@ -15,7 +15,8 @@
     "db:seed": "tsx scripts/seed-dev.ts",
     "reminders:send": "tsx scripts/send-reminders.ts",
     "check:auth": "tsx scripts/check-auth-settings.ts",
-    "bootstrap:admin": "tsx --conditions=react-server scripts/bootstrap-admin.ts"
+    "bootstrap:admin": "tsx --conditions=react-server scripts/bootstrap-admin.ts",
+    "import:pipedrive": "tsx --conditions=react-server scripts/import-pipedrive.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

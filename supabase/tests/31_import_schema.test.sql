@@ -1,5 +1,5 @@
 begin;
-select plan(33);
+select plan(46);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -28,9 +28,13 @@ insert into memberships (user_id, company_id, role_id) values (pg_temp.u(11), pg
 insert into pipelines (id, company_id, name) values (pg_temp.u(401), pg_temp.u(1), 'tst-funil');
 insert into stages (id, pipeline_id, company_id, name, position) values
   (pg_temp.u(501), pg_temp.u(401), pg_temp.u(1), 'tst-e1', 0), (pg_temp.u(502), pg_temp.u(401), pg_temp.u(1), 'tst-e2', 1);
+insert into stages (id, pipeline_id, company_id, name, position, required_fields, archived_at) values
+  (pg_temp.u(503), pg_temp.u(401), pg_temp.u(1), 'tst-e-produtos', 2, '{products}', null),
+  (pg_temp.u(504), pg_temp.u(401), pg_temp.u(1), 'tst-e-arquivada', 3, '{}', now());
 insert into lost_reasons (id, company_id, name) values (pg_temp.u(601), pg_temp.u(1), 'tst-motivo');
 
 insert into import_jobs (id, source, status, created_by) values (pg_temp.u(701), 'pipedrive', 'draft', pg_temp.u(18));
+insert into import_jobs (id, source, status, created_by) values (pg_temp.u(702), 'pipedrive', 'done', pg_temp.u(18));
 insert into external_ids (source, entity, external_id, company_id, record_id, job_id)
 values ('pipedrive', 'deals', '1', pg_temp.u(1), pg_temp.u(501), pg_temp.u(701));
 
@@ -41,7 +45,7 @@ select is((select count(*) from external_ids), 0::bigint, 'usuário logado não 
 select throws_ok($$ insert into import_jobs (source, status) values ('pipedrive', 'draft') $$, '42501', null,
   'usuário logado não cria import_jobs');
 select pg_temp.as_user(pg_temp.u(18));
-select is((select count(*) from import_jobs), 1::bigint, 'admin geral lê import_jobs');
+select is((select count(*) from import_jobs), 2::bigint, 'admin geral lê import_jobs');
 select is((select count(*) from external_ids), 1::bigint, 'admin geral lê external_ids');
 select lives_ok($$ update import_jobs set status = 'running' where id = pg_temp.u(701) $$, 'admin geral escreve import_jobs');
 select is((select status from import_jobs where id = pg_temp.u(701)), 'running', 'update do admin geral aplicado');
@@ -57,9 +61,13 @@ select ok(not has_table_privilege('service_role', 'public.external_ids', 'insert
 -- 2. importing() ---------------------------------------------------------------------------------
 select ok(not public.importing(), 'importing() falso sem o GUC');
 select set_config('oxyn.importing', 'x', true);
-select ok(public.importing(), 'importing() verdadeiro como postgres com o GUC');
+select ok(not public.importing(), 'importing() falso com GUC que não é id de job');
+select set_config('oxyn.importing', pg_temp.u(702)::text, true);
+select ok(not public.importing(), 'importing() falso com id de job que não está em running');
+select set_config('oxyn.importing', pg_temp.u(701)::text, true);
+select ok(public.importing(), 'importing() verdadeiro como postgres com o id de um job em running');
 select pg_temp.as_user(pg_temp.u(11));
-select set_config('oxyn.importing', 'x', true);
+select set_config('oxyn.importing', pg_temp.u(701)::text, true);
 select ok(not public.importing(), 'importing() falso para authenticated mesmo com o GUC');
 insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, status, won_at, created_by)
 values (pg_temp.u(210), pg_temp.u(1), pg_temp.u(11), 'tst-neg-logado', pg_temp.u(401), pg_temp.u(501), 'won', '2024-03-10', pg_temp.u(11));
@@ -68,7 +76,7 @@ select ok((select won_at > now() - interval '1 minute' from deals where id = pg_
 select pg_temp.as_pg();
 
 -- 3. Datas históricas em negócios ------------------------------------------------------------------
-select set_config('oxyn.importing', 'on', true);
+select set_config('oxyn.importing', pg_temp.u(701)::text, true);
 insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, status, won_at, created_at, stage_entered_at) values
   (pg_temp.u(201), pg_temp.u(1), pg_temp.u(11), 'tst-neg-ganho', pg_temp.u(401), pg_temp.u(501), 'won',
    '2024-03-10', '2024-01-05', '2024-02-01');
@@ -83,6 +91,18 @@ select is((select lost_at from deals where id = pg_temp.u(202)), '2024-04-11'::t
 update deals set stage_id = pg_temp.u(502), stage_entered_at = '2024-02-20' where id = pg_temp.u(201);
 select is((select stage_entered_at from deals where id = pg_temp.u(201)), '2024-02-20'::timestamptz,
   'com o GUC a troca de etapa respeita stage_entered_at informado');
+-- o UPDATE da importação aceita o stage_entered_at que chega, mesmo sem trocar de etapa (ressincronização)
+update deals set stage_entered_at = '2024-02-25' where id = pg_temp.u(201);
+select is((select stage_entered_at from deals where id = pg_temp.u(201)), '2024-02-25'::timestamptz,
+  'com o GUC o UPDATE sem troca de etapa aceita o stage_entered_at que chega');
+select is((select count(*) from deal_stage_history where deal_id in (pg_temp.u(201), pg_temp.u(202))), 0::bigint,
+  'com o GUC insert e troca de etapa não gravam deal_stage_history');
+select lives_ok($$ insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id)
+  values (pg_temp.u(204), pg_temp.u(1), pg_temp.u(11), 'tst-neg-produtos', pg_temp.u(401), pg_temp.u(503)) $$,
+  'com o GUC etapa com campos obrigatórios aceita o negócio');
+select throws_ok($$ insert into deals (company_id, owner_id, title, pipeline_id, stage_id)
+  values (pg_temp.u(1), pg_temp.u(11), 'tst-neg-arquivada', pg_temp.u(401), pg_temp.u(504)) $$,
+  'P0001', 'OXYN_STAGE_ARCHIVED', 'com o GUC etapa arquivada segue barrada');
 select set_config('oxyn.importing', '', true);
 insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, status, won_at, stage_entered_at) values
   (pg_temp.u(203), pg_temp.u(1), pg_temp.u(11), 'tst-neg-sem-guc', pg_temp.u(401), pg_temp.u(501), 'won',
@@ -90,16 +110,35 @@ insert into deals (id, company_id, owner_id, title, pipeline_id, stage_id, statu
 select ok((select won_at > now() - interval '1 minute' from deals where id = pg_temp.u(203)), 'sem o GUC o trigger sobrescreve won_at');
 select ok((select stage_entered_at > now() - interval '1 minute' from deals where id = pg_temp.u(203)),
   'sem o GUC o trigger sobrescreve stage_entered_at');
+select is((select count(*) from deal_stage_history where deal_id = pg_temp.u(203)), 1::bigint,
+  'sem o GUC o insert grava deal_stage_history');
+select throws_ok($$ insert into deals (company_id, owner_id, title, pipeline_id, stage_id)
+  values (pg_temp.u(1), pg_temp.u(11), 'tst-neg-produtos-2', pg_temp.u(401), pg_temp.u(503)) $$,
+  'P0001', 'OXYN_REQUIRED_FIELDS', 'sem o GUC a etapa exige os campos obrigatórios');
 
 -- 4. Lead convertido ----------------------------------------------------------------------------------
 select throws_ok($$ insert into leads (company_id, owner_id, title, status, converted_deal_id, converted_at)
   values (pg_temp.u(1), pg_temp.u(11), 'tst-lead-x', 'converted', pg_temp.u(201), '2024-03-01') $$,
   'P0001', 'OXYN_INVALID_TRANSITION', 'sem o GUC lead convertido é recusado');
-select set_config('oxyn.importing', 'on', true);
+select set_config('oxyn.importing', pg_temp.u(701)::text, true);
 select lives_ok($$ insert into leads (id, company_id, owner_id, title, status, converted_deal_id, converted_at)
   values (pg_temp.u(301), pg_temp.u(1), pg_temp.u(11), 'tst-lead-conv', 'converted', pg_temp.u(201), '2024-03-01') $$,
   'com o GUC lead convertido é aceito');
 select is((select converted_at from leads where id = pg_temp.u(301)), '2024-03-01'::timestamptz, 'converted_at preservado');
+insert into leads (id, company_id, owner_id, title, status) values
+  (pg_temp.u(302), pg_temp.u(1), pg_temp.u(11), 'tst-lead-aberto', 'open'),
+  (pg_temp.u(303), pg_temp.u(1), pg_temp.u(11), 'tst-lead-arquivado', 'archived'),
+  (pg_temp.u(304), pg_temp.u(1), pg_temp.u(11), 'tst-lead-aberto-2', 'open');
+select lives_ok($$ update leads set status = 'converted', converted_deal_id = pg_temp.u(202), converted_at = '2024-04-01'
+  where id = pg_temp.u(302) $$, 'com o GUC o UPDATE converte lead aberto');
+select lives_ok($$ update leads set status = 'converted', converted_deal_id = pg_temp.u(204), converted_at = '2024-04-02'
+  where id = pg_temp.u(303) $$, 'com o GUC o UPDATE converte lead arquivado');
+select ok((select status = 'converted' and converted_deal_id = pg_temp.u(204) and converted_at = '2024-04-02'
+  from leads where id = pg_temp.u(303)), 'conversão importada grava o vínculo e a data');
+select set_config('oxyn.importing', '', true);
+select throws_ok($$ update leads set status = 'converted', converted_deal_id = pg_temp.u(202), converted_at = now()
+  where id = pg_temp.u(304) $$, 'P0001', 'OXYN_INVALID_TRANSITION', 'sem o GUC o UPDATE para converted segue barrado');
+select set_config('oxyn.importing', pg_temp.u(701)::text, true);
 
 -- 5. Sem linha do tempo ---------------------------------------------------------------------------------
 insert into persons (id, company_id, owner_id, full_name) values (pg_temp.u(311), pg_temp.u(1), pg_temp.u(11), 'tst-pessoa');
@@ -125,7 +164,7 @@ select is((select count(*) from timeline_events where record_id = pg_temp.u(201)
   'sem o GUC a anotação volta a registrar na linha do tempo');
 
 -- 6. Lembretes ignoram atividades legadas ---------------------------------------------------------------
-select set_config('oxyn.importing', 'on', true);
+select set_config('oxyn.importing', pg_temp.u(701)::text, true);
 insert into activities (id, company_id, owner_id, type_id, channel_id, subject, due_at, deal_id, reminder_minutes, legacy)
 values (pg_temp.u(316), pg_temp.u(1), pg_temp.u(11),
   (select id from activity_types where company_id = pg_temp.u(1) and name = 'Ligação'),
@@ -144,6 +183,9 @@ select is((select (counters->'deals'->>'errors')::int from import_jobs where id 
   'counters.deals.errors conta todos os erros');
 select is((select errors->0 from import_jobs where id = pg_temp.u(701)),
   '{"entity":"deals","external_id":"1","reason":"tst-motivo-1"}'::jsonb, 'formato do item de erro');
+select public.import_log_error(pg_temp.u(701), null, '9', 'tst-sem-entidade');
+select is((select (counters->'unknown'->>'errors')::int from import_jobs where id = pg_temp.u(701)), 1,
+  'entidade nula conta como unknown');
 select ok(not has_function_privilege('authenticated', 'public.import_log_error(uuid, text, text, text)', 'execute')
   and not has_function_privilege('anon', 'public.import_log_error(uuid, text, text, text)', 'execute'),
   'import_log_error é interna');

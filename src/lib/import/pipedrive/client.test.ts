@@ -61,4 +61,11 @@ describe("cliente do Pipedrive", () => {
     await c.page("activities", 0);
     expect(fetchImpl.mock.calls[2][0]).toBe("https://x.test/v1/activities?user_id=0&start=0&limit=500");
   });
+
+  it("pagina leads arquivados em /v1/leads/archived", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(json({ data: [{ id: "u" }], additional_data: { next_start: 5, pagination: { more_items_in_collection: true, next_start: 5 } } }));
+    const c = createPipedriveClient({ token: "t", baseUrl: "https://x.test", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await c.page("archivedLeads", 0, 5)).toEqual({ items: [{ id: "u" }], nextStart: 5 });
+    expect(fetchImpl.mock.calls[0][0]).toBe("https://x.test/v1/leads/archived?start=0&limit=5");
+  });
 });

@@ -11,6 +11,8 @@ export type ContactLink =
 
 export type MapCtx = {
   mappings: ImportMappings;
+  /** Item vindo de /v1/leads/archived: o lead entra como arquivado. */
+  archived?: boolean;
   /** Empresa de destino para contatos, atividades, anotações e produtos. */
   companyId?: string;
   /** Destinos já criados na importação para funis/etapas mapeados como null. */
@@ -277,7 +279,7 @@ export function mapLead(item: PdItem, ctx: MapCtx): MapResult {
     organization_external_id: refId(item.organization_id ?? item.org_id),
     source_name: str(item.source_name),
     labels,
-    status: item.is_archived === true ? "archived" : "open",
+    status: ctx.archived === true || item.is_archived === true ? "archived" : "open",
     custom_fields: custom,
     created_at: toIso(item.add_time),
   };
@@ -304,7 +306,8 @@ export function mapDeal(item: PdItem, ctx: MapCtx): MapResult {
   if (status !== "open" && status !== "won" && status !== "lost") return { error: `status inválido: ${status ?? "vazio"}` };
 
   const { custom, natives } = applyCustom(item, ctx);
-  const lead = str(item.lead_id) ?? (str(item.origin) === "Leads" ? str(item.origin_id) : null);
+  // lead de origem; pode apontar para lead que já saiu de /v1/leads (convertido): o banco descarta o vínculo ausente
+  const lead = str(item.source_lead_id);
   return {
     external_id,
     company_id: pm.companyId,

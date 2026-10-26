@@ -154,6 +154,16 @@ describe("mapDeal", () => {
   });
 });
 
+describe("vínculo com lead de origem", () => {
+  it("usa source_lead_id (lead pode não estar mais em /v1/leads) e ignora lead_id/origin", () => {
+    expect(mapDeal({ ...baseDeal, source_lead_id: "uuid-convertido", lead_id: "x", origin: "Leads", origin_id: "y" }, ctx)).toMatchObject({ lead_external_id: "uuid-convertido" });
+    expect(mapDeal({ ...baseDeal, origin: "Import", origin_id: "y" }, ctx)).toMatchObject({ lead_external_id: null });
+  });
+  it("lead de /v1/leads/archived entra como archived", () => {
+    expect(mapLead({ id: "u2", title: "Velho" }, { ...ctx, archived: true })).toMatchObject({ status: "archived" });
+  });
+});
+
 describe("mapActivity", () => {
   const act = { id: 1, type: "reuniao_realizada", subject: "Call", done: true, due_date: "2024-03-10", due_time: "", deal_id: 100, user_id: 5 };
   it("reunião realizada concluída recebe held", () => {

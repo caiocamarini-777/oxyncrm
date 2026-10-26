@@ -1,5 +1,5 @@
 import "server-only";
-import type { PdEntity, PdFieldDef, PdItem, PdPage } from "./types";
+import type { PdPageEntity, PdFieldDef, PdItem, PdPage } from "./types";
 
 export class PipedriveError extends Error {
   constructor(
@@ -27,7 +27,8 @@ export type PipedriveClientOptions = {
 };
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
-const ENTITY_QUERY: Record<PdEntity, string> = {
+const ENTITY_QUERY: Record<PdPageEntity, string> = {
+  archivedLeads: "/v1/leads/archived",
   organizations: "/v1/organizations",
   persons: "/v1/persons",
   leads: "/v1/leads",
@@ -107,7 +108,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     dealFields: () => list<PdFieldDef>("/v1/dealFields"),
     personFields: () => list<PdFieldDef>("/v1/personFields"),
     organizationFields: () => list<PdFieldDef>("/v1/organizationFields"),
-    async page(entity: PdEntity, start: number, limit = 500): Promise<PdPage> {
+    async page(entity: PdPageEntity, start: number, limit = 500): Promise<PdPage> {
       const base0 = ENTITY_QUERY[entity];
       const sep = base0.includes("?") ? "&" : "?";
       const body = await request(`${base0}${sep}start=${start}&limit=${limit}`);

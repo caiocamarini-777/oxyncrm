@@ -6,6 +6,9 @@ export type PdItem = Record<string, unknown>;
 export const PD_ENTITIES = ["organizations", "persons", "leads", "deals", "activities", "notes", "products"] as const;
 export type PdEntity = (typeof PD_ENTITIES)[number];
 
+/** Entidades paginadas pelo cliente; "archivedLeads" vem de /v1/leads/archived. */
+export type PdPageEntity = PdEntity | "archivedLeads";
+
 export type PdPage = { items: PdItem[]; nextStart: number | null };
 
 export type PdFieldDef = {

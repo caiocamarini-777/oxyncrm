@@ -45,8 +45,9 @@ select is((select count(*) from external_ids), 0::bigint, 'usuário logado não 
 select throws_ok($$ insert into import_jobs (source, status) values ('pipedrive', 'draft') $$, '42501', null,
   'usuário logado não cria import_jobs');
 select pg_temp.as_user(pg_temp.u(18));
-select is((select count(*) from import_jobs), 2::bigint, 'admin geral lê import_jobs');
-select is((select count(*) from external_ids), 1::bigint, 'admin geral lê external_ids');
+-- conta só os registros desta fixture: o banco de dev pode ter importações reais
+select is((select count(*) from import_jobs where id in (pg_temp.u(701), pg_temp.u(702))), 2::bigint, 'admin geral lê import_jobs');
+select is((select count(*) from external_ids where job_id = pg_temp.u(701)), 1::bigint, 'admin geral lê external_ids');
 select lives_ok($$ update import_jobs set status = 'running' where id = pg_temp.u(701) $$, 'admin geral escreve import_jobs');
 select is((select status from import_jobs where id = pg_temp.u(701)), 'running', 'update do admin geral aplicado');
 select throws_ok($$ insert into external_ids (source, entity, external_id, company_id, record_id)

@@ -69,3 +69,30 @@ export function recoveryEmail(p: { link: string }): Built {
     text: `Recebemos um pedido para redefinir a senha da sua conta no Oxyn CRM. Use o link abaixo:\n${p.link}\n\nSe você não fez esse pedido, ignore este e-mail.`,
   };
 }
+
+const reminderWhen = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/** `dueAt` em UTC (ISO); o horário exibido é o de São Paulo. */
+export function reminderEmail(p: { fullName: string; subject: string; dueAt: string | null; link: string }): Built {
+  const when = p.dueAt ? reminderWhen.format(new Date(p.dueAt)).replace(", ", " às ") : null;
+  const paragraphs = [`Você tem uma atividade chegando: <strong>${esc(p.subject)}</strong>.`];
+  if (when) paragraphs.push(`Horário: ${esc(when)} (horário de Brasília).`);
+  return {
+    subject: `Lembrete: ${p.subject}`,
+    html: layout({
+      title: `Olá, ${esc(p.fullName)}`,
+      paragraphs,
+      button: "Abrir no Oxyn CRM",
+      link: p.link,
+    }),
+    text: `Olá, ${p.fullName}.\n\nVocê tem uma atividade chegando: ${p.subject}.${when ? `\nHorário: ${when} (horário de Brasília).` : ""}\n\nAbrir no Oxyn CRM:\n${p.link}`,
+  };
+}

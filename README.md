@@ -1,9 +1,82 @@
 # Oxyn CRM
 
-CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil.
+CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades. A fase 6 entrega Relatórios, dashboards e metas.
 
 - Especificação: [docs/superpowers/specs/2026-10-21-oxyn-crm-design.md](docs/superpowers/specs/2026-10-21-oxyn-crm-design.md)
 - Plano da fase 1: [docs/superpowers/plans/2026-10-21-fase-1-fundacao.md](docs/superpowers/plans/2026-10-21-fase-1-fundacao.md)
+- Pendências da fase 6: [docs/superpowers/followups/2026-10-25-fase-6-pendencias.md](docs/superpowers/followups/2026-10-25-fase-6-pendencias.md)
+- Pendências da fase 4: [docs/superpowers/followups/2026-10-24-fase-4-pendencias.md](docs/superpowers/followups/2026-10-24-fase-4-pendencias.md)
+- Pendências da fase 3: [docs/superpowers/followups/2026-10-23-fase-3-pendencias.md](docs/superpowers/followups/2026-10-23-fase-3-pendencias.md)
+- Pendências da fase 2: [docs/superpowers/followups/2026-10-22-fase-2-pendencias.md](docs/superpowers/followups/2026-10-22-fase-2-pendencias.md)
+
+## Módulos
+
+Depois da fase 4, cada empresa tem:
+
+- **Leads**: caixa de leads com abas por status (abertos, desqualificados, arquivados), idade do lead, valor estimado, origem, vínculo com pessoa e organização, desqualificação com motivo e reabertura. Um lead aberto converte em negócio (a pessoa, a organização, o valor e as etiquetas vão junto) e passa a aparecer na aba Convertidos.
+- **Negócios**: funis com etapas configuráveis, em quatro partes.
+  - **Kanban**: colunas com contagem e soma, cards arrastáveis, selo de negócio esfriando, filtros por responsável, equipe e etiqueta, e rodapé de arraste para Ganho, Perdido e Excluir. Se a etapa de destino exige campos que faltam, um diálogo pede só o que falta e conclui o movimento.
+  - **Lista e forecast**: lista paginada com abas Abertos, Ganhos e Perdidos e exportação em CSV; forecast por mês de fechamento esperado, com opção de ponderar pela probabilidade da etapa. "Todas as empresas" abre a lista.
+  - **Detalhe do negócio**: barra de etapas, ganho, perdido (com motivo) e reabertura, produtos (setup e recorrente), condições de contrato e cronograma de receita mês a mês. Com produtos, os totais vêm dos itens.
+  - **Conversão de lead**: do lead para um negócio no funil e na etapa escolhidos.
+  - **Configurações** (por empresa): funis e etapas (ordem por arrastar, probabilidade, prazo para esfriar, campos obrigatórios, campo exibido no card), catálogo de produtos e motivos de perda. Campos personalizados também valem para Negócios.
+- **Atividades**: tarefas, ligações, reuniões, e-mails e mensagens, cada uma com tipo, canal obrigatório (por exemplo LinkedIn) e vínculo com lead, negócio, pessoa ou organização.
+  - **Conclusão com resultado**: nenhuma atividade conclui sem resultado, em qualquer caminho. Um resultado que agenda reunião cria a reunião já com o canal de origem; reuniões fecham como Realizada, No-show, Remarcada ou Cancelada.
+  - **Próxima atividade**: regra Desligada, Sugerir ou Obrigar por funil e para os leads da empresa; com Obrigar o diálogo só conclui junto da nova atividade.
+  - **Lista e agenda** (`/atividades`): abas Atrasadas, Hoje e Próximas, e visões de lista, semana e mês. Atrasadas aparecem em vermelho na agenda, no card do kanban e nos painéis. Horários em America/Sao_Paulo.
+  - **Kanban e leads**: o card mostra a próxima atividade, há filtro de negócios com atividade atrasada, e a caixa de leads mostra Próxima atividade e Último canal.
+  - **Configurações** (admin geral, por empresa): tipos, canais e resultados de atividade e a regra de próxima atividade dos leads.
+- **Contatos**: **Pessoas** (vários e-mails e telefones, link de WhatsApp, organização vinculada) e **Organizações** (CNPJ, domínio, segmento). Listas paginadas no servidor, com filtros, ordenação, colunas configuráveis e exportação em CSV conforme a permissão. A visão "Todas as empresas" reúne os registros que o usuário pode ver. Avisos de duplicidade não expõem dados de quem não tem acesso.
+- **Registros**: etiquetas, campos personalizados, anotações e linha do tempo unificada em cada ficha, além de troca de responsável com permissão.
+- **Busca global** (Ctrl+K): encontra leads, negócios, pessoas e organizações e leva à lixeira.
+- **Lixeira**: registros excluídos ficam 30 dias e podem ser restaurados; a exclusão definitiva é automática após o prazo ou manual, só pelo admin geral.
+- **Configurações** (admin geral, por empresa): campos personalizados, etiquetas, origens de lead, motivos de desqualificação, funis, produtos e motivos de perda.
+
+## Relatórios, dashboards e metas
+
+O menu Relatórios (`/<empresa>/relatorios`) reúne relatórios prontos, o construtor de relatórios personalizados, dashboards e metas. Toda consulta roda em funções do banco, que aplicam a visibilidade de quem consulta; nenhuma consulta é montada no front.
+
+- **Relatórios**: bases leads, negócios, atividades, receita e histórico de etapas (a base "e-mails" fica para depois da fase 5). Métricas: quantidade, soma, média, taxa de conversão e tempo médio. Gráficos: número, barras, linha, funil, pizza e tabela. Prontos: Funil de reuniões por canal, Sucesso por canal, Influência na conversão, Conversão por etapa, Forecast, Receita mês a mês, Visão do funil, Idade, Atividades por usuário, Motivos de perda e Progresso de metas.
+- **Dashboards** (`/<empresa>/relatorios/dashboards`): grade de widgets que se reordenam por arrastar e mudam de tamanho pela alça (ou pelas setas do teclado), com filtro global de período e, em "Todas as empresas", de empresa.
+- **Metas** (`/<empresa>/relatorios/metas`): metas por empresa, usuário ou equipe, com as métricas reuniões agendadas, reuniões realizadas, oportunidades criadas, valor ganho, MRR ganho e atividades concluídas, em períodos semanal, mensal ou trimestral. As metas são criadas e excluídas só pelo admin geral; qualquer membro da empresa com acesso a Relatórios vê o progresso, calculado só sobre o que ele enxerga.
+
+### Permissões
+
+São três chaves em `roles.permissions.settings`, por papel e por empresa. O admin geral tem todas.
+
+- `view_reports`: libera o menu Relatórios, os relatórios prontos, o construtor e as metas.
+- `create_dashboards`: libera criar dashboards e adicionar widgets.
+- `share_dashboards`: libera compartilhar com usuários e criar link público.
+
+### Quem vê o quê
+
+- **Dashboard próprio**: os números respeitam a visibilidade de quem abre (papel, equipe e empresas).
+- **Dashboard compartilhado com usuários**: o destinatário vê os números com o alcance do criador, não com o dele, em modo somente leitura. Só dá para compartilhar com quem divide empresa com o dono. O destinatário abre o dashboard mesmo sem `view_reports`. Os filtros do destinatário só restringem; nunca ampliam o alcance do criador.
+- **Link público** (`/d/<token>`): abre sem login, também com o alcance do criador, em somente leitura. O token é mostrado uma única vez ao criar o link e só o hash fica no banco. O link pode ter validade e ser revogado a qualquer momento; se o criador perder o acesso ou a permissão de compartilhar, o link deixa de abrir. A página tem `noindex` e `no-referrer`.
+
+`NEXT_PUBLIC_SITE_URL` é obrigatório para gerar os links (a ação de criar o link falha sem ela, para nunca apontar para localhost): `http://localhost:3000` em dev e o domínio em produção.
+
+### Semântica dos filtros
+
+- Filtro ausente significa sem filtro; uma lista vazia significa nada (nenhum registro). A interface omite a chave quando nada foi escolhido.
+- Os filtros do dashboard (período, empresa, responsável, equipe) só restringem o que o relatório já mostra. O período do relatório é o limite; o filtro global não o amplia.
+- Um widget de relatório salvo respeita a empresa em que o relatório foi salvo, mesmo em "Todas as empresas".
+- Tabelas cortam em 500 linhas e avisam quando cortaram.
+- No funil por canal, um lead com reuniões em canais diferentes conta em cada canal, então as linhas não somam.
+
+## Lembretes de atividades
+
+Atividades com lembrete geram uma notificação (função `generate_activity_reminders`, agendada no pg_cron a cada minuto). O sino na barra superior mostra as não lidas em tempo real (Supabase Realtime) e abre um aviso com o botão "Abrir".
+
+O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota a cada 5 minutos; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Atenção: o cron de 5 em 5 minutos exige Vercel Pro; no Hobby, agendar a rota via pg_cron + pg_net com o header Bearer.
+
+Configuração:
+
+- `CRON_SECRET`: segredo da rota de e-mail. Na Vercel, nas variáveis do projeto; localmente, em `.env.local` (sem ele a rota responde 401 e o teste E2E do e-mail é ignorado).
+- `NEXT_PUBLIC_SITE_URL`: base dos links do e-mail (`http://localhost:3000` em dev, o domínio em produção).
+- `REMINDERS_URL`: opcional, endereço que o `pnpm reminders:send` chama (padrão: `http://localhost:3000`).
+- pg_cron: a notificação em si nasce da rotina `generate_activity_reminders`, agendada pelas migrações a cada minuto; confira que ela está ativa no banco de produção.
+ Localmente, defina `CRON_SECRET` em `.env.local` e rode `pnpm reminders:send` (use `REMINDERS_URL` para apontar a outro endereço; o e-mail vai para `.e2e-outbox/emails.jsonl` com `EMAIL_TRANSPORT=file`).
 
 ## Desenvolvimento
 

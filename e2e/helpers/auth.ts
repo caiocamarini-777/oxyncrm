@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-function loadEnv() {
+export function loadEnv() {
   try {
     const txt = readFileSync(path.join(process.cwd(), ".env.local"), "utf8");
     for (const line of txt.split("\n")) {

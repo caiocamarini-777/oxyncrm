@@ -41,7 +41,7 @@ select results_eq($$ select slug from companies where slug like 'tst-%' order by
 reset role;
 select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c1'::text, 'role', 'authenticated')::text, true);
 set local role authenticated;
-select results_eq($$ select slug from companies where slug like 'tst-%' order by slug $$, $$ values ('tst-naia'),('tst-volt') $$, 'admin vê tst-volt e tst-naia');
+select results_eq($$ select slug from companies where id in ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000d2') order by slug $$, $$ values ('tst-naia'),('tst-volt') $$, 'admin vê tst-volt e tst-naia');
 reset role;
 select set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-4000-8000-0000000000c3'::text, 'role', 'authenticated')::text, true);
 set local role authenticated;

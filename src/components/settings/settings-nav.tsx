@@ -9,6 +9,14 @@ const ITEMS = [
   { href: "/configuracoes/usuarios", label: "Usuários" },
   { href: "/configuracoes/papeis", label: "Papéis" },
   { href: "/configuracoes/equipes", label: "Equipes" },
+  { href: "/configuracoes/campos", label: "Campos" },
+  { href: "/configuracoes/etiquetas", label: "Etiquetas" },
+  { href: "/configuracoes/origens", label: "Origens de lead" },
+  { href: "/configuracoes/motivos", label: "Motivos de desqualificação" },
+  { href: "/configuracoes/funis", label: "Funis" },
+  { href: "/configuracoes/produtos", label: "Produtos" },
+  { href: "/configuracoes/motivos-perda", label: "Motivos de perda" },
+  { href: "/configuracoes/atividades", label: "Atividades" },
 ];
 
 export function SettingsNav() {

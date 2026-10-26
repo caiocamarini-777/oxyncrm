@@ -54,7 +54,7 @@ Registro do que foi decidido, adiado e do que precisa de ação antes da importa
 
 ## Pendências carregadas das fases anteriores
 
-- Validação de aplicação do zero: as migrações das fases 3 e 4 foram editadas no lugar e reaplicadas à mão. Falta resetar o banco de dev e aplicar `supabase/migrations/` inteiro (até `20261026000006`, ou a última da fase 3.5) para descartar deriva. Exige o OK do dono do projeto para o reset do banco de dev.
+- Validação de aplicação do zero: as migrações das fases 3 e 4 foram editadas no lugar e reaplicadas à mão. Falta resetar o banco de dev e aplicar `supabase/migrations/` inteiro (até `20261026000007`, a última da fase 3.5) para descartar deriva. Exige o OK do dono do projeto para o reset do banco de dev.
 - Merge dos PRs empilhados (fases 2, 3, 4, 6 e 3.5), em ordem, antes de qualquer deploy.
 - Produção: projeto Supabase de produção com migrações aplicadas, usuário admin geral e variáveis da Vercel (inclui `PIPEDRIVE_API_TOKEN`). Confira que a rotina `generate_activity_reminders` (pg_cron) está agendada.
 - `CRON_SECRET` no `.env.local` ainda é o valor de exemplo. Troque por um valor aleatório de verdade antes da produção (por exemplo, `openssl rand -hex 32`) e nunca o imprima nem o grave em arquivo versionado. Defina também `CRON_SECRET` e `NEXT_PUBLIC_SITE_URL` na Vercel.

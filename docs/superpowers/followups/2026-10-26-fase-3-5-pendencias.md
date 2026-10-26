@@ -13,14 +13,14 @@ Registro do que foi decidido, adiado e do que precisa de ação antes da importa
 - O token vem só do ambiente e nunca é gravado no banco. Custo: o assistente não troca o token pela interface.
 - A trava do job é uma coluna de concessão (RPC `import_claim`), não advisory lock, que não sobrevive ao PostgREST com pool. Custo: uma fatia que cai bloqueia o job por até 120 s.
 - `users_check` é estrito por usuário e empresa do funil, incluindo donos de leads. A troca de dono (dono de reserva com aviso agregado) vale só para cópias de contatos e atividades. Custo: o admin precisa acertar vínculos antes de importar, e alguns contatos e atividades ficam com o dono de reserva.
+- A pessoa entra nas empresas dos próprios negócios e leads mais as da organização dela; a organização herda as empresas das pessoas dela (o índice lê as pessoas para isso). Só sem nenhuma das duas a pessoa vai para a empresa padrão. Custo: mais cópias de contatos entre empresas.
+- Produtos vão só para a empresa padrão, e os produtos dos negócios (deal products) não são importados. A conta real tem 0 produtos hoje. Custo: se a conta passar a usar produtos, falta distribuí-los por empresa e importar os itens dos negócios.
 
 ## Melhorias adiadas
 
 ### Banco (funções de importação)
 
 - `import_jobs.created_by` pode ser definido por um admin geral na criação.
-- Na atualização, a referência `v_ref` deveria usar `coalesce(r.won_at, d.won_at)`.
-- `seconds_in_previous` do histórico de etapas pode ficar negativo.
 - `import_outcome` tem corrida em conflito ao criar o resultado "Importado".
 - A atualização de anotações reescreve `created_by` para o autor de reserva.
 
@@ -40,7 +40,6 @@ Registro do que foi decidido, adiado e do que precisa de ação antes da importa
 ### Assistente
 
 - `store.members` seleciona todos os perfis.
-- O laço de progresso não tenta de novo sozinho depois de erro transitório de rede.
 - Cada abertura de um job em rascunho faz 7 chamadas ao Pipedrive.
 
 ## Como rodar a importação real
@@ -49,7 +48,7 @@ Registro do que foi decidido, adiado e do que precisa de ação antes da importa
 2. Confirme `PIPEDRIVE_API_TOKEN` em `.env.local` (ou na Vercel). Nunca grave o token em arquivo versionado.
 3. Em `/configuracoes/importacao`, crie o job, preencha funis, usuários, etiquetas, padrões e campos personalizados.
 4. Rode **Simular**. Se o resultado for parcial (teto de 45 s), rode `pnpm import:pipedrive <jobId> --dry-run`.
-5. Corrija o que a simulação apontar e rode a importação, pelo assistente ou por `pnpm import:pipedrive <jobId>`.
+5. Corrija o que a simulação apontar e inicie a importação pelo assistente (que valida os mapeamentos). Depois de iniciada, ela pode continuar pela tela ou por `pnpm import:pipedrive <jobId>`; a linha de comando recusa importação real de rascunho.
 6. Revise avisos e erros do relatório. Reimportar é seguro, mas pula o que foi editado no Oxyn.
 7. Depois da primeira carga real, confira o plano de execução do filtro por etiqueta (pendência da fase 3).
 
@@ -58,6 +57,6 @@ Registro do que foi decidido, adiado e do que precisa de ação antes da importa
 - Validação de aplicação do zero: as migrações das fases 3 e 4 foram editadas no lugar e reaplicadas à mão. Falta resetar o banco de dev e aplicar `supabase/migrations/` inteiro (até `20261026000006`, ou a última da fase 3.5) para descartar deriva. Exige o OK do dono do projeto para o reset do banco de dev.
 - Merge dos PRs empilhados (fases 2, 3, 4, 6 e 3.5), em ordem, antes de qualquer deploy.
 - Produção: projeto Supabase de produção com migrações aplicadas, usuário admin geral e variáveis da Vercel (inclui `PIPEDRIVE_API_TOKEN`). Confira que a rotina `generate_activity_reminders` (pg_cron) está agendada.
-- `CRON_SECRET` continua faltando no `.env.local`; sem ele o teste E2E do e-mail dos lembretes e `pnpm reminders:send` ficam de fora (único teste ignorado). Defina também `CRON_SECRET` e `NEXT_PUBLIC_SITE_URL` na Vercel.
+- `CRON_SECRET` no `.env.local` ainda é o valor de exemplo. Troque por um valor aleatório de verdade antes da produção (por exemplo, `openssl rand -hex 32`) e nunca o imprima nem o grave em arquivo versionado. Defina também `CRON_SECRET` e `NEXT_PUBLIC_SITE_URL` na Vercel.
 - Plano da Vercel: o cron `*/5 * * * *` exige Pro. No Hobby, agendar `GET /api/cron/lembretes` via pg_cron + pg_net com `Authorization: Bearer <CRON_SECRET>`. A importação pela web também depende do limite de duração da função (`maxDuration` 60 s); em planos menores, use a linha de comando.
 - Demais melhorias das fases 3, 4 e 6 continuam valendo nos respectivos documentos.

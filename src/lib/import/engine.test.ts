@@ -81,15 +81,21 @@ const STAGES: PdItem[] = [
   { id: 31, name: "X", pipeline_id: 3, order_nr: 1 },
 ];
 
-type FakeOpts = { pageSize?: number; stages?: PdItem[]; failOn?: (entity: PdPageEntity, start: number) => Error | null };
+/** failOn recebe quantas vezes a mesma página já foi pedida (o índice lê persons antes da etapa de pessoas). */
+type FakeOpts = {
+  pageSize?: number;
+  stages?: PdItem[];
+  failOn?: (entity: PdPageEntity, start: number, seen: number) => Error | null;
+};
 
 function fakeClient(data = DATA, opts: FakeOpts = {}) {
   const size = opts.pageSize ?? 2;
   const calls: string[] = [];
   const client: ImportSource = {
     async page(entity, start) {
+      const seen = calls.filter((c) => c === `${entity}@${start}`).length;
       calls.push(`${entity}@${start}`);
-      const err = opts.failOn?.(entity, start);
+      const err = opts.failOn?.(entity, start, seen);
       if (err) throw err;
       const all = data[entity] ?? [];
       const items = all.slice(start, start + size);
@@ -243,7 +249,8 @@ describe("motor de importação", () => {
 
     r = await runImportSlice("job", { budgetMs: 0, deps });
     expect(r.step).toBe("leads");
-    expect(calls.filter((c) => c.startsWith("persons@"))).toEqual(["persons@0", "persons@2"]);
+    // uma passada no índice e uma na etapa de pessoas
+    expect(calls.filter((c) => c.startsWith("persons@"))).toEqual(["persons@0", "persons@2", "persons@0", "persons@2"]);
     const persons = rowsOf(f.upserts, "persons");
     expect(persons.map((p) => `${p.external_id}:${ab(p.company_id)}`)).toEqual(["1:A", "1:B", "2:B", "3:A"]);
     expect(f.logs).toContainEqual({ entity: "persons", external_id: "4", reason: "pessoa sem nome" });
@@ -348,7 +355,7 @@ describe("motor de importação", () => {
   });
 
   it("PipedriveAuthError marca o job como failed com o erro", async () => {
-    const { client } = fakeClient(DATA, { failOn: (e) => (e === "persons" ? new PipedriveAuthError() : null) });
+    const { client } = fakeClient(DATA, { failOn: (e, _s, seen) => (e === "persons" && seen > 0 ? new PipedriveAuthError() : null) });
     const f = fakeStore();
     const r = await runImportToEnd("job", { client, store: f.store });
     expect(r).toMatchObject({ status: "failed", done: true, step: "persons" });
@@ -360,7 +367,7 @@ describe("motor de importação", () => {
   it("erro genérico relança e deixa o job retomável do último cursor", async () => {
     let fail = true;
     const { client } = fakeClient(DATA, {
-      failOn: (e, start) => (e === "persons" && start === 2 && fail ? new Error("rede caiu") : null),
+      failOn: (e, start, seen) => (e === "persons" && start === 2 && seen > 0 && fail ? new Error("rede caiu") : null),
     });
     const f = fakeStore();
     await expect(runImportToEnd("job", { client, store: f.store })).rejects.toThrow("rede caiu");
@@ -386,7 +393,7 @@ describe("motor de importação", () => {
     // Carla só é dona de negócios de funil ignorado ou sem mapeamento: não é exigida
     expect(reason).not.toContain("Carla");
     expect(f.upserts).toEqual([]);
-    expect(calls.every((c) => /^(deals|leads|archivedLeads)@/.test(c))).toBe(true);
+    expect(calls.every((c) => /^(deals|leads|archivedLeads|persons)@/.test(c))).toBe(true);
   });
 
   it("dono sem acesso vira o dono padrão em toda cópia de contato, com um aviso agregado por par", async () => {
@@ -565,15 +572,15 @@ describe("motor de importação", () => {
       };
       await runImportSlice("job", { deps: { client, store: f.store } });
       expect(f.job.cursor).toMatchObject({ step: "persons", start: 0 });
-      expect(calls).not.toContain("persons@2");
+      expect(calls.filter((c) => c === "persons@2")).toHaveLength(1); // só a do índice
       expect(f.job.status).toBe("running");
     });
   });
 
   it("pausa no meio da fatia para sem erro e sem sobrescrever o status", async () => {
     const { client } = fakeClient(DATA, {
-      failOn: (e, start) => {
-        if (e === "persons" && start === 2) f.job.status = "paused";
+      failOn: (e, start, seen) => {
+        if (e === "persons" && start === 2 && seen > 0) f.job.status = "paused";
         return null;
       },
     });
@@ -594,7 +601,7 @@ describe("motor de importação", () => {
     const r = await runImportSlice("job", { deps: { client, store: f.store } });
     expect(r).toMatchObject({ status: "paused", done: true, step: "persons" });
     expect(f.job.cursor).toMatchObject({ step: "persons", start: 2 });
-    expect(calls).not.toContain("persons@2");
+    expect(calls.filter((c) => c === "persons@2")).toHaveLength(1); // só a do índice
   });
 
   it("rodar de novo a partir do mesmo cursor não duplica páginas nem refaz o índice", async () => {
@@ -659,6 +666,94 @@ describe("motor de importação", () => {
         "pipeline:OXYN", "stage:Novo:0:10", "stage:Ganho:1:90", "stage:Novo (2):2:0",
         `stage:${"x".repeat(60)}:3:0`, `stage:${"x".repeat(56)} (2):4:0`,
       ]);
+    });
+  });
+
+  describe("empresas de pessoas e organizações", () => {
+    const LINKS: Partial<Record<PdPageEntity, PdItem[]>> = {
+      deals: [{ id: 1, title: "D1", pipeline_id: 1, stage_id: 11, status: "open", org_id: 10, user_id: 100 }],
+      leads: [{ id: "l1", title: "L1", label_ids: [10], person_id: 21, owner_id: 100 }],
+      archivedLeads: [],
+      organizations: [
+        { id: 10, name: "Org 10", owner_id: 100 },
+        { id: 11, name: "Org 11", owner_id: 100 },
+      ],
+      persons: [
+        { id: 20, name: "Sem vínculo, org com negócio", org_id: 10, owner_id: 100 },
+        { id: 21, name: "Com lead, org com negócio", org_id: 10, owner_id: 100 },
+        { id: 22, name: "Sem vínculo, org sem vínculo", org_id: 11, owner_id: 100 },
+        { id: 23, name: "Sem nada", owner_id: 100 },
+      ],
+      activities: [{ id: 30, type: "call", subject: "A30", person_id: 20, user_id: 100 }],
+      notes: [],
+      products: [],
+    };
+    const where = (rows: Record<string, unknown>[]) => rows.map((r) => `${r.external_id}:${ab(r.company_id)}`).sort();
+
+    it("pessoa sem vínculos herda as empresas da organização; a organização herda as das pessoas", async () => {
+      const { client } = fakeClient(LINKS);
+      const f = fakeStore();
+      const r = await runImportToEnd("job", { client, store: f.store });
+      expect(r.status).toBe("done");
+      // org 10: A pelo negócio e B pela pessoa 21 (lead da etiqueta B); org 11 sem nada: empresa padrão
+      expect(where(rowsOf(f.upserts, "organizations"))).toEqual(["10:A", "10:B", "11:A"]);
+      expect(where(rowsOf(f.upserts, "persons"))).toEqual(["20:A", "20:B", "21:A", "21:B", "22:A", "23:A"]);
+      // toda cópia de pessoa com organização tem a organização na mesma empresa
+      for (const p of rowsOf(f.upserts, "persons").filter((x) => x.organization_external_id)) {
+        expect(rowsOf(f.upserts, "organizations")).toContainEqual(
+          expect.objectContaining({ external_id: p.organization_external_id, company_id: p.company_id }),
+        );
+      }
+      // atividade da pessoa segue as empresas onde a pessoa foi gravada
+      expect(where(rowsOf(f.upserts, "activities"))).toEqual(["30:A", "30:B"]);
+    });
+
+    it("anotação vai para o primeiro vínculo que entra na importação", async () => {
+      const notes = [
+        { id: 40, content: "negócio fora do índice", deal_id: 99, person_id: 21, user_id: 100 },
+        { id: 41, content: "lead indexado", deal_id: 99, lead_id: "l1", person_id: 21, user_id: 100 },
+        { id: 42, content: "negócio indexado", deal_id: 1, lead_id: "l1", user_id: 100 },
+        { id: 43, content: "lead fora do índice", lead_id: "lx", org_id: 11, user_id: 100 },
+      ];
+      const { client } = fakeClient({ ...LINKS, notes });
+      const f = fakeStore();
+      await runImportToEnd("job", { client, store: f.store });
+      expect(rowsOf(f.upserts, "notes").map((n) => `${n.external_id}:${n.entity}:${n.record_external_id}:${ab(n.company_id)}`))
+        .toEqual(["40:persons:21:B", "40:persons:21:A", "41:leads:l1:B", "42:deals:1:A", "43:organizations:11:A"]);
+    });
+  });
+
+  describe("concessão por lote", () => {
+    it("renova a concessão antes de cada lote gravado", async () => {
+      const { client } = fakeClient();
+      const f = fakeStore();
+      const claim = f.store.claim;
+      f.store.claim = async (id, token, secs) => {
+        f.events.push("claim");
+        return claim(id, token, secs);
+      };
+      await runImportToEnd("job", { client, store: f.store });
+      f.events.forEach((e, i) => {
+        if (e.startsWith("upsert:")) expect(f.events[i - 1]).toBe("claim");
+      });
+      expect(f.events.filter((e) => e.startsWith("upsert:")).length).toBeGreaterThan(0);
+    });
+
+    it("renovação recusada antes do lote: não grava o lote nem o cursor e para sem erro", async () => {
+      let inPersons = false;
+      const { client } = fakeClient(DATA, {
+        failOn: (e, _s, seen) => {
+          if (e === "persons" && seen > 0) inPersons = true;
+          return null;
+        },
+      });
+      const f = fakeStore();
+      const claim = f.store.claim;
+      f.store.claim = async (id, token, secs) => (inPersons ? false : claim(id, token, secs));
+      const r = await runImportSlice("job", { budgetMs: 60_000, deps: { client, store: f.store } });
+      expect(r).toMatchObject({ status: "running", step: "persons" });
+      expect(rowsOf(f.upserts, "persons")).toEqual([]);
+      expect(f.job.cursor).toMatchObject({ step: "persons", start: 0 });
     });
   });
 

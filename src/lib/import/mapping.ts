@@ -32,6 +32,11 @@ export type MapCtx = {
   leadLabelNames?: Record<string, string>;
   /** chave do contato (ex.: "person:12") -> vínculos */
   contactLinks?: Record<string, ContactLink[]>;
+  /**
+   * Negócios e leads que o motor sabe que entram na importação (índice). Sem isto, qualquer id presente vale.
+   * A anotação vai para o primeiro registro vinculado importável.
+   */
+  importable?: { deal(id: string): boolean; lead(id: string): boolean };
 };
 
 // ---- leitura defensiva ---------------------------------------------------------------------------------------
@@ -82,6 +87,15 @@ export function dueAt(date: unknown, time: unknown): string | null {
   const m = t ? /^(\d{1,2}):(\d{2})/.exec(t) : null;
   const hhmm = m ? `${m[1].padStart(2, "0")}:${m[2]}` : "15:00";
   return `${d}T${hhmm}:00Z`;
+}
+
+/** duration do Pipedrive ("HH:MM" ou "HH:MM:SS") -> minutos (1 a 1440); vazio, zero ou inválido: null (padrão 30). */
+export function durationMinutes(v: unknown): number | null {
+  const s = str(v);
+  const m = s ? /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(s) : null;
+  if (!m) return null;
+  const total = Number(m[1]) * 60 + Number(m[2]);
+  return total > 0 ? Math.min(1440, total) : null;
 }
 
 export function clampMonths(v: unknown): number | null {
@@ -402,6 +416,7 @@ export function mapActivity(item: PdItem, ctx: MapCtx): MapResult {
     channel_name: channelFor(typeKey, ctx.activityTypeNames?.[typeKey]),
     subject: str(item.subject),
     due_at: due,
+    duration_minutes: durationMinutes(item.duration),
     done,
     completed_at: done ? (toIso(item.marked_as_done_time) ?? due) : null,
     meeting_outcome: done && typeKey === "reuniao_realizada" ? "held" : null,
@@ -421,9 +436,11 @@ export function mapNote(item: PdItem, ctx: MapCtx): MapResult {
   if (typeof company_id !== "string") return company_id;
   const content = str(item.content);
   if (!content) return fail("anotação vazia");
+  const deal = refId(item.deal_id);
+  const lead = str(item.lead_id);
   const targets: [string, string | null][] = [
-    ["deals", refId(item.deal_id)],
-    ["leads", str(item.lead_id)],
+    ["deals", deal && (!ctx.importable || ctx.importable.deal(deal)) ? deal : null],
+    ["leads", lead && (!ctx.importable || ctx.importable.lead(lead)) ? lead : null],
     ["persons", refId(item.person_id)],
     ["organizations", refId(item.org_id)],
   ];

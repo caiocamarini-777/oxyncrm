@@ -158,11 +158,15 @@ const PAGE_STEPS: Partial<Record<Step, { source: PdPageEntity; entity: DbEntity 
   activities: { source: "activities", entity: "activities" },
   notes: { source: "notes", entity: "notes" },
 };
-const INDEX_SOURCES = ["deals", "leads", "archivedLeads"] as const;
+/** persons por último: a organização herda as empresas das pessoas dela (vistas pelos negócios e leads). */
+const INDEX_SOURCES = ["deals", "leads", "archivedLeads", "persons"] as const;
 const CHUNK = 200;
 
 /** Falha de configuração: o job vai para failed com a mensagem. */
 class StepFailure extends Error {}
+
+/** Renovação da concessão recusada antes de gravar: outra fatia assumiu o job; esta para sem gravar o cursor. */
+class LeaseLost extends Error {}
 
 // ---- contexto ----------------------------------------------------------------------------------------------------
 
@@ -247,6 +251,20 @@ function contactCompanies(cache: ImportCache, key: string, fallback: string): st
 }
 
 /**
+ * Empresas da pessoa: as dos negócios e leads dela mais as da organização dela (que já herdou as das pessoas no
+ * índice), para o vínculo com a organização existir em cada cópia. Sem nenhuma: empresa padrão. O resultado fica
+ * no cache, para atividades e anotações da pessoa seguirem as mesmas empresas.
+ */
+function personCompanies(cache: ImportCache, item: PdItem, fallback: string): string[] {
+  const key = `person:${refId(item.id)}`;
+  const org = refId(item.org_id);
+  const idx = uniq([...(cache.contacts[key] ?? []), ...(org ? (cache.contacts[`org:${org}`] ?? []) : [])]);
+  if (!idx.length) return [fallback];
+  cache.contacts[key] = idx;
+  return idx.map((i) => cache.companies[i]);
+}
+
+/**
  * Empresa de atividade/anotação: negócio ou lead vinculado; senão as empresas da pessoa (as da organização só
  * quando não há pessoa). null = vinculada a negócio de funil ignorado ou sem mapeamento: pular.
  */
@@ -296,6 +314,12 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
   for (const item of page.items) {
     const id = refId(item.id);
     if (!id) continue;
+    if (source === "persons") {
+      // a organização da pessoa precisa existir em cada empresa da pessoa (organizações vêm antes das pessoas)
+      const org = refId(item.org_id);
+      for (const ci of org ? (cache.contacts[`person:${id}`] ?? []) : []) link("org", org, ci);
+      continue;
+    }
     if (source === "deals") {
       const p = refId(item.pipeline_id);
       const pm = p ? m.pipelines[p] : undefined;
@@ -507,7 +531,7 @@ function mapItem(step: Step, item: PdItem, env: ImportEnv, base: MapCtx, cache: 
     case "organizations":
       return contactCompanies(cache, `org:${refId(item.id)}`, fallback).map((c) => mapOrganization(item, ctxFor(c, "organizations")));
     case "persons":
-      return contactCompanies(cache, `person:${refId(item.id)}`, fallback).map((c) => mapPerson(item, ctxFor(c, "persons")));
+      return personCompanies(cache, item, fallback).map((c) => mapPerson(item, ctxFor(c, "persons")));
     case "leads":
     case "archived_leads":
       return [mapLead(item, { ...ctxFor(leadCompany(item, m), "leads"), archived: step === "archived_leads" })];
@@ -529,13 +553,25 @@ function mapItem(step: Step, item: PdItem, env: ImportEnv, base: MapCtx, cache: 
   }
 }
 
-async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps, jobId: string): Promise<ImportCursor> {
+async function entityPage(
+  env: ImportEnv,
+  cursor: ImportCursor,
+  deps: EngineDeps,
+  jobId: string,
+  token: string,
+): Promise<ImportCursor> {
   const step = cursor.step!;
   const spec = PAGE_STEPS[step]!;
   const cache = cursor.cache ?? emptyCache(env.companies);
   const page = await deps.client.page(spec.source, cursor.start ?? 0);
   const [meta, members] = await Promise.all([env.meta(), env.members()]);
-  const base: MapCtx = { mappings: env.mappings, ...meta, resolvedPipelines: cache.pipelines };
+  const base: MapCtx = {
+    mappings: env.mappings,
+    ...meta,
+    resolvedPipelines: cache.pipelines,
+    // anotação vai para o primeiro vínculo que entra na importação (negócio de funil mapeado, lead indexado)
+    importable: { deal: (id) => cache.deals[id] !== undefined, lead: (id) => cache.leads[id] !== undefined },
+  };
   const fallbackOwner = env.mappings.fallbackOwnerId;
   // contatos (todas as cópias) e atividades: dono sem acesso vira o dono padrão; negócios e leads ficam no users_check
   const swapsOwner = step === "organizations" || step === "persons" || step === "activities";
@@ -574,6 +610,8 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
 
   const total = { created: 0, updated: 0, skipped, unchanged: 0 };
   for (let i = 0; i < rows.length; i += CHUNK) {
+    // cada lote pode demorar: renova a concessão antes; recusada, outra fatia assumiu e esta para
+    if (!(await deps.store.claim(jobId, token, LEASE_SECONDS))) throw new LeaseLost();
     const res = await deps.store.upsert(jobId, spec.entity, rows.slice(i, i + CHUNK));
     total.created += res.created ?? 0;
     total.updated += res.updated ?? 0;
@@ -602,7 +640,13 @@ async function entityPage(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps
   return last ? advance(cache, step) : { step, cache, start: page.nextStart! };
 }
 
-async function runUnit(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps, jobId: string): Promise<ImportCursor> {
+async function runUnit(
+  env: ImportEnv,
+  cursor: ImportCursor,
+  deps: EngineDeps,
+  jobId: string,
+  token: string,
+): Promise<ImportCursor> {
   const step = cursor.step ?? STEPS[0];
   const c = { ...cursor, step };
   switch (step) {
@@ -618,7 +662,7 @@ async function runUnit(env: ImportEnv, cursor: ImportCursor, deps: EngineDeps, j
     case "done":
       return c;
     default:
-      return entityPage(env, c, deps, jobId);
+      return entityPage(env, c, deps, jobId, token);
   }
 }
 
@@ -671,7 +715,7 @@ export async function runImportSlice(
           break;
         }
         const u0 = now();
-        cursor = await runUnit(env, cursor, deps, jobId);
+        cursor = await runUnit(env, cursor, deps, jobId, token);
         const unitMs = now() - u0;
         if (!(await store.saveCursor(jobId, token, cursor))) break; // pausado ou concessão perdida
         // avisos de troca de dono já registrados e cursor gravado: limpa as trocas da etapa encerrada
@@ -686,6 +730,7 @@ export async function runImportSlice(
         if (now() - t0 + unitMs >= budgetMs) break;
       }
     } catch (e) {
+      if (e instanceof LeaseLost) return await reload(store, jobId);
       if (e instanceof PipedriveAuthError || e instanceof StepFailure) {
         await store.log(jobId, [{ entity: "job", external_id: null, reason: e.message }]);
         await store.finish(jobId, token, "failed");

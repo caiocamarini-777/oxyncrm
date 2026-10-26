@@ -5,6 +5,7 @@ import {
   clampMonths,
   companiesForContact,
   dueAt,
+  durationMinutes,
   leadCompany,
   mapActivity,
   mapDeal,
@@ -192,6 +193,19 @@ describe("mapActivity", () => {
   it("sem vínculo dá erro", () => {
     expect(mapActivity({ id: 3, type: "call" }, ctx).ok).toBe(false);
   });
+  it("duration HH:MM vira duration_minutes; sem duração fica null (o banco usa 30)", () => {
+    expect(rowOf(mapActivity({ ...act, duration: "01:30" }, ctx))).toMatchObject({ duration_minutes: 90 });
+    expect(rowOf(mapActivity({ ...act, duration: "" }, ctx))).toMatchObject({ duration_minutes: null });
+    expect(rowOf(mapActivity(act, ctx))).toMatchObject({ duration_minutes: null });
+  });
+  it("durationMinutes", () => {
+    expect(durationMinutes("00:45")).toBe(45);
+    expect(durationMinutes("2:00:00")).toBe(120);
+    expect(durationMinutes("00:00")).toBeNull();
+    expect(durationMinutes("30:00")).toBe(1440);
+    expect(durationMinutes("abc")).toBeNull();
+    expect(durationMinutes(null)).toBeNull();
+  });
 });
 
 describe("outros mapeadores", () => {
@@ -207,6 +221,22 @@ describe("outros mapeadores", () => {
   it("mapNote escolhe o vínculo e exige conteúdo", () => {
     expect(rowOf(mapNote({ id: 1, content: "oi", deal_id: 100, user_id: 5 }, ctx))).toMatchObject({ entity: "deals", record_external_id: "100", author_id: U1 });
     expect(mapNote({ id: 2, content: "oi" }, ctx).ok).toBe(false);
+  });
+  it("mapNote vai para o primeiro vínculo importável: negócio, lead, pessoa, organização", () => {
+    const note = { id: 3, content: "oi", deal_id: 100, lead_id: "l-1", person_id: 7, org_id: 8 };
+    const known = (deals: string[], leads: string[]): MapCtx => ({
+      ...ctx,
+      importable: { deal: (id) => deals.includes(id), lead: (id) => leads.includes(id) },
+    });
+    const target = (c: MapCtx, item: Record<string, unknown> = note) => {
+      const r = rowOf(mapNote(item, c));
+      return `${r.entity}:${r.record_external_id}`;
+    };
+    expect(target(known(["100"], ["l-1"]))).toBe("deals:100");
+    expect(target(known([], ["l-1"]))).toBe("leads:l-1");
+    expect(target(known([], []))).toBe("persons:7");
+    expect(target(known([], []), { ...note, person_id: null })).toBe("organizations:8");
+    expect(mapNote({ id: 4, content: "oi", deal_id: 100 }, known([], [])).ok).toBe(false);
   });
 });
 

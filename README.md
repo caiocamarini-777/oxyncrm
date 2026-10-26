@@ -1,9 +1,10 @@
 # Oxyn CRM
 
-CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades. A fase 6 entrega Relatórios, dashboards e metas.
+CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades. A fase 6 entrega Relatórios, dashboards e metas. A fase 3.5 entrega a importação do Pipedrive.
 
 - Especificação: [docs/superpowers/specs/2026-10-21-oxyn-crm-design.md](docs/superpowers/specs/2026-10-21-oxyn-crm-design.md)
 - Plano da fase 1: [docs/superpowers/plans/2026-10-21-fase-1-fundacao.md](docs/superpowers/plans/2026-10-21-fase-1-fundacao.md)
+- Pendências da fase 3.5: [docs/superpowers/followups/2026-10-26-fase-3-5-pendencias.md](docs/superpowers/followups/2026-10-26-fase-3-5-pendencias.md)
 - Pendências da fase 6: [docs/superpowers/followups/2026-10-25-fase-6-pendencias.md](docs/superpowers/followups/2026-10-25-fase-6-pendencias.md)
 - Pendências da fase 4: [docs/superpowers/followups/2026-10-24-fase-4-pendencias.md](docs/superpowers/followups/2026-10-24-fase-4-pendencias.md)
 - Pendências da fase 3: [docs/superpowers/followups/2026-10-23-fase-3-pendencias.md](docs/superpowers/followups/2026-10-23-fase-3-pendencias.md)
@@ -63,6 +64,61 @@ São três chaves em `roles.permissions.settings`, por papel e por empresa. O ad
 - Um widget de relatório salvo respeita a empresa em que o relatório foi salvo, mesmo em "Todas as empresas".
 - Tabelas cortam em 500 linhas e avisam quando cortaram.
 - No funil por canal, um lead com reuniões em canais diferentes conta em cada canal, então as linhas não somam.
+
+## Importação do Pipedrive
+
+Traz funis, etapas, usuários, campos personalizados, organizações, pessoas, leads (inclusive arquivados), negócios, produtos, atividades e anotações do Pipedrive para o Oxyn. Só o admin geral usa: `/configuracoes/importacao`.
+
+### Variáveis de ambiente
+
+- `PIPEDRIVE_API_TOKEN`: token da API do Pipedrive. Vive só em `.env.local` ou nas variáveis da Vercel, lido no servidor. Nunca é gravado no banco, nunca vai para o navegador e nunca aparece em log. A autenticação usa o cabeçalho `x-api-token`.
+- `PIPEDRIVE_BASE_URL`: opcional, padrão `https://api.pipedrive.com`. Serve para os testes apontarem para o servidor falso.
+
+### Assistente
+
+1. **Funis**: para cada funil do Pipedrive, importar ou ignorar, empresa de destino, funil de destino (existente ou novo) e mapeamento de cada etapa.
+2. **Usuários**: cada usuário do Pipedrive aponta para um usuário do Oxyn.
+3. **Etiquetas de lead**: a etiqueta de empresa do lead decide a empresa dele.
+4. **Padrões**: empresa padrão para registros sem empresa definida (órfãos) e demais padrões.
+5. **Campos personalizados**: destino e chave de cada campo.
+6. **Revisão**: confere tudo e oferece **Simular (sem gravar)** ou **Iniciar importação**.
+
+A importação roda em fatias de cerca de 10 s, com progresso na tela, e pode ser retomada de onde parou. O relatório final traz contagens, avisos e erros.
+
+### Simular
+
+Roda o motor inteiro sem gravar nada no banco, para achar problemas de mapeamento. A simulação tem teto de 45 s: se não terminar nesse tempo, o resultado é parcial e a tela avisa. Para uma simulação completa de uma base grande, use a linha de comando.
+
+### Linha de comando
+
+```bash
+pnpm import:pipedrive <jobId> [--dry-run]
+```
+
+Continua um job já configurado no assistente, sem o limite de tempo da web. Com `--dry-run` não grava nada.
+
+### Como as empresas são definidas
+
+- Negócio: o funil mapeado define a empresa.
+- Lead: a etiqueta de empresa define a empresa. Sem etiqueta de empresa, vai para a empresa padrão.
+- Pessoas e organizações ligadas a mais de uma empresa são duplicadas, uma cópia por empresa (isolamento entre empresas). Sem vínculo, vão para a empresa padrão.
+- Atividades e anotações seguem o negócio ou lead vinculado; os de contato valem para cada empresa do contato.
+
+### Conferência de donos
+
+Antes de gravar, a etapa `users_check` exige que o dono de cada negócio e de cada lead seja membro da empresa de destino; senão o job falha listando "Nome (Empresa)". Contatos e atividades cujo dono não é membro vão para um dono de reserva, com um aviso agregado.
+
+### Reimportação
+
+Reimportar não duplica: cada registro é casado pelo id do Pipedrive. Registro editado no Oxyn depois da importação é pulado, para não sobrescrever o trabalho no CRM. Quem alterar algo no Pipedrive depois da migração e já tiver editado o registro no Oxyn não verá a mudança.
+
+### Atividades legado
+
+Atividades importadas ficam marcadas como legado. O canal é deduzido pelo tipo do Pipedrive (ligação, e-mail, LinkedIn, WhatsApp); sem correspondência, vai para o canal legado "Não informado". Concluídas sem resultado recebem o resultado "Importado". A importação não grava eventos falsos na linha do tempo.
+
+### Trava
+
+Só uma execução por job de cada vez: cada fatia toma uma concessão de 120 s, renovada a cada passo. Se o assistente e a linha de comando competirem, o segundo recebe "ocupado". Se uma execução cair, a concessão expira sozinha em até 120 s.
 
 ## Lembretes de atividades
 

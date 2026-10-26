@@ -32,10 +32,12 @@ Itens menores, sem risco de dados, que ficaram de fora de propósito:
 
 ## Antes da importação do Pipedrive (fase 3.5)
 
-- A importação precisa de um desvio autorizado (função definer ou flag de sessão restrita) para gravar `won_at`, `lost_at` e `stage_entered_at` históricos. Hoje `deals_status_fields` e `stage_entry` forçam esses valores.
-- Também precisa inserir leads já convertidos, o que o guard de status do lead bloqueia, e preencher `converted_deal_id` fora de `convert_lead`.
-- O histórico de etapas e o cronograma de receita devem ser gerados a partir do que for importado, sem disparar eventos de timeline falsos.
-- Filtro por etiqueta: as funções `*_with_labels` já suportam volumes grandes (testado com 1200 registros por entidade e paginação até a última página), então a importação em massa não deve exigir mudança aí. Conferir o plano de execução depois da primeira carga real.
+Resolvidas na fase 3.5 (detalhes em `2026-10-26-fase-3-5-pendencias.md`):
+
+- Resolvido: desvio autorizado para gravar `won_at`, `lost_at` e `stage_entered_at` históricos. A função `importing()` (GUC `oxyn.importing` presa a um `import_jobs` em execução, sem `auth.uid()`) faz os gatilhos respeitarem as datas. Commits 557e25b e 8fe0e40; migrações `20261026000001` e `20261026000002`.
+- Resolvido: inserção de leads já convertidos e preenchimento de `converted_deal_id` fora de `convert_lead`, pelo mesmo desvio (inclusive conversão por UPDATE). Commits 557e25b e 8fe0e40; migrações `20261026000001` e `20261026000002`.
+- Resolvido: histórico de etapas e cronograma de receita gerados a partir do importado, sem eventos de timeline falsos (timelines suprimidas durante a importação; `import_rebuild_deal_derivatives`). Commits d53335f e 27caf64; migrações `20261026000003` e `20261026000004`.
+- Pendente, depois da primeira carga real: conferir o plano de execução do filtro por etiqueta (as funções `*_with_labels` já suportam volumes grandes e não devem exigir mudança).
 
 ## Notas para a fase 6 (relatórios)
 

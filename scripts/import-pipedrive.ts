@@ -1,10 +1,13 @@
 // Roda uma importação do Pipedrive até o fim: pnpm import:pipedrive <jobId> [--dry-run]
-// --dry-run lê o Pipedrive e o job e mapeia tudo, sem gravar nada no banco.
+// --dry-run lê o Pipedrive e o job e mapeia tudo, sem gravar nada no banco. Em rascunho, valida e converte o
+// rascunho como a simulação do assistente. A importação real só roda em job já iniciado pelo assistente.
 // O token vem de PIPEDRIVE_API_TOKEN (.env.local) e nunca é impresso.
 import { loadEnv } from "./load-env";
 import { createAdminClient } from "../src/lib/supabase/admin";
 import { createPipedriveClient } from "../src/lib/import/pipedrive/client";
-import { createDryRunStore, runImportToEnd, type SliceResult } from "../src/lib/import/engine";
+import { prepareCliRun } from "../src/lib/import/cli";
+import { loadDiscovery } from "../src/lib/import/discovery";
+import { runImportToEnd, type SliceResult } from "../src/lib/import/engine";
 import { createSupabaseStore } from "../src/lib/import/store";
 
 loadEnv();
@@ -40,11 +43,16 @@ async function main() {
 
   const client = createPipedriveClient({ token, baseUrl: process.env.PIPEDRIVE_BASE_URL || undefined });
   const real = createSupabaseStore(createAdminClient());
-  const dry = dryRun ? createDryRunStore(real) : null;
+  const prepared = await prepareCliRun(jobId, { store: real, dryRun, discover: loadDiscovery });
+  if (!prepared.ok) {
+    console.error(prepared.error);
+    process.exit(1);
+  }
+  const { dry } = prepared;
   if (dryRun) console.log("Simulação: nada será gravado no banco.");
 
   let last = "";
-  const r = await runImportToEnd(jobId, { client, store: dry?.store ?? real }, (s) => {
+  const r = await runImportToEnd(jobId, { client, store: prepared.store }, (s) => {
     const line = summary(s);
     if (line !== last) console.log(line);
     last = line;

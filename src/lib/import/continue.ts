@@ -8,7 +8,7 @@ export type SliceLike = JobState & { done: boolean; busy?: boolean };
 
 export type ContinueResult =
   | { ok: true; status: string; step: string; counters: Counters; done: boolean; busy: boolean }
-  | { ok: false; error: string };
+  | { ok: false; error: string; transient?: boolean };
 
 export const CONTINUE_ERRORS = {
   notFound: "Importação não encontrada.",
@@ -62,4 +62,36 @@ export async function simulateUntil(
       };
     }
   }
+}
+
+/** Espera antes da única nova tentativa automática do laço de progresso. */
+export const TRANSIENT_RETRY_MS = 3000;
+
+const TRANSIENT_RE =
+  /fetch failed|failed to fetch|load failed|networkerror|network error|falha de rede|econnreset|etimedout|socket hang up|respondeu (429|5\d\d)/i;
+
+/** Falha passageira de rede (navegador, servidor ou Pipedrive): vale tentar de novo sozinho. */
+export function isTransientError(e: unknown): boolean {
+  if (!(e instanceof Error)) return typeof e === "string" && TRANSIENT_RE.test(e);
+  const cause = (e as { cause?: unknown }).cause;
+  return TRANSIENT_RE.test(e.message) || (cause !== undefined && cause !== e && isTransientError(cause));
+}
+
+/**
+ * Chama uma vez; em falha passageira (exceção de rede ou resultado marcado como passageiro), espera e tenta
+ * mais uma vez. A segunda tentativa vale como está (erro aparece na tela).
+ */
+export async function withTransientRetry<T>(
+  call: () => Promise<T>,
+  opts: { isTransient: (r: T) => boolean; sleep?: (ms: number) => Promise<void>; waitMs?: number },
+): Promise<T> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  try {
+    const r = await call();
+    if (!opts.isTransient(r)) return r;
+  } catch (e) {
+    if (!isTransientError(e)) throw e;
+  }
+  await sleep(opts.waitMs ?? TRANSIENT_RETRY_MS);
+  return call();
 }

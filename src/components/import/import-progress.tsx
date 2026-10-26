@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { continueImport, createImportJob, pauseImport, resumeImport, reviseImport } from "@/lib/import/actions";
 import { usersCheckPairs } from "@/lib/import/constants";
+import { withTransientRetry } from "@/lib/import/continue";
 import { STATUS_LABELS, STEP_LABELS } from "@/lib/import/wizard";
 import { CountersTable, LogList, type LogEntry } from "./import-report";
 
@@ -57,7 +58,10 @@ export function ImportProgress({ job }: { job: ProgressJob }) {
     setError(null);
     try {
       while (mounted.current) {
-        const r = await continueImport(job.id);
+        // falha passageira de rede: uma nova tentativa sozinha depois de 3 s antes de mostrar o erro
+        const r = await withTransientRetry(() => continueImport(job.id), {
+          isTransient: (x) => !x.ok && x.transient === true,
+        });
         if (!mounted.current) break;
         if (!r.ok) {
           setError(r.error);

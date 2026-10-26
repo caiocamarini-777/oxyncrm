@@ -8,7 +8,14 @@ import type { ActionResult } from "@/lib/db-errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
-import { SIMULATION_TOTAL_MS, SLICE_BUDGET_MS, continueJob, simulateUntil, type ContinueResult } from "./continue";
+import {
+  SIMULATION_TOTAL_MS,
+  SLICE_BUDGET_MS,
+  continueJob,
+  isTransientError,
+  simulateUntil,
+  type ContinueResult,
+} from "./continue";
 import { createDryRunStore, runImportSlice, type LogItem } from "./engine";
 import { loadDiscovery, PIPEDRIVE_MESSAGES, pipedriveErrorMessage, pipedriveFromEnv } from "./discovery";
 import { loadOxynData } from "./queries";
@@ -147,7 +154,11 @@ export async function continueImport(jobId: string): Promise<ContinueResult> {
     if (e instanceof MissingToken) return { ok: false, error: PIPEDRIVE_MESSAGES.missing };
     // o job continua em andamento e retoma do último cursor gravado
     console.error("importação: falha na fatia", e instanceof Error ? e.message : e);
-    return { ok: false, error: "A etapa atual falhou. A importação continua de onde parou ao tentar de novo." };
+    return {
+      ok: false,
+      error: "A etapa atual falhou. A importação continua de onde parou ao tentar de novo.",
+      transient: isTransientError(e),
+    };
   }
 }
 

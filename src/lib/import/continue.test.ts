@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CONTINUE_ERRORS, SIMULATION_TOTAL_MS, SLICE_BUDGET_MS, continueJob, simulateUntil, type JobState, type SliceLike } from "./continue";
+import {
+  CONTINUE_ERRORS,
+  SIMULATION_TOTAL_MS,
+  SLICE_BUDGET_MS,
+  TRANSIENT_RETRY_MS,
+  continueJob,
+  isTransientError,
+  simulateUntil,
+  withTransientRetry,
+  type ContinueResult,
+  type JobState,
+  type SliceLike,
+} from "./continue";
 import { LOG_LIMIT, USERS_CHECK_FAILURE, usersCheckPairs } from "./constants";
 
 vi.mock("server-only", () => ({}));
@@ -104,5 +116,54 @@ describe("token do Pipedrive", () => {
     expect(url.startsWith("http://pipedrive.invalid/v1/")).toBe(true);
     expect(url).not.toContain("falso");
     expect((init.headers as Record<string, string>)["x-api-token"]).toBe("falso");
+  });
+});
+
+describe("nova tentativa em falha passageira", () => {
+  const okRes: ContinueResult = { ok: true, status: "running", step: "deals", counters, done: false, busy: false };
+  const transient: ContinueResult = { ok: false, error: "A etapa atual falhou.", transient: true };
+  const isTransient = (r: ContinueResult) => !r.ok && r.transient === true;
+
+  it("reconhece erros de rede", () => {
+    expect(isTransientError(new TypeError("fetch failed"))).toBe(true);
+    expect(isTransientError(new TypeError("Failed to fetch"))).toBe(true);
+    expect(isTransientError(new Error("x", { cause: new Error("ECONNRESET") }))).toBe(true);
+    expect(isTransientError(new Error("Falha de rede ao chamar o Pipedrive em /v1/deals"))).toBe(true);
+    expect(isTransientError(new Error("Pipedrive respondeu 503 em /v1/deals"))).toBe(true);
+    expect(isTransientError(new Error("import_upsert: OXYN_IMPORT_NOT_RUNNING"))).toBe(false);
+    expect(isTransientError(new Error("Pipedrive respondeu 400 em /v1/deals"))).toBe(false);
+  });
+
+  it("exceção de rede: espera 3 s e tenta uma vez", async () => {
+    const waits: number[] = [];
+    const call = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(okRes);
+    const r = await withTransientRetry(call, { isTransient, sleep: async (ms) => void waits.push(ms) });
+    expect(r).toEqual(okRes);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(waits).toEqual([TRANSIENT_RETRY_MS]);
+    expect(TRANSIENT_RETRY_MS).toBe(3000);
+  });
+
+  it("resultado passageiro: tenta uma vez; falhando de novo, devolve o erro", async () => {
+    const call = vi.fn().mockResolvedValue(transient);
+    const r = await withTransientRetry(call, { isTransient, sleep: async () => {} });
+    expect(r).toEqual(transient);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("segunda exceção de rede sobe para a tela", async () => {
+    const call = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(withTransientRetry(call, { isTransient, sleep: async () => {} })).rejects.toThrow("Failed to fetch");
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("erro que não é de rede não tenta de novo", async () => {
+    const plain: ContinueResult = { ok: false, error: "A importação ainda não foi iniciada." };
+    const call = vi.fn().mockResolvedValue(plain);
+    expect(await withTransientRetry(call, { isTransient, sleep: async () => {} })).toEqual(plain);
+    const boom = vi.fn().mockRejectedValue(new Error("bug"));
+    await expect(withTransientRetry(boom, { isTransient, sleep: async () => {} })).rejects.toThrow("bug");
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(boom).toHaveBeenCalledTimes(1);
   });
 });

@@ -21,10 +21,13 @@ export async function updateSession(request: NextRequest) {
       },
     },
   );
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  // getClaims valida o JWT localmente quando o projeto usa chaves assimétricas
+  // (com HS256 legado a biblioteca consulta o Auth, mantendo o comportamento).
+  // Ban/inatividade: com a verificação local, o ban só aparece quando o token
+  // expira ou é renovado (refresh falha com user_banned); enquanto isso,
+  // requireUser lê `profiles.active` via RLS e derruba a sessão.
+  const { data: claimsData, error } = await supabase.auth.getClaims();
+  const user = claimsData?.claims.sub ? claimsData.claims : null;
 
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC.some((p) => path === p || path.startsWith(p + "/"));

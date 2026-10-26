@@ -9,9 +9,12 @@ import { getAccessibleCompanies } from "@/lib/companies/scope";
 export const instant = false;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const profile = await requireUser();
-  const companies = await getAccessibleCompanies();
-  const lastSlug = (await cookies()).get(LAST_COMPANY_COOKIE)?.value;
+  const [profile, companies, cookieStore] = await Promise.all([
+    requireUser(),
+    getAccessibleCompanies(),
+    cookies(),
+  ]);
+  const lastSlug = cookieStore.get(LAST_COMPANY_COOKIE)?.value;
   return (
     <AppShell
       profile={{

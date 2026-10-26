@@ -12,9 +12,11 @@ export default async function CompanyLayout({
   children: React.ReactNode;
   params: Promise<{ empresa: string }>;
 }) {
-  const { empresa } = await params;
-  const profile = await requireUser();
-  const companies = await getAccessibleCompanies();
+  const [{ empresa }, profile, companies] = await Promise.all([
+    params,
+    requireUser(),
+    getAccessibleCompanies(),
+  ]);
   const scope = resolveCompanyScope(empresa, companies, profile.isSuperAdmin);
   if (!scope) notFound();
 

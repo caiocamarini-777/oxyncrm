@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
@@ -11,17 +12,19 @@ export type Profile = {
   active: boolean;
 };
 
-export async function getCurrentProfile(): Promise<Profile | null> {
+/** Memoizado por requisição: layouts e páginas chamam sem custo extra. */
+export const getCurrentProfile = cache(async (): Promise<Profile | null> => {
   await connection(); // leitura de sessão é sempre em tempo de requisição
   const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+  // getClaims valida o JWT localmente (chaves assimétricas) em vez de ir ao Auth.
+  // Usuário desativado continua barrado: abaixo, `profiles.active` via RLS.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims.sub;
+  if (!userId) return null;
   const { data } = await supabase
     .from("profiles")
     .select("id, full_name, email, avatar_url, is_super_admin, active")
-    .eq("id", user.id)
+    .eq("id", userId)
     .maybeSingle();
   if (!data) return null;
   return {
@@ -32,9 +35,9 @@ export async function getCurrentProfile(): Promise<Profile | null> {
     isSuperAdmin: data.is_super_admin,
     active: data.active,
   };
-}
+});
 
-export async function requireUser(): Promise<Profile> {
+export const requireUser = cache(async (): Promise<Profile> => {
   const profile = await getCurrentProfile();
   if (!profile) redirect("/entrar");
   if (!profile.active) {
@@ -43,10 +46,10 @@ export async function requireUser(): Promise<Profile> {
     redirect("/entrar?erro=inativo");
   }
   return profile;
-}
+});
 
-export async function requireSuperAdmin(): Promise<Profile> {
+export const requireSuperAdmin = cache(async (): Promise<Profile> => {
   const profile = await requireUser();
   if (!profile.isSuperAdmin) notFound();
   return profile;
-}
+});

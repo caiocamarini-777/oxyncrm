@@ -1,5 +1,6 @@
 "use client";
 
+import { useCloseAfterSave } from "@/lib/use-close-after-save";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -88,6 +89,7 @@ function DrawerBody({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const markSaved = useCloseAfterSave(pending, close);
   const [isSuperAdmin, setIsSuperAdmin] = useState(user.isSuperAdmin);
   const [access, setAccess] = useState<AccessDraft[]>(
     user.access.map((a) => ({ companyId: a.companyId, roleId: a.roleId })),
@@ -122,7 +124,7 @@ function DrawerBody({
       router.refresh();
       if (!t.ok) return setError(t.error);
       toast.success("Alterações salvas.");
-      close();
+      markSaved();
     });
   }
 
@@ -132,7 +134,7 @@ function DrawerBody({
       setConfirming(false);
       if (!r.ok) return setError(r.error);
       router.refresh();
-      close();
+      markSaved();
     });
   }
 

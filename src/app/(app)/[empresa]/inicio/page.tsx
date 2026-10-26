@@ -7,9 +7,11 @@ import { createServerClient } from "@/lib/supabase/server";
 export const instant = false;
 
 export default async function HomePage({ params }: PageProps<"/[empresa]/inicio">) {
-  const { empresa } = await params;
-  const profile = await requireUser();
-  const companies = await getAccessibleCompanies();
+  const [{ empresa }, profile, companies] = await Promise.all([
+    params,
+    requireUser(),
+    getAccessibleCompanies(),
+  ]);
   const scope = resolveCompanyScope(empresa, companies, profile.isSuperAdmin);
   if (!scope) notFound();
 

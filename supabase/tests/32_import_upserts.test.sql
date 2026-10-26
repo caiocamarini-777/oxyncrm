@@ -1,5 +1,5 @@
 begin;
-select plan(66);
+select plan(96);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -16,6 +16,8 @@ end $$;
 -- chama import_upsert no job em execução
 create function pg_temp.imp(p_entity text, p_rows jsonb) returns jsonb language sql as $$
   select public.import_upsert(pg_temp.u(701), p_entity, p_rows) $$;
+create function pg_temp.imp_job(p_job int, p_entity text, p_rows jsonb) returns jsonb language sql as $$
+  select public.import_upsert(pg_temp.u(p_job), p_entity, p_rows) $$;
 -- id do registro importado
 create function pg_temp.rec(p_entity text, p_ext text, p_company int default 1) returns uuid language sql as $$
   select record_id from public.external_ids
@@ -29,7 +31,8 @@ insert into companies (id, name, slug) values
   (pg_temp.u(1), 'Volt Teste', 'tst-volt'), (pg_temp.u(2), 'Ohm Teste', 'tst-ohm');
 insert into auth.users (id, instance_id, aud, role, email, raw_user_meta_data)
 select pg_temp.u(n), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-ups' || n || '@oxyn.test', '{"full_name":"x"}'
-from unnest(array[11, 12, 18]) n;
+from unnest(array[11, 12, 13, 18]) n;
+-- 13: ativo, sem vínculo com as empresas
 update profiles set is_super_admin = true where id = pg_temp.u(18);
 insert into roles (id, name, description, permissions) values
   (pg_temp.u(21), 'tst-Gestor', 'teste', '{"visibility":{"leads":"company","deals":"company","persons":"company","organizations":"company","activities":"company"},"actions":{"create":true,"edit":true,"delete":true,"export":true,"reassign_owner":true},"settings":{"manage_pipelines":true,"manage_custom_fields":true,"manage_products":true,"view_reports":true,"create_dashboards":true,"share_dashboards":true}}'::jsonb);
@@ -43,7 +46,11 @@ insert into custom_field_defs (company_id, entity, key, label, type) values
   (pg_temp.u(1), 'persons', 'linkedin', 'Linkedin', 'text');
 insert into import_jobs (id, source, status, created_by) values
   (pg_temp.u(701), 'pipedrive', 'running', pg_temp.u(18)),
-  (pg_temp.u(702), 'pipedrive', 'draft', pg_temp.u(18));
+  (pg_temp.u(702), 'pipedrive', 'draft', pg_temp.u(18)),
+  (pg_temp.u(703), 'pipedrive', 'running', pg_temp.u(13)),
+  (pg_temp.u(704), 'pipedrive', 'running', pg_temp.u(18));
+insert into products (company_id, name, kind, default_price) values (pg_temp.u(1), 'tst-Produto CRM', 'setup', 50);
+create temp table snap (k text primary key, v text);
 
 -- 1. Acesso e pré-condições ----------------------------------------------------------------------
 select pg_temp.as_user(pg_temp.u(18));
@@ -54,6 +61,11 @@ select throws_ok($$ select public.import_rebuild_deal_derivatives(pg_temp.u(701)
 select pg_temp.as_pg();
 select ok(has_function_privilege('service_role', 'public.import_upsert(uuid, text, jsonb)', 'execute'),
   'service_role executa import_upsert');
+select pg_temp.as_pg();
+set local role service_role;
+select throws_ok($$ select public.import_upsert_deals(pg_temp.u(701), '{}') $$, '42501', null,
+  'service_role não chama as funções internas por entidade');
+select pg_temp.as_pg();
 select throws_ok($$ select public.import_upsert(pg_temp.u(702), 'organizations', '[]') $$, 'P0001',
   'OXYN_IMPORT_NOT_RUNNING', 'job fora de running é recusado');
 select throws_ok($$ select pg_temp.imp('widgets', '[]') $$, 'P0001', 'OXYN_IMPORT_INVALID_ENTITY',
@@ -88,8 +100,9 @@ select is((select (counters->'persons'->>'warnings')::int from import_jobs where
   'descarte de campos conta como aviso');
 select ok((select counters->'persons'->'errors' is null from import_jobs where id = pg_temp.u(701)),
   'aviso não conta como erro');
-select ok((select errors @> '[{"entity": "persons", "external_id": "p2"}]' and (errors->-1->>'reason') like 'aviso:%'
-  from import_jobs where id = pg_temp.u(701)), 'aviso vai para o log com o prefixo aviso:');
+select ok((select warnings @> '[{"entity": "persons", "external_id": "p2"}]' and (warnings->-1->>'reason') like 'aviso:%'
+  and not errors @> '[{"external_id": "p2"}]'
+  from import_jobs where id = pg_temp.u(701)), 'aviso vai para warnings (prefixo aviso:), não para errors');
 select is(pg_temp.imp('persons', '[
   {"external_id": "p1", "company_id": "00000000-0000-4000-8000-000000000002", "owner_id": "00000000-0000-4000-8000-000000000011",
    "name": "tst-Ana", "organization_external_id": "o1", "created_at": "2023-05-02T10:00:00Z"}]'),
@@ -282,6 +295,132 @@ select is(pg_temp.imp('organizations', '[
 select is((select name from organizations where id = pg_temp.rec('organizations', 'o1')), 'tst-Org CRM',
   'título do CRM preservado');
 select is(current_setting('oxyn.importing', true), '', 'import_upsert limpa o desvio ao terminar');
+
+
+-- 10. Rodada de correções 1 ----------------------------------------------------------------------------------------
+-- dono fora da empresa: erro de linha em cada entidade
+select is(pg_temp.imp('organizations', '[{"external_id": "ox", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000013", "name": "tst-Org Fora"}]'), pg_temp.res(0, 0, 0, 0, 1),
+  'organização com dono fora da empresa: erro de linha');
+select is(pg_temp.imp('persons', '[{"external_id": "px", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000013", "name": "tst-Pessoa Fora"}]'), pg_temp.res(0, 0, 0, 0, 1),
+  'pessoa com dono fora da empresa: erro de linha');
+select is(pg_temp.imp('leads', '[{"external_id": "lx", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000013", "title": "tst-Lead Fora"}]'), pg_temp.res(0, 0, 0, 0, 1),
+  'lead com dono fora da empresa: erro de linha');
+select is(pg_temp.imp('deals', '[{"external_id": "dx", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000013", "pipeline_id": "00000000-0000-4000-8000-000000000401",
+  "stage_id": "00000000-0000-4000-8000-000000000501", "title": "tst-Neg Fora", "status": "open"}]'), pg_temp.res(0, 0, 0, 0, 1),
+  'negócio com dono fora da empresa: erro de linha');
+select is(pg_temp.imp('activities', '[{"external_id": "ax", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000013", "type": "task", "subject": "tst-Fora", "due_at": "2024-01-01",
+  "done": false, "deal_external_id": "d1"}]'), pg_temp.res(0, 0, 0, 0, 1),
+  'atividade com dono fora da empresa: erro de linha');
+select ok((select errors @> '[{"external_id": "ox", "reason": "OXYN_IMPORT_INVALID: owner_id"}]'
+  and errors @> '[{"external_id": "ax", "reason": "OXYN_IMPORT_INVALID: owner_id"}]'
+  from import_jobs where id = pg_temp.u(701)), 'motivo aponta owner_id');
+-- autor de anotação fora da empresa: cai para quem criou o job (18, admin geral) ou vira erro (job do 13)
+select is(pg_temp.imp('notes', '[{"external_id": "n2", "company_id": "00000000-0000-4000-8000-000000000001", "entity": "deals",
+  "record_external_id": "d1", "content": "tst-nota 2", "author_id": "00000000-0000-4000-8000-000000000013"}]'),
+  pg_temp.res(1, 0, 0, 0, 0), 'autor fora da empresa: anotação criada');
+select is((select created_by from notes where id = pg_temp.rec('notes', 'n2')), pg_temp.u(18),
+  'autor fora da empresa cai para quem criou o job');
+select is(pg_temp.imp_job(703, 'notes', '[{"external_id": "n3", "company_id": "00000000-0000-4000-8000-000000000001", "entity": "deals",
+  "record_external_id": "d1", "content": "tst-nota 3", "author_id": "00000000-0000-4000-8000-000000000013"}]'),
+  pg_temp.res(0, 0, 0, 0, 1), 'autor e criador do job fora da empresa: erro de linha');
+
+-- avisos e erros em listas separadas, cada uma com no máximo 1000 itens
+select public.import_log_error(pg_temp.u(704), 'deals', g::text, 'aviso: teste') from generate_series(1, 1001) g;
+select public.import_log_error(pg_temp.u(704), 'deals', 'erro-real', 'OXYN_X');
+select ok((select jsonb_array_length(warnings) = 1000 and jsonb_array_length(errors) = 1
+  and errors->0->>'external_id' = 'erro-real' and (counters->'deals'->>'warnings')::int = 1001
+  and (counters->'deals'->>'errors')::int = 1
+  from import_jobs where id = pg_temp.u(704)), '1001 avisos não escondem o erro real');
+
+-- linha igual não reescreve o registro (mesma versão da linha)
+insert into snap select 'p1', xmin::text from persons where id = pg_temp.rec('persons', 'p1');
+select is(pg_temp.imp('persons', '[
+  {"external_id": "p1", "company_id": "00000000-0000-4000-8000-000000000001", "owner_id": "00000000-0000-4000-8000-000000000011",
+   "name": "tst-Ana", "emails": [{"value": "Ana@X.com", "label": "work"}, ""], "phones": ["(11) 99999-0000"],
+   "organization_external_id": "o1", "custom_fields": {"linkedin": "in/ana"}, "created_at": "2023-05-02T10:00:00Z"}]'),
+  pg_temp.res(0, 0, 0, 1, 0), 'linha igual conta em unchanged');
+select is((select xmin::text from persons where id = pg_temp.rec('persons', 'p1')), (select v from snap where k = 'p1'),
+  'linha igual não faz UPDATE');
+
+-- reimportação com troca de etapa, novo won_at e novo contrato
+select is(pg_temp.imp('deals', '[
+  {"external_id": "d1", "company_id": "00000000-0000-4000-8000-000000000001", "owner_id": "00000000-0000-4000-8000-000000000011",
+   "pipeline_id": "00000000-0000-4000-8000-000000000401", "stage_id": "00000000-0000-4000-8000-000000000501",
+   "title": "tst-Neg Ganho", "status": "won", "value": 20000, "setup_total": 1000, "mrr": 600, "contract_months": 12,
+   "won_at": "2024-05-20T12:00:00Z", "stage_entered_at": "2024-03-01T12:00:00Z", "person_external_id": "p1",
+   "organization_external_id": "o1", "lead_external_id": "l1", "created_at": "2024-01-05T12:00:00Z"}]'),
+  pg_temp.res(0, 1, 0, 0, 0), 'negócio reimportado com outra etapa');
+select ok((select count(*) = 2 and bool_or(from_stage_id = pg_temp.u(502) and to_stage_id = pg_temp.u(501)
+  and moved_at = '2024-03-01T12:00:00Z' and seconds_in_previous = 29 * 86400)
+  from deal_stage_history where deal_id = pg_temp.rec('deals', 'd1')), 'troca de etapa grava o histórico');
+select ok((select mrr_start = '2024-05-01' and setup_first_due = '2024-05-01' from deals where id = pg_temp.rec('deals', 'd1')),
+  'won_at novo recalcula as datas do contrato');
+select ok((select count(*) = 12 and min(month) = '2024-05-01' and sum(setup) + sum(mrr) = 8200
+  from deal_revenue_schedule where deal_id = pg_temp.rec('deals', 'd1')), 'cronograma acompanha o contrato novo');
+
+-- produtos: só por external_id; nome de produto do CRM não é sobrescrito
+select is(pg_temp.imp('products', '[{"external_id": "pr2", "company_id": "00000000-0000-4000-8000-000000000001",
+  "name": "tst-Produto CRM", "kind": "recurring", "price": 10}]'), pg_temp.res(0, 0, 0, 0, 1),
+  'produto com nome de produto do CRM: erro de linha');
+select ok((select kind = 'setup' and default_price = 50 from products where company_id = pg_temp.u(1) and name = 'tst-Produto CRM'),
+  'produto do CRM preservado');
+
+-- resultado "Importado" ativo ou não neutro não é reaproveitado
+insert into activity_outcomes (company_id, name, classification, active) values (pg_temp.u(2), 'Importado', 'success', true);
+select is(pg_temp.imp('activities', '[{"external_id": "a9", "company_id": "00000000-0000-4000-8000-000000000002",
+  "owner_id": "00000000-0000-4000-8000-000000000011", "type": "task", "subject": "tst-Outra", "due_at": "2024-01-01",
+  "done": true, "person_external_id": "p1"}]'), pg_temp.res(1, 0, 0, 0, 0), 'atividade concluída na segunda empresa');
+select ok((select o.name = 'Importado (Pipedrive)' and o.classification = 'neutral' and not o.active
+  from activities a join activity_outcomes o on o.id = a.outcome_id where a.id = pg_temp.rec('activities', 'a9', 2)),
+  '"Importado" do usuário não é reaproveitado: usa "Importado (Pipedrive)"');
+
+-- registro na lixeira não é resolvido como vínculo
+select is(pg_temp.imp('organizations', '[{"external_id": "o9", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000011", "name": "tst-Org Lixeira"}]'), pg_temp.res(1, 0, 0, 0, 0), 'org criada');
+update organizations set deleted_at = now() where id = pg_temp.rec('organizations', 'o9');
+select is(pg_temp.imp('persons', '[{"external_id": "p9", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000011", "name": "tst-Pessoa", "organization_external_id": "o9"}]'),
+  pg_temp.res(1, 0, 0, 0, 0), 'pessoa criada');
+select is((select organization_id from persons where id = pg_temp.rec('persons', 'p9')), null::uuid,
+  'organização na lixeira não é vinculada');
+
+-- origem de lead nova é criada
+select is(pg_temp.imp('leads', '[{"external_id": "l3", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000011", "title": "tst-Lead Feira", "source_name": " tst-Feira  Nova "}]'),
+  pg_temp.res(1, 0, 0, 0, 0), 'lead com origem nova');
+select ok((select s.name = 'tst-Feira Nova' and s.company_id = pg_temp.u(1)
+  from leads l join lead_sources s on s.id = l.source_id where l.id = pg_temp.rec('leads', 'l3')), 'origem nova criada na empresa');
+
+-- etapa de outra empresa: erro de linha
+select is(pg_temp.imp('deals', '[{"external_id": "d9", "company_id": "00000000-0000-4000-8000-000000000002",
+  "owner_id": "00000000-0000-4000-8000-000000000011", "pipeline_id": "00000000-0000-4000-8000-000000000401",
+  "stage_id": "00000000-0000-4000-8000-000000000501", "title": "tst-Neg Cruzado", "status": "open"}]'),
+  pg_temp.res(0, 0, 0, 0, 1), 'funil e etapa de outra empresa: erro de linha');
+select ok((select errors @> '[{"external_id": "d9", "reason": "OXYN_CROSS_COMPANY"}]' from import_jobs where id = pg_temp.u(701)),
+  'motivo OXYN_CROSS_COMPANY');
+
+-- linha que falha depois de gravar etiquetas não deixa record_labels órfãos
+create function public.tst_break_label() returns trigger language plpgsql as $$
+begin
+  if (select name from public.labels where id = new.label_id) = 'tst-Quebra' then
+    raise exception 'tst-quebra';
+  end if;
+  return new;
+end $$;
+create trigger tst_break_label before insert on record_labels for each row execute function public.tst_break_label();
+select is(pg_temp.imp('leads', '[{"external_id": "l4", "company_id": "00000000-0000-4000-8000-000000000001",
+  "owner_id": "00000000-0000-4000-8000-000000000011", "title": "tst-Lead Quebra", "labels": ["tst-Nova Etiqueta", "tst-Quebra"]}]'),
+  pg_temp.res(0, 0, 0, 0, 1), 'lead que falha na segunda etiqueta: erro de linha');
+select ok(not exists (select 1 from leads where title = 'tst-Lead Quebra')
+  and not exists (select 1 from labels where name = 'tst-Nova Etiqueta')
+  and not exists (select 1 from record_labels rl where rl.entity = 'leads' and not exists (select 1 from leads l where l.id = rl.record_id)),
+  'nada da linha com erro fica gravado (sem record_labels órfãos)');
+drop trigger tst_break_label on record_labels;
 
 select * from finish();
 rollback;

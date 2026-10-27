@@ -140,14 +140,14 @@ select is(run_widget(pg_temp.u(701), '{"company":["00000000-0000-4000-8000-00000
 select is(run_widget(pg_temp.u(701), '{"company":["00000000-0000-4000-8000-000000000001","00000000-0000-4000-8000-000000000002"]}')->'total',
   '4'::jsonb, 'filtro de empresa é recortado às empresas do dono');
 select is(run_widget(pg_temp.u(701), '{"company":[]}')->'total', '0'::jsonb, 'lista de empresas vazia não vira todas');
-select is(run_widget(pg_temp.u(702), '{"period":{"from":"2026-01-01","to":"2026-12-31"}}')->'total', '3'::jsonb,
-  'período maior que o da spec é recortado');
+select is(run_widget(pg_temp.u(702), '{"period":{"from":"2026-01-01","to":"2026-12-31"}}')->'total', '4'::jsonb,
+  'período do painel substitui o da spec (fase 6.5)');
 select is(run_widget(pg_temp.u(702), '{"period":{"from":"2026-03-12","to":"2026-06-30"}}')->'total', '2'::jsonb,
-  'período é a interseção');
+  'período do painel vale mesmo fora do período da spec');
 select is(run_widget(pg_temp.u(702), '{"period":{"from":"2026-05-01","to":"2026-05-31"}}')->'total', '0'::jsonb,
-  'interseção vazia dá resultado vazio');
-select is(run_widget(pg_temp.u(701), '{"period":{"from":"2026-03-01","to":"2026-03-31"}}')->'total', '3'::jsonb,
-  'spec sem período recebe o período do filtro no campo padrão');
+  'período sem registros dá resultado vazio');
+select is(run_widget(pg_temp.u(701), '{"period":{"from":"2026-03-01","to":"2026-03-31"}}')->'total', '4'::jsonb,
+  'relatório personalizado sem período ignora o período do painel (como no Pipedrive, fase 6.5)');
 select is(run_widget(pg_temp.u(701), '{"owner":["00000000-0000-4000-8000-000000000013"]}')->'total', '1'::jsonb,
   'filtro owner restringe');
 select is(run_widget(pg_temp.u(701), '{"team":["00000000-0000-4000-8000-000000000032"]}')->'total', '1'::jsonb,

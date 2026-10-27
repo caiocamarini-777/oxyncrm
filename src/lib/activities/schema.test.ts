@@ -57,6 +57,12 @@ describe("completeSchema", () => {
     expect(completeSchema.safeParse({ isMeeting: true, meetingOutcome: "held" }).success).toBe(true);
     expect(completeSchema.safeParse({ isMeeting: true, meetingOutcome: "nope" }).success).toBe(false);
   });
+  it("reunião realizada aceita resultado de qualificação; as demais não", () => {
+    expect(completeSchema.safeParse({ isMeeting: true, meetingOutcome: "held", outcomeId: U(9) }).success).toBe(true);
+    expect(msg(completeSchema.safeParse({ isMeeting: true, meetingOutcome: "no_show", outcomeId: U(9) }))).toBe(
+      "O resultado só vale para reunião realizada.",
+    );
+  });
   it("nota até 2.000", () => {
     expect(completeSchema.safeParse({ isMeeting: false, outcomeId: U(9), note: "a".repeat(2001) }).success).toBe(false);
   });

@@ -25,6 +25,8 @@ export type GridItem = {
   title: string;
   colSpan: number;
   rowSpan: number;
+  /** Selo ao lado do título (período). */
+  badge?: string | null;
   /** Conteúdo renderizado no servidor (um Suspense por widget). */
   content: React.ReactNode;
 };
@@ -65,6 +67,7 @@ function SortableWidget({
     >
       <WidgetCard
         title={item.title}
+        badge={item.badge}
         spans={spans}
         readOnly={readOnly}
         handle={

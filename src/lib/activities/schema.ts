@@ -120,6 +120,10 @@ export const completeSchema = z
     if (!v.isMeeting && !v.outcomeId) {
       ctx.addIssue({ code: "custom", message: "Informe o resultado da atividade.", path: ["outcomeId"] });
     }
+    // reunião: resultado (qualificação) é opcional e só vale para reunião realizada
+    if (v.isMeeting && v.outcomeId && v.meetingOutcome !== "held") {
+      ctx.addIssue({ code: "custom", message: "O resultado só vale para reunião realizada.", path: ["outcomeId"] });
+    }
   });
 export type CompleteInput = z.input<typeof completeSchema>;
 export type CompleteData = z.output<typeof completeSchema>;

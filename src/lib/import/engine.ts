@@ -102,6 +102,8 @@ export type ImportSource = {
   dealFields(): Promise<PdFieldDef[]>;
   personFields(): Promise<PdFieldDef[]>;
   organizationFields(): Promise<PdFieldDef[]>;
+  /** Resultados de atividade (campo "outcome"); opcional para fontes sem o campo. */
+  activityFields?(): Promise<PdFieldDef[]>;
 };
 
 /** Gravação e leitura do banco usadas pelo motor (implementação real em store.ts). */
@@ -170,7 +172,7 @@ class LeaseLost extends Error {}
 
 // ---- contexto ----------------------------------------------------------------------------------------------------
 
-type Meta = Pick<MapCtx, "fieldOptions" | "fieldTypes" | "activityTypeNames" | "leadLabelNames">;
+type Meta = Pick<MapCtx, "fieldOptions" | "fieldTypes" | "activityTypeNames" | "leadLabelNames" | "activityOutcomeNames">;
 
 export type ImportEnv = {
   mappings: ImportMappings;
@@ -215,12 +217,14 @@ export function prepareContext(job: JobRecord, deps: EngineDeps): ImportEnv {
 }
 
 async function loadMeta(client: ImportSource): Promise<Meta> {
-  const [types, labels, dealFields, personFields, orgFields] = await Promise.all([
+  const [types, labels, dealFields, personFields, orgFields, activityFields] = await Promise.all([
     client.activityTypes(),
     client.leadLabels(),
     client.dealFields(),
     client.personFields(),
     client.organizationFields(),
+    // resultado de atividade é opcional: conta sem o campo (ou que recusa a rota) importa sem ele
+    client.activityFields ? client.activityFields().catch(() => [] as PdFieldDef[]) : Promise.resolve([] as PdFieldDef[]),
   ]);
   const fieldOptions: Record<string, Record<string, string>> = {};
   const fieldTypes: Record<string, string> = {};
@@ -232,7 +236,9 @@ async function loadMeta(client: ImportSource): Promise<Meta> {
   for (const t of types) if (typeof t.key_string === "string") activityTypeNames[t.key_string] = String(t.name ?? "");
   const leadLabelNames: Record<string, string> = {};
   for (const l of labels) if (refId(l.id)) leadLabelNames[refId(l.id)!] = String(l.name ?? "");
-  return { fieldOptions, fieldTypes, activityTypeNames, leadLabelNames };
+  const outcome = activityFields.find((f) => f.key === "outcome");
+  const activityOutcomeNames = Object.fromEntries((outcome?.options ?? []).map((o) => [String(o.id), o.label]));
+  return { fieldOptions, fieldTypes, activityTypeNames, leadLabelNames, activityOutcomeNames };
 }
 
 function emptyCache(companies: string[]): ImportCache {

@@ -14,7 +14,9 @@ import {
   BASES,
   CHARTS,
   CUSTOM_GROUP_BASES,
+  LIST_COLUMNS,
   MAX_FILTERS_UI,
+  RELATIVE_PERIODS,
   dimensionsFor,
   fieldDef,
   fieldsFor,
@@ -28,22 +30,26 @@ import {
   type FieldDef,
   type FilterOp,
   type MetricOp,
+  type RelativePeriod,
   type ReportResult,
 } from "@/lib/reports/spec";
 import { ReportChart } from "./report-chart";
 
 const CHART_LABEL: Record<Chart, string> = {
   number: "Número",
-  bar: "Barras",
+  bar: "Barras horizontais",
+  column: "Colunas",
   line: "Linha",
   funnel: "Funil",
   pie: "Pizza",
   table: "Tabela",
+  list: "Lista de registros",
 };
 
 const OP_LABEL: Record<FilterOp, string> = {
   eq: "é igual a",
   in: "é um de",
+  not_in: "não é nenhum de",
   gte: "a partir de",
   lte: "até",
   between: "entre",
@@ -76,10 +82,13 @@ function Sel({
   );
 }
 
+// Campos que usam o catálogo de outro campo (ex.: resultado da atividade do lead usa os resultados).
+const LOOKUP_ALIAS: Record<string, string> = { activity_outcome: "outcome", activity_owner: "owner", lead_source: "source" };
+
 /** Opções fixas do campo, ou o catálogo carregado para ele; vazio quando o valor é livre. */
 function optionsFor(def: FieldDef, lookups: ReportLookups): Option[] {
   if (def.options) return def.options;
-  return lookups.fields[def.key] ?? [];
+  return lookups.fields[LOOKUP_ALIAS[def.key] ?? def.key] ?? [];
 }
 
 /** Filtro sem valor é omitido (devolve null); o banco rejeitaria um valor vazio. */
@@ -92,7 +101,7 @@ function toSpecFilter(row: FilterRow, def: FieldDef) {
   }
   const vals = row.values.filter((v) => v !== "");
   if (vals.length === 0) return null;
-  if (row.op === "in") return { field: row.field, op: row.op, value: vals.map(conv) };
+  if (row.op === "in" || row.op === "not_in") return { field: row.field, op: row.op, value: vals.map(conv) };
   return { field: row.field, op: row.op, value: conv(vals[0]!) };
 }
 
@@ -125,11 +134,14 @@ export function ReportBuilder({
   const [op, setOp] = useState<MetricOp>(s?.metric.op ?? "count");
   const [metricField, setMetricField] = useState(s?.metric.field ?? "");
   const [groupBy, setGroupBy] = useState(s?.group_by ?? "");
+  const [segmentBy, setSegmentBy] = useState(s?.segment_by ?? "");
   const [chart, setChart] = useState<Chart>(s?.chart ?? "bar");
+  const [columns, setColumns] = useState<string[]>(s?.columns ?? []);
   const [filters, setFilters] = useState<FilterRow[]>(() => initialFilters(s));
   const [periodField, setPeriodField] = useState(s?.period?.field ?? "");
-  const [from, setFrom] = useState(s?.period?.from ?? "");
-  const [to, setTo] = useState(s?.period?.to ?? "");
+  const [relative, setRelative] = useState<RelativePeriod | "">(s?.period && "relative" in s.period ? s.period.relative : "");
+  const [from, setFrom] = useState(s?.period && "from" in s.period ? s.period.from : "");
+  const [to, setTo] = useState(s?.period && "to" in s.period ? s.period.to : "");
   const nextId = useRef((s?.filters?.length ?? 0) + 1);
   const [pending, startTransition] = useTransition();
 
@@ -145,8 +157,11 @@ export function ReportBuilder({
     setOp("count");
     setMetricField("");
     setGroupBy("");
+    setSegmentBy("");
+    setColumns([]);
     setFilters([]);
     setPeriodField("");
+    setRelative("");
     setFrom("");
     setTo("");
   }
@@ -161,6 +176,8 @@ export function ReportBuilder({
       chart,
     };
     if (groupBy) out.group_by = groupBy;
+    if (groupBy && segmentBy) out.segment_by = segmentBy;
+    if (chart === "list") out.columns = columns;
     const fs = filters
       .map((row) => {
         const def = fieldDef(base, row.field);
@@ -168,7 +185,8 @@ export function ReportBuilder({
       })
       .filter((f) => f !== null);
     if (fs.length > 0) out.filters = fs;
-    if (periodField && from && to) out.period = { field: periodField, from, to };
+    if (periodField && relative) out.period = { field: periodField, relative };
+    else if (periodField && from && to) out.period = { field: periodField, from, to };
     return out;
   })();
 
@@ -301,6 +319,22 @@ export function ReportBuilder({
           </Sel>
         </div>
 
+        {groupBy ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="rb-segment">Segmentar por</Label>
+            <Sel id="rb-segment" label="Segmentar por" value={segmentBy} onChange={setSegmentBy}>
+              <option value="">Sem segmento</option>
+              {dims
+                .filter((d) => d.key !== groupBy)
+                .map((d) => (
+                  <option key={d.key} value={d.key}>
+                    {d.label}
+                  </option>
+                ))}
+            </Sel>
+          </div>
+        ) : null}
+
         <div className="space-y-1.5">
           <Label htmlFor="rb-period">Período</Label>
           <div className="flex flex-wrap items-center gap-2">
@@ -313,6 +347,16 @@ export function ReportBuilder({
               ))}
             </Sel>
             {periodField ? (
+              <Sel label="Intervalo do período" value={relative} onChange={(v) => setRelative(v as RelativePeriod | "")}>
+                <option value="">Datas fixas</option>
+                {RELATIVE_PERIODS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </Sel>
+            ) : null}
+            {periodField && !relative ? (
               <>
                 <Input type="date" aria-label="De" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" />
                 <Input type="date" aria-label="Até" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" />
@@ -324,12 +368,20 @@ export function ReportBuilder({
         <div className="space-y-1.5">
           <Label htmlFor="rb-chart">Gráfico</Label>
           <Sel id="rb-chart" label="Gráfico" value={chart} onChange={(v) => setChart(v as Chart)}>
-            {CHARTS.map((c) => (
+            {CHARTS.filter((c) => c !== "list" || LIST_COLUMNS[base]).map((c) => (
               <option key={c} value={c}>
                 {CHART_LABEL[c]}
               </option>
             ))}
           </Sel>
+          {chart === "list" ? (
+            <MultiSelect
+              label="Colunas"
+              options={(LIST_COLUMNS[base] ?? []).map((c) => ({ value: c.key, label: c.label }))}
+              value={columns}
+              onChange={setColumns}
+            />
+          ) : null}
         </div>
 
         <div className="space-y-2">
@@ -435,10 +487,10 @@ function FilterValue({
   onChange: (values: string[]) => void;
 }) {
   if (row.op === "is_null" || row.op === "not_null") return null;
-  if (row.op === "in" && options.length > 0) {
+  if ((row.op === "in" || row.op === "not_in") && options.length > 0) {
     return <MultiSelect label="Valores" options={options} value={row.values} onChange={onChange} />;
   }
-  if (row.op === "in") {
+  if (row.op === "in" || row.op === "not_in") {
     return (
       <Input
         aria-label="Valores separados por vírgula"

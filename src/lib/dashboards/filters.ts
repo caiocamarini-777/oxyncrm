@@ -1,4 +1,5 @@
-import type { DashboardFilters } from "@/lib/reports/filters";
+import { isRelativePeriod, type DashboardFilters } from "@/lib/reports/filters";
+import { RELATIVE_KEYS, type RelativePeriod } from "@/lib/reports/spec";
 import { isUuid } from "@/lib/uuid";
 
 export const PERIOD_PRESETS = [
@@ -48,7 +49,20 @@ export function matchPeriodPreset(p: { from: string; to: string }, today: string
   return null;
 }
 
-export type FilterParams = { de?: string; ate?: string; empresa?: string };
+export type FilterParams = {
+  de?: string;
+  ate?: string;
+  empresa?: string;
+  /** Período relativo (this_month etc.); tem precedência sobre de/ate. */
+  periodo?: string;
+  /** Responsável (id). */
+  responsavel?: string;
+  /** Funil (id). */
+  funil?: string;
+};
+
+const isRelativeKey = (v: string | undefined): v is RelativePeriod =>
+  !!v && (RELATIVE_KEYS as readonly string[]).includes(v);
 
 /**
  * Filtros efetivos de um dashboard: a URL válida vale; parâmetro inválido cai no padrão do dashboard (ou em nada).
@@ -64,8 +78,13 @@ export function resolveDashboardFilters(
   const out: DashboardFilters = {};
   const from = params.de;
   const to = params.ate;
-  const urlPeriod = from && to && parseDay(from) && parseDay(to) && from <= to ? { from, to } : null;
-  const period = urlPeriod ?? defaults.period ?? null;
+  const urlPeriod = isRelativeKey(params.periodo)
+    ? { relative: params.periodo }
+    : from && to && parseDay(from) && parseDay(to) && from <= to
+      ? { from, to }
+      : null;
+  const fallback = defaults.period && (isRelativePeriod(defaults.period) || "from" in defaults.period) ? defaults.period : null;
+  const period = urlPeriod ?? fallback;
   if (period) out.period = period;
 
   // Lista presente é filtro, mesmo vazia: chave ausente = sem filtro, `[]` = nada. Ids inválidos do padrão saem;
@@ -81,9 +100,12 @@ export function resolveDashboardFilters(
     company = company === undefined ? [scopeCompanyId] : company.filter((c) => c === scopeCompanyId);
   }
   if (company !== undefined) out.company = company;
-  for (const key of ["owner", "team"] as const) {
+  for (const key of ["owner", "team", "pipeline"] as const) {
     const ids = clean(defaults[key]);
     if (ids !== undefined) out[key] = ids;
   }
+  // responsável e funil da URL substituem o padrão do dashboard
+  if (params.responsavel && isUuid(params.responsavel)) out.owner = [params.responsavel];
+  if (params.funil && isUuid(params.funil)) out.pipeline = [params.funil];
   return out;
 }

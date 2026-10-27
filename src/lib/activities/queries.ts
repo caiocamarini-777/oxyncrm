@@ -182,7 +182,12 @@ export type ActivityCatalogItem = { id: string; name: string; active: boolean };
 export type ActivityCatalog = {
   types: (ActivityCatalogItem & { isMeeting: boolean })[];
   channels: (ActivityCatalogItem & { isLegacy: boolean })[];
-  outcomes: (ActivityCatalogItem & { classification: "success" | "neutral" | "failure"; booksMeeting: boolean })[];
+  outcomes: (ActivityCatalogItem & {
+    classification: "success" | "neutral" | "failure";
+    booksMeeting: boolean;
+    /** "activity": resultado de tentativa; "meeting": qualificação da reunião realizada. */
+    appliesTo: "activity" | "meeting";
+  })[];
 };
 
 /** Tipos, canais e resultados da empresa (inclui inativos; quem monta o formulário filtra). */
@@ -193,7 +198,7 @@ export async function getActivityCatalog(companyId: string): Promise<ActivityCat
     supabase.from("activity_channels").select("id, name, is_legacy, active").eq("company_id", companyId).order("position").order("name"),
     supabase
       .from("activity_outcomes")
-      .select("id, name, classification, books_meeting, active")
+      .select("id, name, classification, books_meeting, active, applies_to")
       .eq("company_id", companyId)
       .order("position")
       .order("name"),
@@ -210,6 +215,7 @@ export async function getActivityCatalog(companyId: string): Promise<ActivityCat
       active: o.active,
       classification: o.classification,
       booksMeeting: o.books_meeting,
+      appliesTo: o.applies_to === "meeting" ? "meeting" : "activity",
     })),
   };
 }

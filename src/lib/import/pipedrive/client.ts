@@ -139,6 +139,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     dealFields: () => list<PdFieldDef>("/v1/dealFields"),
     personFields: () => list<PdFieldDef>("/v1/personFields"),
     organizationFields: () => list<PdFieldDef>("/v1/organizationFields"),
+    activityFields: () => list<PdFieldDef>("/v1/activityFields"),
     async page(entity: PdPageEntity, start: number, limit = 500): Promise<PdPage> {
       const base0 = ENTITY_QUERY[entity];
       const sep = base0.includes("?") ? "&" : "?";

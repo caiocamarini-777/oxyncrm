@@ -53,8 +53,8 @@ export default async function PublicDashboardPage({
 
   const sp = await searchParams;
   // O período é o único filtro que a URL pública controla; empresa, responsável e equipe vêm só do padrão do dashboard.
-  const filters = resolveDashboardFilters({ de: first(sp.de), ate: first(sp.ate) }, dash.default_filters ?? {}, null, null);
-  const urlOnly = resolveDashboardFilters({ de: first(sp.de), ate: first(sp.ate) }, {}, null, null);
+  const filters = resolveDashboardFilters({ de: first(sp.de), ate: first(sp.ate), periodo: first(sp.periodo) }, dash.default_filters ?? {}, null, null);
+  const urlOnly = resolveDashboardFilters({ de: first(sp.de), ate: first(sp.ate), periodo: first(sp.periodo) }, {}, null, null);
   const today = dayKey(new Date());
 
   const widgets: WidgetRow[] = dash.widgets

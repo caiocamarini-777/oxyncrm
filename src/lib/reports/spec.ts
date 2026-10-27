@@ -7,7 +7,7 @@ import type { CellType } from "./format";
  * as listas abaixo são fechadas e o teste de spec lista as chaves para que qualquer deriva fique visível.
  */
 
-export const BASE_KEYS = ["leads", "deals", "activities", "revenue", "stage_history"] as const;
+export const BASE_KEYS = ["leads", "deals", "activities", "revenue", "stage_history", "organizations", "persons"] as const;
 export type Base = (typeof BASE_KEYS)[number];
 
 export const BASES: { key: Base; label: string }[] = [
@@ -16,13 +16,31 @@ export const BASES: { key: Base; label: string }[] = [
   { key: "activities", label: "Atividades" },
   { key: "revenue", label: "Receita" },
   { key: "stage_history", label: "Histórico de etapas" },
+  { key: "organizations", label: "Organizações" },
+  { key: "persons", label: "Pessoas" },
 ];
 
-export const CHARTS = ["number", "bar", "line", "funnel", "pie", "table"] as const;
+/** bar = barras horizontais; column = colunas verticais; list = registros com colunas escolhidas. */
+export const CHARTS = ["number", "bar", "column", "line", "funnel", "pie", "table", "list"] as const;
 export type Chart = (typeof CHARTS)[number];
 
 /** Tipo do campo no banco (report_field.kind). */
 export type FieldKind = "uuid" | "text" | "ts" | "date" | "num" | "team" | "label";
+
+/** Períodos relativos (resolvidos no banco, fuso de São Paulo; semana de domingo a sábado). */
+export const RELATIVE_PERIODS = [
+  { key: "this_week", label: "Esta semana" },
+  { key: "last_week", label: "Semana passada" },
+  { key: "this_month", label: "Este mês" },
+  { key: "last_month", label: "Mês passado" },
+  { key: "this_year", label: "Este ano" },
+  { key: "last_year", label: "Ano passado" },
+  { key: "last_7_days", label: "Últimos 7 dias" },
+  { key: "last_30_days", label: "Últimos 30 dias" },
+] as const;
+export type RelativePeriod = (typeof RELATIVE_PERIODS)[number]["key"];
+export const RELATIVE_KEYS = RELATIVE_PERIODS.map((p) => p.key) as unknown as [RelativePeriod, ...RelativePeriod[]];
+export const relativeLabel = (k: string): string | null => RELATIVE_PERIODS.find((p) => p.key === k)?.label ?? null;
 
 export type FieldDef = { key: string; label: string; type: FieldKind; options?: { value: string; label: string }[] };
 export type DimensionDef = { key: string; label: string; type: "text" | "month" };
@@ -60,6 +78,11 @@ const FIELDS: Record<Base, FieldDef[]> = {
     { key: "created_at", label: "Criado em", type: "ts" },
     { key: "converted_at", label: "Convertido em", type: "ts" },
     { key: "estimated_value", label: "Valor estimado", type: "num" },
+    { key: "organization", label: "Organização", type: "uuid" },
+    { key: "activities_count", label: "Número de atividades", type: "num" },
+    { key: "activity_outcome", label: "Resultado de atividade", type: "uuid" },
+    { key: "activity_completed_at", label: "Atividade concluída em", type: "ts" },
+    { key: "activity_owner", label: "Responsável pela atividade", type: "uuid" },
   ],
   deals: [
     ...COMMON_FIELDS,
@@ -76,6 +99,10 @@ const FIELDS: Record<Base, FieldDef[]> = {
     { key: "setup_total", label: "Setup", type: "num" },
     { key: "mrr", label: "MRR", type: "num" },
     { key: "estimated_value", label: "Valor estimado", type: "num" },
+    { key: "value", label: "Valor do negócio", type: "num" },
+    { key: "source", label: "Canal de origem", type: "uuid" },
+    { key: "close_or_won", label: "Fechamento (ganho ou previsto)", type: "date" },
+    { key: "organization", label: "Organização", type: "uuid" },
   ],
   activities: [
     ...COMMON_FIELDS,
@@ -105,6 +132,19 @@ const FIELDS: Record<Base, FieldDef[]> = {
     },
     { key: "due_at", label: "Vencimento", type: "ts" },
     { key: "completed_at", label: "Concluída em", type: "ts" },
+    { key: "created_at", label: "Criada em", type: "ts" },
+    {
+      key: "done",
+      label: "Situação",
+      type: "text",
+      options: [
+        { value: "done", label: "Concluída" },
+        { value: "open", label: "A fazer" },
+      ],
+    },
+    { key: "organization", label: "Organização", type: "uuid" },
+    { key: "lead", label: "Lead", type: "uuid" },
+    { key: "lead_source", label: "Canal de origem do lead", type: "uuid" },
   ],
   revenue: [
     ...COMMON_FIELDS,
@@ -121,6 +161,25 @@ const FIELDS: Record<Base, FieldDef[]> = {
     { key: "from_stage", label: "Etapa de origem", type: "uuid" },
     { key: "to_stage", label: "Etapa de destino", type: "uuid" },
     { key: "moved_at", label: "Movido em", type: "ts" },
+    { key: "deal_status", label: "Status do negócio", type: "text", options: DEAL_STATUS },
+    { key: "deal_won_at", label: "Negócio ganho em", type: "ts" },
+  ],
+  organizations: [
+    ...COMMON_FIELDS,
+    { key: "created_at", label: "Criada em", type: "ts" },
+    { key: "updated_at", label: "Atualizada em", type: "ts" },
+    { key: "label", label: "Etiqueta", type: "label" },
+    { key: "activities_count", label: "Número de atividades", type: "num" },
+    { key: "lead_created_at", label: "Lead criado em", type: "ts" },
+    { key: "activity_completed_at", label: "Atividade concluída em", type: "ts" },
+    { key: "activity_owner", label: "Responsável pela atividade", type: "uuid" },
+  ],
+  persons: [
+    ...COMMON_FIELDS,
+    { key: "created_at", label: "Criada em", type: "ts" },
+    { key: "label", label: "Etiqueta", type: "label" },
+    { key: "organization", label: "Organização", type: "uuid" },
+    { key: "activities_count", label: "Número de atividades", type: "num" },
   ],
 };
 
@@ -129,17 +188,52 @@ const MONTH_DIM: DimensionDef = { key: "month", label: "Mês", type: "month" };
 
 const DIMENSIONS: Record<Base, DimensionDef[]> = {
   leads: [D("owner", "Responsável"), D("team", "Equipe"), D("company", "Empresa"), D("status", "Status"),
-    D("source", "Origem"), D("label", "Etiqueta"), MONTH_DIM],
+    D("source", "Canal de origem"), D("label", "Etiqueta"), D("organization", "Organização"), MONTH_DIM],
   deals: [D("owner", "Responsável"), D("team", "Equipe"), D("company", "Empresa"), D("status", "Status"),
     D("pipeline", "Funil"), D("stage", "Etapa"), D("lost_reason", "Motivo de perda"), D("label", "Etiqueta"),
-    MONTH_DIM],
-  activities: [D("owner", "Responsável"), D("team", "Equipe"), D("company", "Empresa"), D("type", "Tipo"),
-    D("channel", "Canal"), D("outcome", "Resultado"), D("outcome_classification", "Classificação do resultado"),
-    D("meeting_outcome", "Resultado da reunião"), MONTH_DIM],
+    D("source", "Canal de origem"), D("organization", "Organização"), MONTH_DIM],
+  activities: [D("owner", "Responsável"), D("team", "Equipe"), D("company", "Empresa"), D("kind", "Tipo (canal ou reunião)"),
+    D("type", "Tipo"), D("channel", "Canal"), D("outcome", "Resultado"), D("outcome_classification", "Classificação do resultado"),
+    D("meeting_outcome", "Resultado da reunião"), D("done", "Concluída"), D("organization", "Organização"), MONTH_DIM],
   revenue: [D("owner", "Responsável"), D("company", "Empresa"), D("deal_status", "Status do negócio"),
     D("pipeline", "Funil"), MONTH_DIM],
   stage_history: [D("owner", "Responsável"), D("pipeline", "Funil"), D("from_stage", "Etapa de origem"),
     D("to_stage", "Etapa de destino"), MONTH_DIM],
+  organizations: [D("owner", "Responsável"), D("team", "Equipe"), D("company", "Empresa"), D("label", "Etiqueta"), MONTH_DIM],
+  persons: [D("owner", "Responsável"), D("team", "Equipe"), D("company", "Empresa"), D("label", "Etiqueta"),
+    D("organization", "Organização"), MONTH_DIM],
+};
+
+/** Colunas da lista de registros (chart "list"), por base; "custom:<chave>" também vale (exceto atividades). */
+export const LIST_COLUMNS: Partial<Record<Base, { key: string; label: string }[]>> = {
+  deals: [
+    { key: "organization", label: "Organização" }, { key: "title", label: "Título" }, { key: "stage", label: "Etapa" },
+    { key: "value", label: "Valor do contrato ou estimado" }, { key: "estimated_value", label: "Valor do negócio" },
+    { key: "setup_total", label: "Setup" }, { key: "mrr", label: "MRR" },
+    { key: "expected_close_date", label: "Fechamento previsto" }, { key: "source", label: "Canal de origem" },
+    { key: "lost_reason", label: "Motivo de perda" }, { key: "status", label: "Status" }, { key: "owner", label: "Responsável" },
+    { key: "created_at", label: "Criado em" }, { key: "won_at", label: "Ganho em" }, { key: "lost_at", label: "Perdido em" },
+    { key: "pipeline", label: "Funil" }, { key: "person", label: "Pessoa" },
+  ],
+  leads: [
+    { key: "title", label: "Título" }, { key: "organization", label: "Organização" }, { key: "person", label: "Pessoa" },
+    { key: "source", label: "Canal de origem" }, { key: "status", label: "Status" }, { key: "estimated_value", label: "Valor estimado" },
+    { key: "owner", label: "Responsável" }, { key: "created_at", label: "Criado em" },
+  ],
+  organizations: [
+    { key: "name", label: "Nome" }, { key: "owner", label: "Responsável" }, { key: "created_at", label: "Criada em" },
+    { key: "updated_at", label: "Atualizada em" },
+  ],
+  persons: [
+    { key: "name", label: "Nome" }, { key: "organization", label: "Organização" }, { key: "owner", label: "Responsável" },
+    { key: "created_at", label: "Criada em" },
+  ],
+  activities: [
+    { key: "subject", label: "Assunto" }, { key: "type", label: "Tipo" }, { key: "channel", label: "Canal" },
+    { key: "outcome", label: "Resultado" }, { key: "organization", label: "Organização" }, { key: "person", label: "Pessoa" },
+    { key: "owner", label: "Responsável" }, { key: "due_at", label: "Vencimento" }, { key: "completed_at", label: "Concluída em" },
+    { key: "done", label: "Situação" },
+  ],
 };
 
 const METRICS: Record<MetricOp, MetricDef> = {
@@ -156,6 +250,8 @@ const METRIC_OPS: Record<Base, MetricOp[]> = {
   activities: ["count"],
   revenue: ["count", "sum", "avg"],
   stage_history: ["count", "avg_days"],
+  organizations: ["count"],
+  persons: ["count"],
 };
 
 export const fieldsFor = (base: Base): FieldDef[] => FIELDS[base];
@@ -166,8 +262,22 @@ export const metricsFor = (base: Base): MetricDef[] => METRIC_OPS[base].map((op)
 export const sumFieldsFor = (base: Base): FieldDef[] => FIELDS[base].filter((f) => f.type === "num");
 export const fieldDef = (base: Base, key: string): FieldDef | undefined => FIELDS[base].find((f) => f.key === key);
 
+const PERSON_CUSTOM_RE = /^person\.custom:[a-z][a-z0-9_]{0,39}$/;
+/** Campo de filtro: do catálogo, personalizado do registro (custom:) ou da pessoa ligada (person.custom:). */
+export function filterFieldDef(base: Base, key: string): FieldDef | undefined {
+  const own = fieldDef(base, key);
+  if (own) return own;
+  if (CUSTOM_GROUP_RE.test(key) && ["leads", "deals", "organizations", "persons"].includes(base)) {
+    return { key, label: key.slice(7), type: "text" };
+  }
+  if (PERSON_CUSTOM_RE.test(key) && ["leads", "deals", "activities"].includes(base)) {
+    return { key, label: `Pessoa: ${key.slice(14)}`, type: "text" };
+  }
+  return undefined;
+}
+
 /** Agrupar por campo personalizado do tipo seleção só existe em leads e negócios. */
-export const CUSTOM_GROUP_BASES: Base[] = ["leads", "deals"];
+export const CUSTOM_GROUP_BASES: Base[] = ["leads", "deals", "organizations", "persons"];
 const CUSTOM_GROUP_RE = /^custom:[a-z][a-z0-9_]{0,39}$/;
 
 /** Mesmo limite do banco. */
@@ -220,12 +330,12 @@ const isRealDate = (s: string): boolean => {
 const dateString = z.string().refine(isRealDate, "Data inválida.");
 const uuidString = z.string().regex(UUID_RE, "Identificador inválido.");
 
-const FILTER_OPS = ["eq", "in", "gte", "lte", "between", "is_null", "not_null"] as const;
+const FILTER_OPS = ["eq", "in", "not_in", "gte", "lte", "between", "is_null", "not_null"] as const;
 export type FilterOp = (typeof FILTER_OPS)[number];
 
 /** Operadores aceitos por tipo de campo (validate_report_custom). */
 export function opsForKind(kind: FieldKind): FilterOp[] {
-  if (kind === "uuid" || kind === "text") return ["eq", "in", "is_null", "not_null"];
+  if (kind === "uuid" || kind === "text") return ["eq", "in", "not_in", "is_null", "not_null"];
   if (kind === "team" || kind === "label") return ["eq", "in"];
   return ["eq", "gte", "lte", "between", "is_null", "not_null"];
 }
@@ -237,7 +347,11 @@ const filterSchema = z.strictObject({
 });
 export type ReportFilter = z.infer<typeof filterSchema>;
 
-const periodSchema = z.strictObject({ field: z.string(), from: dateString, to: dateString });
+const periodSchema = z.union([
+  z.strictObject({ field: z.string(), from: dateString, to: dateString }),
+  z.strictObject({ field: z.string(), relative: z.enum(RELATIVE_KEYS, { error: "Período inválido." }) }),
+]);
+export type ReportPeriod = z.infer<typeof periodSchema>;
 const presetPeriodSchema = z.strictObject({ from: dateString, to: dateString });
 
 function scalarOk(kind: FieldKind, v: unknown): boolean {
@@ -264,6 +378,7 @@ function checkFilterValue(kind: FieldKind, f: ReportFilter): boolean {
     case "lte":
       return scalarOk(kind, v);
     case "in":
+    case "not_in":
       return Array.isArray(v) && v.length >= 1 && v.length <= MAX_IN_VALUES && v.every((x) => scalarOk(kind, x));
     case "between":
       if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => scalarOk(kind, x))) return false;
@@ -283,9 +398,13 @@ const customSchema = z
       field: z.string().nullish(),
     }),
     group_by: z.string().nullish(),
+    segment_by: z.string().nullish(),
     filters: z.array(filterSchema).max(MAX_FILTERS, `No máximo ${MAX_FILTERS} filtros.`).nullish(),
     period: periodSchema.nullish(),
     chart: z.enum(CHARTS, { error: "Gráfico inválido." }),
+    columns: z.array(z.string()).min(1).max(15).nullish(),
+    compare: z.boolean().nullish(),
+    cumulative: z.boolean().nullish(),
   })
   .superRefine((spec, ctx) => {
     const { base, metric } = spec;
@@ -300,15 +419,28 @@ const customSchema = z
       issue(["metric", "field"], "Esta métrica não usa campo.");
     }
 
-    const g = spec.group_by;
-    if (g) {
-      const ok =
-        DIMENSIONS[base].some((d) => d.key === g) || (CUSTOM_GROUP_BASES.includes(base) && CUSTOM_GROUP_RE.test(g));
-      if (!ok) issue(["group_by"], "Agrupamento inválido para a base escolhida.");
+    const dimOk = (g: string) =>
+      DIMENSIONS[base].some((d) => d.key === g) || (CUSTOM_GROUP_BASES.includes(base) && CUSTOM_GROUP_RE.test(g));
+    if (spec.group_by && !dimOk(spec.group_by)) issue(["group_by"], "Agrupamento inválido para a base escolhida.");
+    if (spec.segment_by) {
+      if (!spec.group_by) issue(["segment_by"], "Escolha o agrupamento antes do segmento.");
+      else if (!dimOk(spec.segment_by)) issue(["segment_by"], "Segmento inválido para a base escolhida.");
+    }
+
+    if (spec.chart === "list") {
+      const cols = LIST_COLUMNS[base];
+      if (!cols || !spec.columns?.length) issue(["columns"], "Escolha as colunas da lista.");
+      else
+        spec.columns.forEach((c, i) => {
+          const ok = cols.some((x) => x.key === c) || (base !== "activities" && CUSTOM_GROUP_RE.test(c));
+          if (!ok) issue(["columns", i], "Coluna inválida para a base escolhida.");
+        });
+    } else if (spec.columns?.length) {
+      issue(["columns"], "Colunas só valem para a lista.");
     }
 
     (spec.filters ?? []).forEach((f, i) => {
-      const def = fieldDef(base, f.field);
+      const def = filterFieldDef(base, f.field);
       if (!def) return issue(["filters", i, "field"], "Campo fora do catálogo da base.");
       if (!opsForKind(def.type).includes(f.op)) return issue(["filters", i, "op"], "Operador inválido para este campo.");
       if (!checkFilterValue(def.type, f)) issue(["filters", i, "value"], "Valor inválido para o filtro.");
@@ -320,7 +452,7 @@ const customSchema = z
       if (!def || (def.type !== "ts" && def.type !== "date")) {
         issue(["period", "field"], "Escolha um campo de data para o período.");
       }
-      if (p.from > p.to) issue(["period", "from"], "A data inicial não pode ser maior que a final.");
+      if ("from" in p && p.from > p.to) issue(["period", "from"], "A data inicial não pode ser maior que a final.");
     }
   });
 
@@ -375,6 +507,8 @@ export type ReportResult = {
   truncated: boolean;
   /** Gráfico efetivo do widget (run_widget); null em run_report e em preset sem gráfico na spec. */
   chart: Chart | null;
+  /** Cartão de número com período: total do período anterior (comparação). */
+  previous?: number | null;
 };
 
 /** Normaliza a saída crua do banco (campos ausentes viram valores seguros). */
@@ -386,5 +520,6 @@ export function toReportResult(raw: unknown): ReportResult {
     total: typeof r.total === "number" ? r.total : null,
     truncated: r.truncated === true,
     chart: CHARTS.includes(r.chart as Chart) ? (r.chart as Chart) : null,
+    ...(r.previous !== undefined ? { previous: typeof r.previous === "number" ? r.previous : null } : {}),
   };
 }

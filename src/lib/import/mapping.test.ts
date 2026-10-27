@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activityKind,
+  activityResult,
   channelFor,
   clampMonths,
   companiesForContact,
@@ -82,7 +83,7 @@ const baseDeal = {
 
 describe("canais e tipos", () => {
   it("channelFor", () => {
-    expect(channelFor("call", "Ligação")).toBe("Ligação");
+    expect(channelFor("call", "Ligação")).toBe("Telefone");
     expect(channelFor("task", "Whatsapp")).toBe("WhatsApp");
     expect(channelFor("deadline", "Prazo")).toBeNull();
     expect(channelFor("linkedin", "Linkedin")).toBe("LinkedIn");
@@ -107,6 +108,14 @@ describe("tempo e números", () => {
     expect(clampMonths(0)).toBe(1);
     expect(clampMonths(500)).toBe(120);
     expect(clampMonths(undefined)).toBeNull();
+  });
+});
+
+describe("canal de origem", () => {
+  const c = { ...ctx, fieldOptions: { ...ctx.fieldOptions, channel: { "45": "Prospecção" } } };
+  it("negócio e lead levam o rótulo do canal; sem canal fica null", () => {
+    expect(rowOf(mapDeal({ ...baseDeal, channel: 45 }, c))).toMatchObject({ source_name: "Prospecção" });
+    expect(rowOf(mapDeal({ ...baseDeal, channel: null }, c))).toMatchObject({ source_name: null });
   });
 });
 
@@ -197,6 +206,22 @@ describe("mapActivity", () => {
     expect(rowOf(mapActivity({ ...act, duration: "01:30" }, ctx))).toMatchObject({ duration_minutes: 90 });
     expect(rowOf(mapActivity({ ...act, duration: "" }, ctx))).toMatchObject({ duration_minutes: null });
     expect(rowOf(mapActivity(act, ctx))).toMatchObject({ duration_minutes: null });
+  });
+  it("resultado do Pipedrive vira resultado e qualificação", () => {
+    const names = { "89": "Não compareceu", "91": "Concluída Qualificada", "69": "Reunião Agendada", "5": "Novo rótulo" };
+    const c = { ...ctx, activityOutcomeNames: names };
+    const meet = { ...act, type: "reuniao" };
+    expect(rowOf(mapActivity({ ...meet, outcome: 91 }, c))).toMatchObject({ meeting_outcome: "held", outcome_name: "Concluída qualificada" });
+    expect(rowOf(mapActivity({ ...meet, outcome: 89 }, c))).toMatchObject({ meeting_outcome: "no_show", outcome_name: null });
+    expect(rowOf(mapActivity({ ...act, type: "whatsapp", outcome: 69 }, c))).toMatchObject({
+      type: "task", channel_name: "WhatsApp", outcome_name: "Reunião agendada", meeting_outcome: null,
+    });
+    expect(rowOf(mapActivity({ ...act, type: "call", outcome: 5 }, c))).toMatchObject({ channel_name: "Telefone", outcome_name: "Novo rótulo" });
+    expect(rowOf(mapActivity({ ...act, type: "call", done: false, outcome: 69 }, c))).toMatchObject({ outcome_name: null });
+  });
+  it("activityResult sem rótulo", () => {
+    expect(activityResult("meeting", "reuniao", null)).toEqual({ meeting_outcome: null, outcome_name: null });
+    expect(activityResult("task", "call", null)).toEqual({ meeting_outcome: null, outcome_name: null });
   });
   it("durationMinutes", () => {
     expect(durationMinutes("00:45")).toBe(45);

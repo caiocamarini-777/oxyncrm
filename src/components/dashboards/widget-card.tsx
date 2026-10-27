@@ -23,6 +23,7 @@ const GAP = 16;
 
 export function WidgetCard({
   title,
+  badge,
   spans,
   readOnly,
   handle,
@@ -32,6 +33,7 @@ export function WidgetCard({
   children,
 }: {
   title: string;
+  badge?: string | null;
   spans: Spans;
   readOnly: boolean;
   /** Alça de mover (botão do dnd-kit), ausente no modo somente leitura. */
@@ -130,6 +132,11 @@ export function WidgetCard({
         >
           {title}
         </h3>
+        {badge ? (
+          <span className="shrink-0 rounded border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+            {badge}
+          </span>
+        ) : null}
         {!readOnly && onRemove ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

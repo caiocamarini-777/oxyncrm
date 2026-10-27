@@ -89,12 +89,12 @@ select throws_ok($$ select run_widget(pg_temp.u(701), '{}') $$, 'P0001', 'OXYN_F
 select pg_temp.as_pg();
 update companies set archived_at = null where id = pg_temp.u(2);
 
--- 4. período do dashboard em atividades sem período usa due_at, como run_report_custom (M3) ---------------
+-- 4. fase 6.5: relatório personalizado sem período não recebe o período do painel (como no Pipedrive) -------
 select pg_temp.as_user(pg_temp.u(11));
 select is((run_widget(pg_temp.u(702), '{"period":{"from":"2026-03-01","to":"2026-03-31"}}')->>'total')::int, 1,
-  'atividades sem período: o período do dashboard cai no due_at');
-select is((run_widget(pg_temp.u(702), '{"period":{"from":"2026-04-01","to":"2026-04-30"}}')->>'total')::int, 0,
-  'atividades sem período: completed_at fora do critério');
+  'atividades sem período: conta tudo com o período do painel');
+select is((run_widget(pg_temp.u(702), '{"period":{"from":"2026-04-01","to":"2026-04-30"}}')->>'total')::int, 1,
+  'atividades sem período: outro período do painel dá o mesmo total');
 select is(
   run_widget(pg_temp.u(702), '{"period":{"from":"2026-03-01","to":"2026-03-31"}}')->'total',
   run_report_self('{"kind":"custom","base":"activities","metric":{"op":"count"},"chart":"number","period":{"field":"due_at","from":"2026-03-01","to":"2026-03-31"}}',

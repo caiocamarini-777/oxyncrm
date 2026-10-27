@@ -74,6 +74,7 @@ begin
         when 'activities:created_at' then expr := 'r.created_at'; kind := 'ts';
         when 'activities:done' then expr := 'case when r.done then ''done'' else ''open'' end'; kind := 'text';
         when 'activities:organization' then expr := 'r.organization_id'; kind := 'uuid';
+        when 'activities:lead' then expr := 'r.lead_id'; kind := 'uuid';
         when 'activities:lead_source' then
           expr := '(select l.source_id from public.leads l where l.id = r.lead_id)'; kind := 'uuid';
 
@@ -341,6 +342,7 @@ begin
     when 'deals:status' then expr := format(deal_status, 'r.status'); label := 'Status';
     when 'deals:value' then
       expr := 'public.report_deal_value(r.contract_value, r.estimated_value)'; label := 'Valor do negócio'; type := 'currency';
+    when 'deals:estimated_value' then expr := 'r.estimated_value'; label := 'Valor do negócio'; type := 'currency';
     when 'deals:setup_total' then expr := 'r.setup_total'; label := 'Setup'; type := 'currency';
     when 'deals:mrr' then expr := 'r.mrr'; label := 'MRR'; type := 'currency';
     when 'deals:expected_close_date' then expr := 'r.expected_close_date'; label := 'Fechamento previsto'; type := 'date';
@@ -802,8 +804,9 @@ end $$;
 
 -- 7. Filtros do painel -----------------------------------------------------------------------------------------
 -- Corpo da 20261025000011 com três mudanças: período relativo; período do painel substitui o do widget
--- (mantendo o campo de data do widget); filtro de funil vira filtro "pipeline" nas bases que têm funil
--- (custom de deals, revenue e stage_history; presets com filtro pipeline). Nas demais, é ignorado.
+-- (mantendo o campo de data do widget) e, como no Pipedrive, não toca relatório personalizado sem período;
+-- filtro de funil vira filtro "pipeline" nas bases que têm funil (custom de deals, revenue e stage_history;
+-- presets com filtro pipeline). Nas demais, é ignorado.
 create or replace function public.restrict_filters(p_spec jsonb, p_filters jsonb, p_allowed_companies uuid[],
   out spec jsonb, out companies uuid[])
 language plpgsql stable set search_path = public, pg_temp as $$
@@ -879,11 +882,11 @@ begin
       v_to := (v_p->>'to')::date;
     end if;
     if spec->'kind' = '"custom"'::jsonb then
-      spec := spec || jsonb_build_object('period', jsonb_build_object(
-        'field', coalesce(spec#>>'{period,field}', case spec->>'base' when 'activities' then 'due_at'
-                   when 'revenue' then 'month' when 'stage_history' then 'moved_at' else 'created_at' end))
-        || case when v_p ? 'relative' then jsonb_build_object('relative', v_p->>'relative')
-           else jsonb_build_object('from', to_char(v_from, 'YYYY-MM-DD'), 'to', to_char(v_to, 'YYYY-MM-DD')) end);
+      if jsonb_typeof(spec->'period') = 'object' then
+        spec := spec || jsonb_build_object('period', jsonb_build_object('field', spec#>>'{period,field}')
+          || case when v_p ? 'relative' then jsonb_build_object('relative', v_p->>'relative')
+             else jsonb_build_object('from', to_char(v_from, 'YYYY-MM-DD'), 'to', to_char(v_to, 'YYYY-MM-DD')) end);
+      end if;
     else
       spec := spec || jsonb_build_object('period', jsonb_build_object(
         'from', to_char(v_from, 'YYYY-MM-DD'), 'to', to_char(v_to, 'YYYY-MM-DD')));

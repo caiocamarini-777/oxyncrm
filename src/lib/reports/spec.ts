@@ -143,6 +143,7 @@ const FIELDS: Record<Base, FieldDef[]> = {
       ],
     },
     { key: "organization", label: "Organização", type: "uuid" },
+    { key: "lead", label: "Lead", type: "uuid" },
     { key: "lead_source", label: "Canal de origem do lead", type: "uuid" },
   ],
   revenue: [
@@ -207,7 +208,8 @@ const DIMENSIONS: Record<Base, DimensionDef[]> = {
 export const LIST_COLUMNS: Partial<Record<Base, { key: string; label: string }[]>> = {
   deals: [
     { key: "organization", label: "Organização" }, { key: "title", label: "Título" }, { key: "stage", label: "Etapa" },
-    { key: "value", label: "Valor do negócio" }, { key: "setup_total", label: "Setup" }, { key: "mrr", label: "MRR" },
+    { key: "value", label: "Valor do contrato ou estimado" }, { key: "estimated_value", label: "Valor do negócio" },
+    { key: "setup_total", label: "Setup" }, { key: "mrr", label: "MRR" },
     { key: "expected_close_date", label: "Fechamento previsto" }, { key: "source", label: "Canal de origem" },
     { key: "lost_reason", label: "Motivo de perda" }, { key: "status", label: "Status" }, { key: "owner", label: "Responsável" },
     { key: "created_at", label: "Criado em" }, { key: "won_at", label: "Ganho em" }, { key: "lost_at", label: "Perdido em" },

@@ -32,9 +32,14 @@ async function WidgetBody({ widget, filters, load }: { widget: WidgetRow; filter
   );
 }
 
-/** Selo do período do widget: o do painel quando há filtro, senão o da spec. */
+/**
+ * Selo do período do widget: o do painel quando há filtro, senão o da spec. Relatório personalizado sem período
+ * não recebe o período do painel (como no Pipedrive), então fica sem selo.
+ */
 export function periodBadge(widget: WidgetRow, filters: DashboardFilters): string | null {
-  const p = filters.period ?? widget.spec?.period ?? null;
+  const own = widget.spec?.period ?? null;
+  if (widget.spec?.kind === "custom" && !own) return null;
+  const p = filters.period ?? own;
   if (!p) return null;
   if (isRelativePeriod(p)) return relativeLabel(p.relative);
   if ("from" in p && p.from && p.to) return `${formatCell(p.from, "date")} a ${formatCell(p.to, "date")}`;

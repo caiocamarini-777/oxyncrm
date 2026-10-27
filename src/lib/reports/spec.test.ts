@@ -35,7 +35,7 @@ describe("catálogo espelha o banco", () => {
         "won_at", "lost_at", "expected_close_date", "contract_value", "setup_total", "mrr", "estimated_value",
         "value", "source", "close_or_won", "organization"],
       activities: ["owner", "company", "team", "type", "channel", "outcome", "outcome_classification",
-        "meeting_outcome", "due_at", "completed_at", "created_at", "done", "organization", "lead_source"],
+        "meeting_outcome", "due_at", "completed_at", "created_at", "done", "organization", "lead", "lead_source"],
       revenue: ["owner", "company", "team", "pipeline", "deal_status", "month", "setup", "mrr", "total"],
       stage_history: ["owner", "company", "team", "pipeline", "from_stage", "to_stage", "moved_at", "deal_status",
         "deal_won_at"],

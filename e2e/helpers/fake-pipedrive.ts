@@ -81,6 +81,18 @@ export function buildFixture(stamp: number, users: FakeUsers) {
       { key: FIELD_KEYS.cargo, name: "Cargo", field_type: "varchar", edit_flag: true },
     ],
     organizationFields: [{ key: "name", name: "Nome", field_type: "varchar", edit_flag: false }],
+    activityFields: [
+      {
+        key: "outcome",
+        name: "Resultado",
+        field_type: "enum",
+        edit_flag: false,
+        options: [
+          { id: 69, label: "Reunião Agendada" },
+          { id: 91, label: "Concluída Qualificada" },
+        ],
+      },
+    ],
     organizations: [
       { id: 1, name: `Org Um ${stamp}`, owner_id: 501, add_time: "2023-01-10 12:00:00" },
       { id: 2, name: `Org Dois ${stamp}`, owner_id: 501, add_time: "2023-01-11 12:00:00" },
@@ -197,6 +209,7 @@ const LISTS: Record<string, keyof Fixture> = {
   "/v1/dealFields": "dealFields",
   "/v1/personFields": "personFields",
   "/v1/organizationFields": "organizationFields",
+  "/v1/activityFields": "activityFields",
   "/v1/organizations": "organizations",
   "/v1/persons": "persons",
   "/v1/leads": "leads",

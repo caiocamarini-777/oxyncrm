@@ -223,7 +223,8 @@ async function loadMeta(client: ImportSource): Promise<Meta> {
     client.dealFields(),
     client.personFields(),
     client.organizationFields(),
-    client.activityFields ? client.activityFields() : Promise.resolve([] as PdFieldDef[]),
+    // resultado de atividade é opcional: conta sem o campo (ou que recusa a rota) importa sem ele
+    client.activityFields ? client.activityFields().catch(() => [] as PdFieldDef[]) : Promise.resolve([] as PdFieldDef[]),
   ]);
   const fieldOptions: Record<string, Record<string, string>> = {};
   const fieldTypes: Record<string, string> = {};

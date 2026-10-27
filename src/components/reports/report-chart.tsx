@@ -46,11 +46,18 @@ function ResultTable({ result }: { result: ReportResult }) {
         <TableBody>
           {result.rows.map((row, i) => (
             <TableRow key={i}>
-              {result.columns.map((c, j) => (
-                <TableCell key={c.key} className={isNumeric(c) ? "text-right tabular-nums" : undefined}>
-                  {formatCell(row[j], c.type)}
-                </TableCell>
-              ))}
+              {result.columns.map((c, j) => {
+                const text = formatCell(row[j], c.type);
+                return (
+                  <TableCell
+                    key={c.key}
+                    title={text}
+                    className={isNumeric(c) ? "text-right tabular-nums" : "max-w-64 truncate"}
+                  >
+                    {text}
+                  </TableCell>
+                );
+              })}
             </TableRow>
           ))}
         </TableBody>
@@ -138,8 +145,17 @@ function Plot({
 }) {
   const base = shape(result);
   const { series, data, segmented } = cumulative ? accumulate(base) : base;
-  const height = compact ? 190 : 320;
   const horizontal = chart === "bar";
+  // barras horizontais crescem com o número de categorias (o card rola), como a lista do Pipedrive
+  const height = horizontal
+    ? Math.max(compact ? 190 : 320, data.length * (compact ? 24 : 28) + 40)
+    : compact
+      ? 190
+      : 320;
+  const short = (v: unknown) => {
+    const t = String(v ?? "");
+    return t.length > 18 ? `${t.slice(0, 17)}…` : t;
+  };
   const first = series[0];
   if (!first) return <ResultTable result={result} />;
   const fmt = (key: string) => (v: unknown) => {
@@ -160,7 +176,7 @@ function Plot({
     <>
       <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} horizontal={false} />
       <XAxis type="number" tick={tickStyle} tickFormatter={fmt(first.col.key)} allowDecimals={false} />
-      <YAxis type="category" dataKey="__cat" tick={tickStyle} width={compact ? 96 : 140} interval={0} />
+      <YAxis type="category" dataKey="__cat" tick={tickStyle} width={compact ? 104 : 150} interval={0} tickFormatter={short} />
       {tip}
       {legend}
     </>
@@ -181,15 +197,20 @@ function Plot({
             data={data}
             dataKey={first.col.key}
             nameKey="__cat"
-            outerRadius={compact ? 70 : 110}
-            label={compact ? false : (p) => String(p.name)}
+            outerRadius={compact ? 62 : 110}
+            label={(p) => {
+              const v = Number(p.value ?? 0);
+              const pct = Number(p.percent ?? 0) * 100;
+              return compact ? `${formatCell(v, first.col.type)} (${Math.round(pct)}%)` : String(p.name);
+            }}
+            labelLine={!compact}
           >
             {data.map((_, i) => (
               <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
             ))}
           </Pie>
           <Tooltip contentStyle={tooltipStyle} formatter={(v) => formatCell(v, first.col.type)} />
-          {!compact ? <Legend content={ChartLegend} /> : null}
+          <Legend content={ChartLegend} />
         </PieChart>
       ) : chart === "line" ? (
         <LineChart data={data}>

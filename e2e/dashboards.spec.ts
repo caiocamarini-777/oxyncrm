@@ -94,7 +94,14 @@ test.beforeAll(async () => {
     owner_id: adminId,
     company_id: companyId,
     name: reportName,
-    spec: { kind: "custom", base: "deals", metric: { op: "count" }, chart: "number" },
+    // com período próprio: o período do painel substitui o do relatório (relatório sem período não muda, como no Pipedrive)
+    spec: {
+      kind: "custom",
+      base: "deals",
+      metric: { op: "count" },
+      chart: "number",
+      period: { field: "created_at", from: "2000-01-01", to: "2100-12-31" },
+    },
   });
 });
 

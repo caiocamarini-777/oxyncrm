@@ -724,6 +724,11 @@ begin
     v_cols := '[]'::jsonb;
     for c in select x from jsonb_array_elements(v_spec->'columns') x loop
       select * into v_col from public.report_list_column(v_base, c #>> '{}');
+      -- coluna de campo personalizado leva o rótulo do campo
+      if (c #>> '{}') like 'custom:%' then
+        v_col.label := coalesce((select min(cf.label) from public.custom_field_defs cf
+          where cf.company_id = any (p_companies) and cf.entity = v_base and cf.key = substr(c #>> '{}', 8)), v_col.label);
+      end if;
       v_sel := v_sel || case when v_sel = '' then '' else ', ' end || v_col.expr;
       v_cols := v_cols || jsonb_build_array(jsonb_build_object('key', c #>> '{}', 'label', v_col.label, 'type', v_col.type));
     end loop;

@@ -115,7 +115,7 @@ select is(pg_temp.affected($q$delete from activities where id = '00000000-0000-4
 -- configuração
 select is((select count(*) from activity_types where company_id in ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000d2')), 5::bigint, 'bruno vê tipos só da empresa dele');
 select is((select count(*) from activity_channels where company_id = '00000000-0000-4000-8000-0000000000d2'), 0::bigint, 'bruno não vê canais de outra empresa');
-select is((select count(*) from activity_outcomes where company_id = '00000000-0000-4000-8000-0000000000d1'), 6::bigint, 'bruno vê resultados da empresa dele');
+select is((select count(*) from activity_outcomes where company_id = '00000000-0000-4000-8000-0000000000d1'), 9::bigint, 'bruno vê resultados da empresa dele');
 select throws_ok($$ insert into activity_types (company_id, name) values ('00000000-0000-4000-8000-0000000000d1', 'tst-tipo') $$, '42501', null, 'bruno não cria tipo');
 select throws_ok($$ insert into activity_channels (company_id, name) values ('00000000-0000-4000-8000-0000000000d1', 'tst-canal') $$, '42501', null, 'bruno não cria canal');
 select throws_ok($$ insert into activity_outcomes (company_id, name, classification) values ('00000000-0000-4000-8000-0000000000d1', 'tst-res', 'neutral') $$, '42501', null, 'bruno não cria resultado');

@@ -30,8 +30,8 @@ select throws_ok($$ insert into activities (company_id, owner_id, type_id, chann
   ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000b2','A', now(),'00000000-0000-4000-8000-0000000000a1', true) $$,
   '23514', null, 'done sem completed_at é rejeitado');
 select throws_ok($$ insert into activities (company_id, owner_id, type_id, channel_id, subject, due_at, person_id, done, completed_at, outcome_id, meeting_outcome) values
-  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000b2','A', now(),'00000000-0000-4000-8000-0000000000a1', true, now(), '00000000-0000-4000-8000-0000000000b4', 'held') $$,
-  '23514', null, 'resultado e resultado de reunião juntos são rejeitados');
+  ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000b2','A', now(),'00000000-0000-4000-8000-0000000000a1', true, now(), '00000000-0000-4000-8000-0000000000b4', 'no_show') $$,
+  '23514', null, 'resultado com desfecho de reunião diferente de held é rejeitado');
 select throws_ok($$ insert into activities (company_id, owner_id, type_id, channel_id, subject, due_at, person_id, meeting_outcome) values
   ('00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000c1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000b2','A', now(),'00000000-0000-4000-8000-0000000000a1', 'x') $$,
   '23514', null, 'meeting_outcome desconhecido é rejeitado');
@@ -50,7 +50,7 @@ select is((select count(*) from activity_types where company_id = '00000000-0000
 select is((select count(*) from activity_types where company_id = '00000000-0000-4000-8000-0000000000d3' and is_meeting), 1::bigint, 'um tipo é reunião');
 select is((select count(*) from activity_channels where company_id = '00000000-0000-4000-8000-0000000000d3'), 7::bigint, 'empresa nova recebe 7 canais');
 select is((select count(*) from activity_channels where company_id = '00000000-0000-4000-8000-0000000000d3' and is_legacy and not active), 1::bigint, 'um canal legado inativo');
-select is((select count(*) from activity_outcomes where company_id = '00000000-0000-4000-8000-0000000000d3'), 6::bigint, 'empresa nova recebe 6 resultados');
+select is((select count(*) from activity_outcomes where company_id = '00000000-0000-4000-8000-0000000000d3' and applies_to = 'activity'), 6::bigint, 'empresa nova recebe 6 resultados de tentativa');
 select is((select count(*) from activity_outcomes where company_id = '00000000-0000-4000-8000-0000000000d3' and books_meeting), 1::bigint, 'um resultado agenda reunião');
 
 -- Realtime e privilégios

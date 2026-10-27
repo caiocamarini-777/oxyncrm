@@ -7,8 +7,10 @@ import { loadEnv, requireDbUrl } from "./load-env";
 loadEnv();
 
 const dir = resolve(process.cwd(), "supabase/tests");
+// pnpm test:db [trecho do nome]: roda só os arquivos que contêm o trecho
+const only = process.argv[2];
 const files = readdirSync(dir)
-  .filter((f) => f.endsWith(".sql"))
+  .filter((f) => f.endsWith(".sql") && (!only || f.includes(only)))
   .sort();
 
 if (files.length === 0) {

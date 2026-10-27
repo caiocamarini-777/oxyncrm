@@ -34,3 +34,4 @@ AGENTS.md
 
 # cópia do projeto para o next dev temporário dos E2E (contém .env.local)
 /.e2e-tmp/
+scripts/.tmp/

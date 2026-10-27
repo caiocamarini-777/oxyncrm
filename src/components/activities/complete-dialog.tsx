@@ -70,12 +70,14 @@ function CompleteBody({
 }) {
   const reduce = useReducedMotion();
   const isMeeting = activity.type.isMeeting;
-  const outcomes = data.catalog.outcomes.filter((o) => o.active);
+  const outcomes = data.catalog.outcomes.filter((o) => o.active && o.appliesTo === "activity");
+  const qualifications = data.catalog.outcomes.filter((o) => o.active && o.appliesTo === "meeting");
   const party = activity.person?.name ?? activity.organization?.name ?? data.partyName;
 
   const [stage, setStage] = useState<Stage>("form");
   const [outcomeId, setOutcomeId] = useState("");
   const [meetingOutcome, setMeetingOutcome] = useState<MeetingOutcome | "">("");
+  const [qualificationId, setQualificationId] = useState("");
   const [note, setNote] = useState("");
   const [meetingSubject, setMeetingSubject] = useState(party ? `Reunião com ${party}` : "Reunião");
   const [meetingDue, setMeetingDue] = useState("");
@@ -99,7 +101,7 @@ function CompleteBody({
     try {
       const res = await completeActivity(activity.id, {
         isMeeting,
-        outcomeId: isMeeting ? null : outcomeId,
+        outcomeId: isMeeting ? (meetingOutcome === "held" && qualificationId ? qualificationId : null) : outcomeId,
         meetingOutcome: isMeeting ? (meetingOutcome || null) : null,
         note,
         meeting: booking
@@ -202,6 +204,23 @@ function CompleteBody({
                 />
               ))}
             </div>
+            {meetingOutcome === "held" && qualifications.length > 0 ? (
+              <div className="mt-1 flex flex-col gap-1.5">
+                <span id="complete-qualification-label" className="text-sm font-medium">
+                  Resultado da reunião
+                </span>
+                <div role="radiogroup" aria-labelledby="complete-qualification-label" className="grid gap-1.5 sm:grid-cols-3">
+                  {qualifications.map((o) => (
+                    <Choice
+                      key={o.id}
+                      label={o.name}
+                      checked={qualificationId === o.id}
+                      onSelect={() => setQualificationId(qualificationId === o.id ? "" : o.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="flex flex-col gap-2">

@@ -157,7 +157,7 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
 
   const { data, error } = await supabase.rpc("complete_activity", {
     p_id: id,
-    p_outcome_id: d.isMeeting ? null : (d.outcomeId ?? null),
+    p_outcome_id: d.outcomeId ?? null,
     p_meeting_outcome: d.isMeeting ? (d.meetingOutcome ?? null) : null,
     p_note: d.note,
     p_meeting: meeting,

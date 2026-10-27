@@ -6,10 +6,12 @@ import type { Chart } from "@/lib/reports/spec";
 const ICON: Record<Chart, typeof BarChart3> = {
   number: BarChart3,
   bar: BarChart3,
+  column: BarChart3,
   line: LineChart,
   funnel: Filter,
   pie: PieChart,
   table: Table2,
+  list: Table2,
 };
 
 export function PresetCard({ preset, href }: { preset: Preset; href: string }) {

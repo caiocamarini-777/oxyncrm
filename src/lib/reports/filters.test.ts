@@ -29,3 +29,13 @@ describe("shareUrl", () => {
     expect(shareUrl("https://crm.oxyn.com.br/", "abc")).toBe("https://crm.oxyn.com.br/d/abc");
   });
 });
+
+describe("buildWidgetFilters com relativo e funil", () => {
+  it("leva o período relativo e o funil", () => {
+    const P = "44444444-4444-4444-8444-444444444444";
+    expect(buildWidgetFilters({ period: { relative: "last_week" }, pipeline: [P, "x"] })).toEqual({
+      period: { relative: "last_week" },
+      pipeline: [P],
+    });
+  });
+});

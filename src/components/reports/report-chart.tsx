@@ -1,12 +1,13 @@
 "use client";
 
-import { BarChart3, Table2 } from "lucide-react";
+import { ArrowDown, ArrowUp, BarChart3, Table2 } from "lucide-react";
 import { useState } from "react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   Line,
   LineChart,
@@ -21,12 +22,13 @@ import { ResponsiveContainer } from "recharts";
 import { GoalProgressList, isGoalProgressResult } from "@/components/goals/goal-progress";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { EMPTY_TEXT, TRUNCATED_TEXT, isNumeric, shape, summarize } from "@/lib/reports/chart-data";
+import { EMPTY_TEXT, TRUNCATED_TEXT, accumulate, delta, isNumeric, shape, summarize } from "@/lib/reports/chart-data";
 import { formatCell } from "@/lib/reports/format";
+import type { CellType } from "@/lib/reports/format";
 import type { Chart, ReportResult } from "@/lib/reports/spec";
 
-/** Paleta fixa: tons de teal e neutros. */
-export const CHART_COLORS = ["#1A82A2", "#6498A8", "#75ACBA", "#3E6B78", "#A9C9D2", "#5A5F63"];
+/** Paleta fixa: tons de teal e neutros; as últimas cores distinguem segmentos (status, situação). */
+export const CHART_COLORS = ["#1A82A2", "#75ACBA", "#3E6B78", "#E0A458", "#A9C9D2", "#5A5F63", "#8E5572", "#4E9F6B"];
 
 function ResultTable({ result }: { result: ReportResult }) {
   return (
@@ -123,9 +125,21 @@ const tooltipStyle = {
   fontSize: 12,
 };
 
-function Plot({ result, chart, compact }: { result: ReportResult; chart: Chart; compact: boolean }) {
-  const { series, data } = shape(result);
-  const height = compact ? 180 : 320;
+function Plot({
+  result,
+  chart,
+  compact,
+  cumulative,
+}: {
+  result: ReportResult;
+  chart: Chart;
+  compact: boolean;
+  cumulative: boolean;
+}) {
+  const base = shape(result);
+  const { series, data, segmented } = cumulative ? accumulate(base) : base;
+  const height = compact ? 190 : 320;
+  const horizontal = chart === "bar";
   const first = series[0];
   if (!first) return <ResultTable result={result} />;
   const fmt = (key: string) => (v: unknown) => {
@@ -141,13 +155,22 @@ function Plot({ result, chart, compact }: { result: ReportResult; chart: Chart; 
       }}
     />
   );
-  const axes = (
+  const legend = series.length > 1 && (segmented || !compact) ? <Legend content={ChartLegend} /> : null;
+  const axes = horizontal ? (
     <>
-      <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} />
-      <XAxis dataKey="__cat" tick={tickStyle} interval="preserveStartEnd" />
-      <YAxis tick={tickStyle} width={compact ? 48 : 72} tickFormatter={fmt(first.col.key)} />
+      <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} horizontal={false} />
+      <XAxis type="number" tick={tickStyle} tickFormatter={fmt(first.col.key)} allowDecimals={false} />
+      <YAxis type="category" dataKey="__cat" tick={tickStyle} width={compact ? 96 : 140} interval={0} />
       {tip}
-      {series.length > 1 && !compact ? <Legend content={ChartLegend} /> : null}
+      {legend}
+    </>
+  ) : (
+    <>
+      <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
+      <XAxis dataKey="__cat" tick={tickStyle} interval="preserveStartEnd" />
+      <YAxis tick={tickStyle} width={compact ? 48 : 72} tickFormatter={fmt(first.col.key)} allowDecimals={false} />
+      {tip}
+      {legend}
     </>
   );
   return (
@@ -184,16 +207,27 @@ function Plot({ result, chart, compact }: { result: ReportResult; chart: Chart; 
           ))}
         </LineChart>
       ) : (
-        <BarChart data={data}>
+        <BarChart data={data} layout={horizontal ? "vertical" : "horizontal"}>
           {axes}
           {series.map((s, i) => (
             <Bar
               key={s.col.key}
               dataKey={s.col.key}
               name={s.col.label}
+              stackId={segmented ? "seg" : undefined}
               fill={CHART_COLORS[i % CHART_COLORS.length]}
-              radius={[4, 4, 0, 0]}
-            />
+              radius={segmented ? 0 : horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
+            >
+              {/* valor na ponta da barra, como no Pipedrive (empilhado: só no último segmento não teria o total) */}
+              {!segmented && series.length === 1 ? (
+                <LabelList
+                  dataKey={s.col.key}
+                  position={horizontal ? "right" : "top"}
+                  formatter={(v: unknown) => formatCell(v, s.col.type)}
+                  style={{ fontSize: 11, fill: "currentColor" }}
+                />
+              ) : null}
+            </Bar>
           ))}
         </BarChart>
       )}
@@ -201,17 +235,43 @@ function Plot({ result, chart, compact }: { result: ReportResult; chart: Chart; 
   );
 }
 
-/** Renderiza um resultado de relatório como número, barras, linha, funil, pizza ou tabela. */
+/** Variação contra o período anterior (cartão de número), como "▲ +288 (65,0%)". */
+function Delta({ current, previous, type }: { current: unknown; previous: number | null | undefined; type: CellType }) {
+  const d = delta(current, previous);
+  if (!d) return null;
+  const up = d.diff > 0;
+  const down = d.diff < 0;
+  const sign = up ? "+" : "";
+  const pct = d.pct === null ? "" : ` (${sign}${formatCell(d.pct, "percent")})`;
+  return (
+    <p
+      className={`mt-2 inline-flex items-center gap-1 text-sm font-medium ${up ? "text-emerald-600" : down ? "text-red-600" : "text-muted-foreground"}`}
+    >
+      {up ? <ArrowUp className="size-3.5" aria-hidden /> : down ? <ArrowDown className="size-3.5" aria-hidden /> : null}
+      <span>
+        {sign}
+        {formatCell(d.diff, type)}
+        {pct}
+      </span>
+      <span className="sr-only"> em relação ao período anterior</span>
+    </p>
+  );
+}
+
+/** Renderiza um resultado de relatório como número, barras, colunas, linha, funil, pizza, tabela ou lista. */
 export function ReportChart({
   result,
   chart,
   compact = false,
   title,
+  cumulative = false,
 }: {
   result: ReportResult;
   chart: Chart;
   compact?: boolean;
   title?: string;
+  /** Soma acumulada ao longo das categorias (previsão de receita). */
+  cumulative?: boolean;
 }) {
   const [asTable, setAsTable] = useState(false);
   const empty = result.rows.length === 0;
@@ -222,7 +282,7 @@ export function ReportChart({
     body = <p className="py-8 text-center text-sm text-muted-foreground">{EMPTY_TEXT}</p>;
   } else if (chart === "table" && isGoalProgressResult(result)) {
     body = <GoalProgressList result={result} />;
-  } else if (chart === "table" || asTable) {
+  } else if (chart === "table" || chart === "list" || asTable) {
     body = <ResultTable result={result} />;
   } else if (chart === "number") {
     const { series } = shape(result);
@@ -234,17 +294,22 @@ export function ReportChart({
           {s && raw !== null && raw !== undefined ? formatCell(raw, s.col.type) : "Sem dados"}
         </p>
         {s ? <p className="mt-1 text-sm text-muted-foreground">{s.col.label}</p> : null}
+        <Delta current={raw} previous={result.previous} type={s?.col.type ?? "number"} />
       </div>
     );
   } else {
     body = (
       <div role="img" aria-label={label}>
-        {chart === "funnel" ? <Funnel result={result} compact={compact} /> : <Plot result={result} chart={chart} compact={compact} />}
+        {chart === "funnel" ? (
+          <Funnel result={result} compact={compact} />
+        ) : (
+          <Plot result={result} chart={chart} compact={compact} cumulative={cumulative} />
+        )}
       </div>
     );
   }
 
-  const canToggle = !empty && chart !== "table";
+  const canToggle = !empty && chart !== "table" && chart !== "list";
   return (
     <div className="space-y-2">
       {body}

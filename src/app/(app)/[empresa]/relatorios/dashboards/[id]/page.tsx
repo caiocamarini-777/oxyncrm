@@ -42,7 +42,14 @@ export default async function DashboardPage({
   const allOptions = scope.kind === "all" ? companies.filter((c) => slugs.includes(c.slug)) : [];
   const options = allOptions.length > 0 ? allOptions : null;
   const companyBySlug = options ? new Map(options.map((c) => [c.slug, c.id])) : null;
-  const params2 = { de: first(sp.de), ate: first(sp.ate), empresa: first(sp.empresa) };
+  const params2 = {
+    de: first(sp.de),
+    ate: first(sp.ate),
+    empresa: first(sp.empresa),
+    periodo: first(sp.periodo),
+    responsavel: first(sp.responsavel),
+    funil: first(sp.funil),
+  };
   const filters = resolveDashboardFilters(
     params2,
     dashboard.defaultFilters,
@@ -55,9 +62,12 @@ export default async function DashboardPage({
   const readOnly = !dashboard.isOwner;
   // Adicionar widget precisa listar relatórios e funis, o que exige view_reports.
   const canAdd = !readOnly && perms.viewReports;
-  const [reports, lookups] = !canAdd
-    ? [[], null]
-    : await Promise.all([listReports(empresa), getReportLookups(empresa)]);
+  // Os catálogos (usuários e funis dos filtros rápidos) exigem view_reports.
+  const [reports, lookups] = await Promise.all([
+    canAdd ? listReports(empresa) : Promise.resolve([]),
+    perms.viewReports ? getReportLookups(empresa) : Promise.resolve(null),
+  ]);
+  const pipelineOptions = (lookups?.fields.pipeline ?? []).filter((p) => !p.label.includes("(arquivado)"));
 
   // Compartilhar: só o dono, e só com share_dashboards. As pessoas vêm das empresas dele (o banco confere de novo).
   const canShare = dashboard.isOwner && perms.shareDashboards;
@@ -103,6 +113,10 @@ export default async function DashboardPage({
         period={urlOnly.period ?? null}
         companies={options ? options.map((c) => ({ slug: c.slug, name: c.name })) : null}
         company={options?.find((c) => urlOnly.company?.[0] === c.id)?.slug ?? ""}
+        owners={lookups?.fields.owner ?? []}
+        owner={urlOnly.owner?.[0] ?? ""}
+        pipelines={pipelineOptions}
+        pipeline={urlOnly.pipeline?.[0] ?? ""}
       />
 
       <DashboardView

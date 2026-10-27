@@ -23,30 +23,39 @@ const custom = (over: Record<string, unknown> = {}) => ({
 
 describe("catálogo espelha o banco", () => {
   it("bases", () => {
-    expect(BASE_KEYS).toEqual(["leads", "deals", "activities", "revenue", "stage_history"]);
+    expect(BASE_KEYS).toEqual(["leads", "deals", "activities", "revenue", "stage_history", "organizations", "persons"]);
     expect(BASES.map((b) => b.key)).toEqual([...BASE_KEYS]);
   });
   it("campos por base", () => {
     const keys = Object.fromEntries(BASE_KEYS.map((b) => [b, fieldsFor(b).map((f) => f.key)]));
     expect(keys).toEqual({
-      leads: ["owner", "company", "team", "status", "source", "label", "created_at", "converted_at", "estimated_value"],
+      leads: ["owner", "company", "team", "status", "source", "label", "created_at", "converted_at", "estimated_value",
+        "organization", "activities_count", "activity_outcome", "activity_completed_at", "activity_owner"],
       deals: ["owner", "company", "team", "pipeline", "stage", "status", "lost_reason", "label", "created_at",
-        "won_at", "lost_at", "expected_close_date", "contract_value", "setup_total", "mrr", "estimated_value"],
+        "won_at", "lost_at", "expected_close_date", "contract_value", "setup_total", "mrr", "estimated_value",
+        "value", "source", "close_or_won", "organization"],
       activities: ["owner", "company", "team", "type", "channel", "outcome", "outcome_classification",
-        "meeting_outcome", "due_at", "completed_at"],
+        "meeting_outcome", "due_at", "completed_at", "created_at", "done", "organization", "lead_source"],
       revenue: ["owner", "company", "team", "pipeline", "deal_status", "month", "setup", "mrr", "total"],
-      stage_history: ["owner", "company", "team", "pipeline", "from_stage", "to_stage", "moved_at"],
+      stage_history: ["owner", "company", "team", "pipeline", "from_stage", "to_stage", "moved_at", "deal_status",
+        "deal_won_at"],
+      organizations: ["owner", "company", "team", "created_at", "updated_at", "label", "activities_count",
+        "lead_created_at", "activity_completed_at", "activity_owner"],
+      persons: ["owner", "company", "team", "created_at", "label", "organization", "activities_count"],
     });
   });
   it("dimensões por base", () => {
     const keys = Object.fromEntries(BASE_KEYS.map((b) => [b, dimensionsFor(b).map((d) => d.key)]));
     expect(keys).toEqual({
-      leads: ["owner", "team", "company", "status", "source", "label", "month"],
-      deals: ["owner", "team", "company", "status", "pipeline", "stage", "lost_reason", "label", "month"],
-      activities: ["owner", "team", "company", "type", "channel", "outcome", "outcome_classification",
-        "meeting_outcome", "month"],
+      leads: ["owner", "team", "company", "status", "source", "label", "organization", "month"],
+      deals: ["owner", "team", "company", "status", "pipeline", "stage", "lost_reason", "label", "source",
+        "organization", "month"],
+      activities: ["owner", "team", "company", "kind", "type", "channel", "outcome", "outcome_classification",
+        "meeting_outcome", "done", "organization", "month"],
       revenue: ["owner", "company", "deal_status", "pipeline", "month"],
       stage_history: ["owner", "pipeline", "from_stage", "to_stage", "month"],
+      organizations: ["owner", "team", "company", "label", "month"],
+      persons: ["owner", "team", "company", "label", "organization", "month"],
     });
   });
   it("métricas e campos somáveis por base", () => {
@@ -57,9 +66,22 @@ describe("catálogo espelha o banco", () => {
       activities: ["count"],
       revenue: ["count", "sum", "avg"],
       stage_history: ["count", "avg_days"],
+      organizations: ["count"],
+      persons: ["count"],
     });
-    expect(sumFieldsFor("deals").map((f) => f.key)).toEqual(["contract_value", "setup_total", "mrr", "estimated_value"]);
+    expect(sumFieldsFor("deals").map((f) => f.key)).toEqual(["contract_value", "setup_total", "mrr", "estimated_value", "value"]);
     expect(sumFieldsFor("activities")).toEqual([]);
+  });
+  it("segmento, período relativo e lista", () => {
+    expect(ok(custom({ base: "leads", group_by: "source", segment_by: "status", chart: "column" }))).toBe(true);
+    expect(ok(custom({ base: "leads", segment_by: "status" }))).toBe(false);
+    expect(ok(custom({ period: { field: "created_at", relative: "this_month" }, chart: "number" }))).toBe(true);
+    expect(ok(custom({ period: { field: "created_at", relative: "ontem" } }))).toBe(false);
+    expect(ok(custom({ chart: "list", columns: ["title", "value", "custom:temperatura"] }))).toBe(true);
+    expect(ok(custom({ chart: "list" }))).toBe(false);
+    expect(ok(custom({ chart: "list", columns: ["nope"] }))).toBe(false);
+    expect(ok(custom({ base: "leads", filters: [{ field: "person.custom:canal_de_origem", op: "eq", value: "Jitterbit" }] }))).toBe(true);
+    expect(ok(custom({ base: "leads", filters: [{ field: "source", op: "not_in", value: [U(1)] }] }))).toBe(true);
   });
   it("presets", () => {
     expect([...PRESET_KEYS]).toEqual(["channel_funnel", "channel_success", "conversion_influence",

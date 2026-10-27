@@ -1,9 +1,10 @@
 import { Suspense } from "react";
 import { ReportChart } from "@/components/reports/report-chart";
 import type { ActionResult } from "@/lib/db-errors";
-import type { DashboardFilters } from "@/lib/reports/filters";
+import { formatCell } from "@/lib/reports/format";
+import { isRelativePeriod, type DashboardFilters } from "@/lib/reports/filters";
 import type { WidgetRow } from "@/lib/reports/rows";
-import type { Chart, ReportResult } from "@/lib/reports/spec";
+import { relativeLabel, type Chart, type ReportResult } from "@/lib/reports/spec";
 import { DashboardGrid } from "./dashboard-grid";
 import { WidgetErrorBoundary } from "./widget-error-boundary";
 
@@ -25,7 +26,19 @@ async function WidgetBody({ widget, filters, load }: { widget: WidgetRow; filter
       </p>
     );
   }
-  return <ReportChart result={res.data} chart={chartOf(widget, res.data)} compact title={widget.title} />;
+  const cumulative = widget.spec?.kind === "custom" && widget.spec.cumulative === true;
+  return (
+    <ReportChart result={res.data} chart={chartOf(widget, res.data)} compact title={widget.title} cumulative={cumulative} />
+  );
+}
+
+/** Selo do período do widget: o do painel quando há filtro, senão o da spec. */
+export function periodBadge(widget: WidgetRow, filters: DashboardFilters): string | null {
+  const p = filters.period ?? widget.spec?.period ?? null;
+  if (!p) return null;
+  if (isRelativePeriod(p)) return relativeLabel(p.relative);
+  if ("from" in p && p.from && p.to) return `${formatCell(p.from, "date")} a ${formatCell(p.to, "date")}`;
+  return null;
 }
 
 function WidgetSkeleton() {
@@ -68,6 +81,7 @@ export function DashboardView({
     title: w.title || "Sem título",
     colSpan: w.colSpan,
     rowSpan: w.rowSpan,
+    badge: periodBadge(w, filters),
     content: (
       <WidgetErrorBoundary key={filterKey}>
         <Suspense fallback={<WidgetSkeleton />}>

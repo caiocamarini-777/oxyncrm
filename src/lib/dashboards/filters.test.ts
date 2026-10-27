@@ -53,3 +53,19 @@ describe("resolveDashboardFilters", () => {
     expect(resolveDashboardFilters({}, { company: null as never }, bySlug)).toEqual({});
   });
 });
+
+describe("filtros rápidos (fase 6.5)", () => {
+  const U1 = "33333333-3333-4333-8333-333333333333";
+  it("periodo relativo tem precedência sobre de/ate; inválido é ignorado", () => {
+    expect(resolveDashboardFilters({ periodo: "this_month", de: "2026-01-01", ate: "2026-01-31" }, {}, null).period).toEqual({
+      relative: "this_month",
+    });
+    expect(resolveDashboardFilters({ periodo: "ontem" }, {}, null).period).toBeUndefined();
+  });
+  it("responsável e funil da URL", () => {
+    const r = resolveDashboardFilters({ responsavel: U1, funil: C1 }, { owner: [C2] }, null);
+    expect(r.owner).toEqual([U1]);
+    expect(r.pipeline).toEqual([C1]);
+    expect(resolveDashboardFilters({ responsavel: "lixo" }, {}, null).owner).toBeUndefined();
+  });
+});

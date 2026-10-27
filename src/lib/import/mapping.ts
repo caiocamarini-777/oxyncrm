@@ -30,6 +30,8 @@ export type MapCtx = {
   oxynFieldTypes?: Record<string, OxynFieldType>;
   /** id da etiqueta de lead -> nome */
   leadLabelNames?: Record<string, string>;
+  /** id do resultado de atividade (campo "outcome") -> rótulo */
+  activityOutcomeNames?: Record<string, string>;
   /** chave do contato (ex.: "person:12") -> vínculos */
   contactLinks?: Record<string, ContactLink[]>;
   /**
@@ -133,7 +135,7 @@ function contacts(v: unknown): Row[] {
 export function channelFor(typeKey: string, typeName?: string | null): string | null {
   switch (typeKey) {
     case "call":
-      return "Ligação";
+      return "Telefone";
     case "email":
       return "E-mail";
     case "linkedin":
@@ -148,6 +150,55 @@ export function channelFor(typeKey: string, typeName?: string | null): string | 
 }
 
 const MEETING_KEYS = new Set(["meeting", "reuniao", "reuniao_realizada", "lunch"]);
+
+/** Canal de origem (campo "channel" de leads e negócios) pelo rótulo da opção. */
+export function channelLabel(item: PdItem, ctx: MapCtx): string | null {
+  const id = refId(item.channel);
+  return id ? (ctx.fieldOptions?.channel?.[id] ?? null) : null;
+}
+
+// Resultado de tentativa do Pipedrive -> resultado do Oxyn (mesmo sentido; nome desconhecido segue como veio).
+const ATTEMPT_OUTCOMES: Record<string, string> = {
+  conectado: "Conversa realizada",
+  "deixou recado no correio de voz": "Sem resposta",
+  "sem resposta": "Sem resposta",
+  concluido: "Conversa realizada",
+  reagendado: "Respondeu, pediu retorno",
+  "nao compareceu": "Sem resposta",
+  cancelado: "Sem resposta",
+  "resposta negativa": "Respondeu, sem interesse",
+  "retorno futuro": "Respondeu, pediu retorno",
+  "resposta positiva": "Conversa realizada",
+  "reuniao agendada": "Reunião agendada",
+  "contato invalido": "Número ou perfil inválido",
+};
+
+// Resultado de reunião do Pipedrive -> desfecho da reunião e qualificação.
+const MEETING_RESULTS: Record<string, { meeting_outcome: string; outcome_name?: string }> = {
+  "concluida qualificada": { meeting_outcome: "held", outcome_name: "Concluída qualificada" },
+  "concluida desqualificada": { meeting_outcome: "held", outcome_name: "Concluída desqualificada" },
+  "concluida com pendencia": { meeting_outcome: "held", outcome_name: "Concluída com pendência" },
+  "nao compareceu": { meeting_outcome: "no_show" },
+  remarcada: { meeting_outcome: "rescheduled" },
+  reagendado: { meeting_outcome: "rescheduled" },
+  cancelado: { meeting_outcome: "canceled" },
+  cancelada: { meeting_outcome: "canceled" },
+};
+
+/** Resultado da atividade concluída a partir do rótulo do Pipedrive. */
+export function activityResult(
+  kind: "meeting" | "task",
+  typeKey: string,
+  label: string | null,
+): { meeting_outcome: string | null; outcome_name: string | null } {
+  const key = label ? norm(label) : "";
+  if (kind === "meeting") {
+    const m = MEETING_RESULTS[key];
+    if (m) return { meeting_outcome: m.meeting_outcome, outcome_name: m.outcome_name ?? null };
+    return { meeting_outcome: typeKey === "reuniao_realizada" ? "held" : null, outcome_name: null };
+  }
+  return { meeting_outcome: null, outcome_name: label ? (ATTEMPT_OUTCOMES[key] ?? label) : null };
+}
 
 export function activityKind(typeKey: string): "meeting" | "task" {
   return MEETING_KEYS.has(typeKey) ? "meeting" : "task";
@@ -339,7 +390,7 @@ export function mapLead(item: PdItem, ctx: MapCtx): MapResult {
     value: num(item.value),
     person_external_id: refId(item.person_id),
     organization_external_id: refId(item.organization_id ?? item.org_id),
-    source_name: str(item.source_name),
+    source_name: channelLabel(item, ctx),
     labels,
     status: ctx.archived === true || item.is_archived === true ? "archived" : "open",
     custom_fields: custom,
@@ -392,6 +443,7 @@ export function mapDeal(item: PdItem, ctx: MapCtx): MapResult {
     lead_external_id: lead,
     custom_fields: custom,
     created_at: toIso(item.add_time),
+    source_name: channelLabel(item, ctx),
   }, warnings);
 }
 
@@ -409,6 +461,8 @@ export function mapActivity(item: PdItem, ctx: MapCtx): MapResult {
   const kind = activityKind(typeKey);
   const done = item.done === true || item.done === 1 || item.done === "1";
   const due = dueAt(item.due_date, item.due_time);
+  const outcomeId = refId(item.outcome);
+  const result = activityResult(kind, typeKey, outcomeId ? (ctx.activityOutcomeNames?.[outcomeId] ?? null) : null);
   return ok({
     external_id,
     company_id,
@@ -420,7 +474,8 @@ export function mapActivity(item: PdItem, ctx: MapCtx): MapResult {
     duration_minutes: durationMinutes(item.duration),
     done,
     completed_at: done ? (toIso(item.marked_as_done_time) ?? due) : null,
-    meeting_outcome: done && typeKey === "reuniao_realizada" ? "held" : null,
+    meeting_outcome: done ? result.meeting_outcome : null,
+    outcome_name: done ? result.outcome_name : null,
     note: str(item.note) ?? str(item.public_description),
     deal_external_id: deal,
     lead_external_id: lead,

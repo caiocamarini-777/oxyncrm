@@ -238,10 +238,10 @@ select is(pg_temp.imp('activities', '[
    "done": true, "completed_at": "2024-02-02T13:00:00Z", "meeting_outcome": "no_show", "deal_external_id": "d1",
    "created_at": "2024-02-01T12:00:00Z"}]'),
   pg_temp.res(0, 1, 0, 0, 0), 'atividade concluída reimportada é atualizada');
-select ok((select a.subject = 'tst-Mensagem 2' and t.name = 'Tarefa' and c.name = 'WhatsApp'
-  and a.outcome_id is not null and a.meeting_outcome is null
+select ok((select a.subject = 'tst-Mensagem 2' and t.name = 'Reunião' and c.name = 'Telefone'
+  and a.outcome_id is null and a.meeting_outcome = 'no_show'
   from activities a join activity_types t on t.id = a.type_id join activity_channels c on c.id = a.channel_id
-  where a.id = pg_temp.rec('activities', 'a1')), 'concluída mantém tipo e canal, e o resultado segue o tipo gravado');
+  where a.id = pg_temp.rec('activities', 'a1')), 'concluída reimportada segue tipo, canal e resultado da origem (fase 6.5)');
 
 -- 7. Anotações e produtos -------------------------------------------------------------------------------------
 select is(pg_temp.imp('notes', '[

@@ -50,3 +50,27 @@ export async function listPipelinesWithStages(companyId: string): Promise<Pipeli
       })),
   }));
 }
+
+export type PipelineDirectoryEntry = { id: string; name: string; companyId: string; companyName: string; companySlug: string };
+
+/** Funis ativos de várias empresas (para trocar de funil e de empresa no mesmo seletor). */
+export async function listPipelineDirectory(companies: { id: string; name: string; slug: string }[]): Promise<PipelineDirectoryEntry[]> {
+  if (companies.length === 0) return [];
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from("pipelines")
+    .select("id, name, company_id")
+    .in("company_id", companies.map((c) => c.id))
+    .is("archived_at", null)
+    .order("position")
+    .order("name");
+  if (error) fail("deals", "funis", error);
+  const byId = new Map(companies.map((c) => [c.id, c]));
+  return (data ?? [])
+    .filter((p) => byId.has(p.company_id))
+    .map((p) => {
+      const c = byId.get(p.company_id)!;
+      return { id: p.id, name: p.name, companyId: c.id, companyName: c.name, companySlug: c.slug };
+    })
+    .sort((a, b) => a.companyName.localeCompare(b.companyName, "pt-BR"));
+}

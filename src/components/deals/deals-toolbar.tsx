@@ -11,6 +11,8 @@ import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { CompanySummary } from "@/lib/companies/pure";
 import type { DealView } from "@/lib/deals/query";
+import type { PipelineDirectoryEntry } from "@/lib/pipelines/queries";
+import { pipelineGroups } from "@/lib/deals/pipeline-groups";
 
 
 const FILTER_KEYS = ["q", "owner", "team", "label", "rotting", "overdue", "stage", "page"];
@@ -26,8 +28,14 @@ export function DealsToolbar({
   actions,
   allCompanies = false,
   companies = [],
+  directory = [],
+  companySlug = null,
 }: {
   pipelines: { id: string; name: string }[];
+  /** Funis ativos de todas as empresas acessíveis: o seletor troca de funil e, se preciso, de empresa. */
+  directory?: PipelineDirectoryEntry[];
+  /** Empresa aberta (null em "Todas as empresas"). */
+  companySlug?: string | null;
   pipelineId: string | null;
   view: DealView;
   options: DealFilterOptions;
@@ -41,6 +49,7 @@ export function DealsToolbar({
   const params = useSearchParams();
   const [q, setQ] = useState(params.get("q") ?? "");
   const [choosing, setChoosing] = useState<DealView | null>(null);
+  const groups = pipelineGroups(directory, pipelines, companySlug);
   const first = useRef(true);
 
   function push(next: URLSearchParams) {
@@ -86,24 +95,39 @@ export function DealsToolbar({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          {pipelines.length > 0 && !allCompanies ? (
+          {groups.length > 0 && (pipelines.length > 0 || allCompanies) ? (
             <select
               aria-label="Funil"
               value={pipelineId ?? ""}
               onChange={(e) => {
+                const id = e.target.value;
+                const entry = directory.find((d) => d.id === id);
+                if (entry && entry.companySlug !== companySlug) {
+                  // funil de outra empresa: abre Negócios daquela empresa já nesse funil, na mesma visão
+                  const next = new URLSearchParams({ funil: entry.id });
+                  const visao = params.get("visao");
+                  if (visao) next.set("visao", visao);
+                  router.push(`/${entry.companySlug}/negocios?${next.toString()}`);
+                  return;
+                }
                 const next = new URLSearchParams(params.toString());
                 next.delete("stage");
-                if (e.target.value) next.set("funil", e.target.value);
+                if (id) next.set("funil", id);
                 else next.delete("funil");
                 push(next);
               }}
-              className="h-8 max-w-64 rounded-md border border-input bg-background px-2 text-sm font-medium"
+              className="h-8 max-w-72 rounded-md border border-input bg-background px-2 text-sm font-medium"
             >
-              {view === "lista" ? <option value="">Todos os funis</option> : null}
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
+              {allCompanies ? <option value="">Escolha um funil</option> : null}
+              {!allCompanies && view === "lista" ? <option value="">Todos os funis</option> : null}
+              {groups.map((g) => (
+                <optgroup key={g.slug} label={g.name}>
+                  {g.pipelines.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           ) : null}

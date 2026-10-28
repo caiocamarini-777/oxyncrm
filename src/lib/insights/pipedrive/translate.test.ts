@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Catalog, CatalogField } from "../types";
-import { MISSING_ID, translateReport, type PdMeta, type PdReport, type Target } from "./translate";
+import { MISSING_ID, pdCompanies, translateReport, type PdMeta, type PdReport, type Target } from "./translate";
 
 const f = (id: string, name: string, type: CatalogField["type"], roles: string, opts: CatalogField["opts"] = null): CatalogField => ({
   id,
@@ -33,7 +33,11 @@ const catalog: Catalog = {
       f("writerId", "Criador", "USER", "fgsc", "users"),
     ],
     people: [{ ...f("canal_de_origem", "Canal de origem", "SINGLE_OPTION", "fgsc", [["Jitterbit", "Jitterbit"], ["Fórum", "Fórum"]]), custom: true }, f("label", "Etiqueta", "MULTIPLE_OPTIONS", "fgsc", "labels")],
-    deals: [],
+    deals: [
+      { ...f("empresa_proprietaria", "Empresa Proprietária", "MULTIPLE_OPTIONS", "fgsc", [["OMNI11", "OMNI11"], ["OXYN", "OXYN"]]), custom: true },
+      f("expectedCloseDateOrWonTime", "Período de previsão", "DATE", "fgc"),
+      f("status", "Status", "SINGLE_OPTION", "fgsc", [["open", "Aberto"], ["won", "Ganho"]]),
+    ],
     organizations: [],
   },
   links: {
@@ -59,10 +63,12 @@ const catalog: Catalog = {
 
 const meta: PdMeta = {
   fieldName: (_e, id) =>
-    ({ "462977b171ad07a63eb34997337394051e071fd9": "Canal de origem", person_id_462977b171ad07a63eb34997337394051e071fd9: "Canal de origem" } as Record<string, string>)[id] ?? null,
+    ({ "5f8530e6e9353e0ddcf29f7956686afe321827c0": "Empresa Proprietária", "462977b171ad07a63eb34997337394051e071fd9": "Canal de origem", person_id_462977b171ad07a63eb34997337394051e071fd9: "Canal de origem" } as Record<string, string>)[id] ?? null,
   optionName: (_e, id, v) =>
     ({
       "label:c5d4": "OMNI11",
+      "5f8530e6e9353e0ddcf29f7956686afe321827c0:OMNI11": "OMNI11",
+      "5f8530e6e9353e0ddcf29f7956686afe321827c0:OXYN": "OXYN",
       "label:base": "BASE",
       "lead_id_label:c5d4": "OMNI11",
       "person_id_label:150": "OMNI11",
@@ -81,7 +87,7 @@ const meta: PdMeta = {
 const target: Target = {
   catalog,
   users: [{ id: "u-leo", email: "leonardo@oxyn.test", name: "Leonardo" }],
-  companyLabels: new Set(["omni11", "harpix", "naia"]),
+  companyLabels: new Set(["omni11", "harpix", "naia", "oxyn"]),
   mainPipelineId: null,
 };
 
@@ -207,5 +213,38 @@ describe("tradução do Pipedrive", () => {
     expect(r.def?.parameters.filter_by).toEqual([]);
     expect(r.notes[0]).toContain("leadSource");
     expect(translateReport(rep({ data_type: "projects" }), meta, target).def).toBeNull();
+  });
+});
+
+describe("empresa do relatório", () => {
+  const companies = new Set(["omni11", "harpix", "naia", "oxyn", "equilibrion"]);
+  it("pela etiqueta, pela Empresa Proprietária e pelo nome", () => {
+    expect(pdCompanies(rep({ parameters: { filter_by: [{ filter: "label", operands: [{ name: "isAnyOf", defaultValue: ["c5d4"] }] }] } }), meta, companies)).toEqual(["omni11"]);
+    expect(
+      pdCompanies(
+        rep({ data_type: "deals", parameters: { filter_by: [{ filter: "5f8530e6e9353e0ddcf29f7956686afe321827c0", operands: [{ name: "isAnyOf", defaultValue: ["OMNI11", "OXYN"] }] }] } }),
+        meta,
+        companies,
+      ).sort(),
+    ).toEqual(["omni11", "oxyn"]);
+    expect(pdCompanies(rep({ name: "PIPELINE GERAL - EQUILIBRION", parameters: {} }), meta, companies)).toEqual(["equilibrion"]);
+    expect(pdCompanies(rep({ name: "Relatório de nova atividade", parameters: {} }), meta, companies)).toEqual([]);
+  });
+  it("o filtro de Empresa Proprietária sai como a etiqueta", () => {
+    const { def } = translateReport(
+      rep({
+        data_type: "deals",
+        report_type: "revenue_forecast",
+        chart_type: "column",
+        parameters: {
+          measure_by: "count",
+          group_by: { filter: "expectedCloseDateOrWonTime", interval: "month" },
+          filter_by: [{ filter: "5f8530e6e9353e0ddcf29f7956686afe321827c0", operands: [{ name: "isAnyOf", defaultValue: ["OMNI11"] }], period: null }],
+        },
+      }),
+      meta,
+      target,
+    );
+    expect(def?.parameters.filter_by).toEqual([]);
   });
 });

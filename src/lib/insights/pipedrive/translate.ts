@@ -55,6 +55,7 @@ export const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").to
 
 const PREFIXES = ["deal_id_", "lead_id_", "person_id_", "org_id_", "activity_id_"] as const;
 const PD_TYPE_TO_CHANNEL: Record<string, string> = { call: "Telefone", ligacao: "Telefone", email: "E-mail", linkedin: "LinkedIn", whatsapp: "WhatsApp" };
+const COMPANY_FIELD = "empresa proprietaria";
 const MEETING_KEYS = new Set(["reuniao", "meeting", "reuniao_realizada"]);
 /** Resultados do Pipedrive que no Oxyn são a situação da reunião (meeting_outcome). */
 const MEETING_STATE: Record<string, string> = { "nao compareceu": "no_show", remarcada: "rescheduled", reagendada: "rescheduled", cancelada: "canceled" };
@@ -112,6 +113,12 @@ function mapValues(c: Ctx, pdId: string, field: CatalogField, raw: string[]): Ma
   const opts = c.t.catalog.options;
   const name = (v: string) => c.meta.optionName(c.dt, pdId, v) ?? c.meta.optionName(ent, rest, v);
   const src = field.opts;
+  // "Empresa Proprietária" faz o papel da etiqueta da empresa: sai (o escopo já é a empresa)
+  if (norm(field.name) === COMPANY_FIELD) {
+    const kept = raw.filter((v) => !c.t.companyLabels.has(norm(name(v) ?? v)));
+    if (kept.length === 0) return { values: [], drop: true };
+    raw = kept;
+  }
   if (Array.isArray(src)) {
     // lista fixa (status, booleanos) ou personalizado de opção: o Pipedrive guarda o id da opção
     const keys = new Set(src.map(([k]) => k));
@@ -307,4 +314,35 @@ export function translateReport(pd: PdReport, meta: PdMeta, t: Target): Translat
   const parsed = definitionSchema.safeParse(def);
   if (!parsed.success) return { def: null, notes: [...notes, `definição inválida: ${parsed.error.issues[0]?.message}`] };
   return { def: parsed.data as InsightDefinition, notes };
+}
+
+/**
+ * Empresas (nomes normalizados) a que um relatório do Pipedrive se refere: etiqueta da empresa, "Empresa
+ * Proprietária", funil com nome de empresa e o nome do relatório ("Naia LEADS - ...", "PIPELINE GERAL - OMNI11").
+ */
+export function pdCompanies(pd: PdReport, meta: PdMeta, companies: Set<string>): string[] {
+  const found = new Set<string>();
+  const dt = pd.data_type as DataType;
+  for (const f of pd.parameters?.filter_by ?? []) {
+    const { prefix, rest } = splitPrefix(f.filter);
+    const fieldName = norm(meta.fieldName(dt, f.filter) ?? "");
+    const isLabel = rest === "label" || fieldName === COMPANY_FIELD;
+    for (const o of f.operands ?? []) {
+      if (NEGATIVE.has(o.name)) continue;
+      for (const v of asList(o.defaultValue)) {
+        if (isLabel) {
+          const n = norm(meta.optionName(dt, f.filter, v) ?? "");
+          if (companies.has(n)) found.add(n);
+        } else if (rest === "pipelineId" && !prefix) {
+          const n = norm(meta.pipelineName(v) ?? "");
+          if (companies.has(n)) found.add(n);
+        }
+      }
+    }
+  }
+  if (found.size === 0) {
+    const n = norm(pd.name);
+    for (const company of companies) if (new RegExp(`(^|[^a-z0-9])${company.replace(/ /g, " ")}($|[^a-z0-9])`).test(n)) found.add(company);
+  }
+  return [...found];
 }

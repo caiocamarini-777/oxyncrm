@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // cópia do projeto usada pelo next dev temporário dos E2E
     ".e2e-tmp/**",
+    // rascunhos locais (fora do git)
+    "scripts/.tmp/**",
   ]),
 ]);
 

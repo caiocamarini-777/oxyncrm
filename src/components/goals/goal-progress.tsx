@@ -1,5 +1,4 @@
 import { formatCell, type CellType } from "@/lib/reports/format";
-import type { ReportResult } from "@/lib/reports/spec";
 
 /** Preenchimento normal: #6498A8 tem 3:1 ou mais contra a trilha (branca no claro, #111D17 no escuro). */
 const TEAL = "#6498A8";
@@ -8,8 +7,6 @@ const TEAL_DARK = "#1A82A2";
 /** Valor ganho e MRR ganho são moeda; as demais métricas são contagens. */
 export const goalValueType = (metric: string): CellType =>
   metric === "won_value" || metric === "won_mrr" ? "currency" : "number";
-
-const GOAL_COLUMNS = ["goal", "target", "actual", "percent", "period_start", "period_end", "metric"];
 
 export type GoalProgressProps = {
   label: string;
@@ -53,32 +50,3 @@ export function GoalProgress({ label, caption, type, target, actual, percent, pe
     </div>
   );
 }
-
-/** Lista de barras para o resultado do preset goal_progress (colunas goal, target, actual, percent, period_*). */
-export function GoalProgressList({ result }: { result: ReportResult }) {
-  const idx = (key: string) => result.columns.findIndex((c) => c.key === key);
-  const [g, t, a, p, s, e, m] = GOAL_COLUMNS.map(idx);
-  return (
-    <ul className="space-y-4">
-      {result.rows.map((row, i) => {
-        const label = String(row[g!] ?? "");
-        return (
-          <li key={i}>
-            <GoalProgress
-              label={label}
-              type={goalValueType(String(row[m!] ?? ""))}
-              target={Number(row[t!] ?? 0)}
-              actual={Number(row[a!] ?? 0)}
-              percent={Number(row[p!] ?? 0)}
-              periodStart={String(row[s!] ?? "")}
-              periodEnd={String(row[e!] ?? "")}
-            />
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-export const isGoalProgressResult = (result: ReportResult): boolean =>
-  GOAL_COLUMNS.every((k) => result.columns.some((c) => c.key === k));

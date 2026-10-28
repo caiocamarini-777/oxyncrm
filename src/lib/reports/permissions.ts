@@ -68,8 +68,8 @@ export const hasSharedDashboards = cache(async (): Promise<boolean> => {
   if (!profile || !profile.active) return false;
   const supabase = await createServerClient();
   const { count, error } = await supabase
-    .from("dashboard_shares")
-    .select("dashboard_id, dashboards!inner(id)", { count: "exact", head: true })
+    .from("insight_dashboard_shares")
+    .select("dashboard_id, insight_dashboards!inner(id)", { count: "exact", head: true })
     .eq("user_id", profile.id);
   if (error) fail("dashboards compartilhados", error);
   return (count ?? 0) > 0;

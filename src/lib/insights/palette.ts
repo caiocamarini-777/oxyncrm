@@ -5,37 +5,36 @@
  */
 export const PALETTE_ROWS: string[][] = [
   ["#c7d2fe", "#bae6fd", "#a5f3fc", "#99f6e4", "#bbf7d0", "#d9f99d", "#fef08a", "#fde68a", "#fed7aa", "#fecaca", "#fbcfe8", "#f5d0fe", "#ddd6fe", "#e7e5e4"],
-  ["#6366f1", "#38bdf8", "#22d3ee", "#2dd4bf", "#4ade80", "#a3e635", "#facc15", "#fbbf24", "#fb923c", "#f87171", "#f472b6", "#e879f9", "#a78bfa", "#a8a29e"],
+  ["#2a78d6", "#38bdf8", "#22d3ee", "#1baf7a", "#008300", "#a3e635", "#eda100", "#fbbf24", "#eb6834", "#e34948", "#e87ba4", "#e879f9", "#6250d6", "#a8a29e"],
   ["#3730a3", "#0369a1", "#0e7490", "#0f766e", "#15803d", "#4d7c0f", "#a16207", "#b45309", "#c2410c", "#b91c1c", "#be185d", "#a21caf", "#6d28d9", "#57534e"],
 ];
 
 export const PALETTE: string[] = PALETTE_ROWS.flat();
 
-/** Ordem usada quando nada define a cor: azul primeiro (como o "Aberto" do Pipedrive), depois tons contrastantes. */
+/** Ordem usada quando nada define a cor: as 8 validadas, depois o resto da paleta. */
 export const SERIES_ORDER: string[] = [
-  "#38bdf8", "#4ade80", "#fb923c", "#a78bfa", "#f87171", "#2dd4bf", "#facc15", "#f472b6", "#6366f1", "#a3e635",
-  "#22d3ee", "#e879f9", "#fbbf24", "#a8a29e",
-  "#0369a1", "#15803d", "#c2410c", "#6d28d9", "#b91c1c", "#0f766e", "#a16207", "#be185d", "#3730a3", "#4d7c0f",
-  "#0e7490", "#a21caf", "#b45309", "#57534e",
-  "#bae6fd", "#bbf7d0", "#fed7aa", "#ddd6fe", "#fecaca", "#99f6e4", "#fef08a", "#fbcfe8", "#c7d2fe", "#d9f99d",
-  "#a5f3fc", "#f5d0fe", "#fde68a", "#e7e5e4",
+  // 8 primeiras: ordem validada para daltonismo (cores vizinhas distinguíveis)
+  "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948",
+  ...[...PALETTE_ROWS[1]!, ...PALETTE_ROWS[2]!, ...PALETTE_ROWS[0]!].filter(
+    (c) => !["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"].includes(c),
+  ),
 ];
 
 /** Cores semânticas do sistema por campo e valor. */
 const SYSTEM: Record<string, string> = {
-  "status:open": "#38bdf8",
-  "status:won": "#4ade80",
-  "status:lost": "#f87171",
-  "status:converted": "#4ade80",
-  "status:disqualified": "#f87171",
+  "status:open": "#2a78d6",
+  "status:won": "#1baf7a",
+  "status:lost": "#e34948",
+  "status:converted": "#1baf7a",
+  "status:disqualified": "#e34948",
   "status:archived": "#a8a29e",
-  "done:true": "#4ade80",
-  "done:false": "#38bdf8",
-  "overdue:true": "#f87171",
-  "overdue:false": "#38bdf8",
-  "funnel:reached": "#facc15",
-  "funnel:won": "#4ade80",
-  "conversion:converted": "#4ade80",
+  "done:true": "#1baf7a",
+  "done:false": "#2a78d6",
+  "overdue:true": "#e34948",
+  "overdue:false": "#2a78d6",
+  "funnel:reached": "#eda100",
+  "funnel:won": "#1baf7a",
+  "conversion:converted": "#1baf7a",
   "conversion:other": "#a8a29e",
 };
 

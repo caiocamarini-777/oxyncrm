@@ -61,7 +61,7 @@ describe("cores", () => {
     const ctx = { report: { won: "#000001" }, company: { "status:lost": "#000002" }, record: { x: "#000003" } };
     expect(resolveColor("status", "won", 0, ctx)).toBe("#000001");
     expect(resolveColor("status", "lost", 0, ctx)).toBe("#000002");
-    expect(resolveColor("status", "open", 0, ctx)).toBe("#38bdf8");
+    expect(resolveColor("status", "open", 0, ctx)).toBe("#2a78d6");
     expect(resolveColor("label", "x", 5, ctx)).toBe("#000003");
     expect(resolveColor("channel", "y", 1, ctx)).toBe(SERIES_ORDER[1]);
   });

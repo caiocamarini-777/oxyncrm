@@ -97,10 +97,17 @@ export function DashboardView({ empresa, detail, catalog, companyColors, canShar
     [catalog.options.labels],
   );
 
-  useEffect(() => setItems(detail.items), [detail.items]);
+  // itens novos do servidor (depois de adicionar/remover): substitui o layout local
+  const [seenItems, setSeenItems] = useState(detail.items);
+  if (seenItems !== detail.items) {
+    setSeenItems(detail.items);
+    setItems(detail.items);
+  }
+  const runId = useRef(0);
 
   const runAll = useCallback(
     async (ov: Overrides) => {
+      const id0 = ++runId.current;
       const ids = detail.items.map((i) => i.reportId);
       setRuns((r) => Object.fromEntries(ids.map((id) => [id, { result: r[id]?.result ?? null, error: null, loading: true }])));
       let next = 0;
@@ -110,6 +117,8 @@ export function DashboardView({ empresa, detail, catalog, companyColors, canShar
           const rep = reports.get(id);
           if (!rep) continue;
           const res = await runInsightAction(rep.companyId, rep.definition, ov).catch(() => ({ ok: false as const, error: "Falha ao carregar." }));
+          // resultado de uma rodada antiga (o filtro mudou no meio): descarta
+          if (id0 !== runId.current) return;
           setRuns((r) => ({ ...r, [id]: res.ok ? { result: res.data, error: null, loading: false } : { result: null, error: res.error, loading: false } }));
         }
       };
@@ -119,7 +128,8 @@ export function DashboardView({ empresa, detail, catalog, companyColors, canShar
   );
 
   useEffect(() => {
-    void runAll(overrides);
+    const t = setTimeout(() => void runAll(overrides), 0);
+    return () => clearTimeout(t);
   }, [runAll, overrides]);
 
   function changeQuick(q: QuickFilters) {

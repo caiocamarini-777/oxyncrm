@@ -60,12 +60,13 @@ export function InsightsSidebar({ empresa, data, companies, canCreate }: Props) 
   const dashboards = data.dashboards.filter(match);
   const reports = data.reports.filter(match);
 
-  const item = (href: string, icon: React.ReactNode) => (i: SidebarItem) => {
-    const active = path === href.replace("{id}", i.id);
+  function renderItem(i: SidebarItem, base: string, icon: React.ReactNode) {
+    const href = `${base}/${i.id}`;
+    const active = path === href;
     return (
       <li key={i.id}>
         <Link
-          href={href.replace("{id}", i.id)}
+          href={href}
           title={i.name}
           className={cn(
             "flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent",
@@ -78,9 +79,9 @@ export function InsightsSidebar({ empresa, data, companies, canCreate }: Props) 
         </Link>
       </li>
     );
-  };
-  const dashItem = item(`/${empresa}/relatorios/paineis/{id}`, <LayoutDashboard className="size-4 shrink-0 text-muted-foreground" />);
-  const repItem = item(`/${empresa}/relatorios/r/{id}`, null);
+  }
+  const dashItem = (i: SidebarItem) => renderItem(i, `/${empresa}/relatorios/paineis`, <LayoutDashboard className="size-4 shrink-0 text-muted-foreground" />);
+  const repItem = (i: SidebarItem) => renderItem(i, `/${empresa}/relatorios/r`, null);
 
   return (
     <aside className="flex w-full flex-col gap-4 lg:w-60 lg:shrink-0" aria-label="Insights">

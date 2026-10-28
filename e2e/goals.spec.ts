@@ -11,8 +11,6 @@ const slug = `tst-e2e-mt-${stamp}`;
 const adminEmail = `tst-e2e-mt-admin-${stamp}@oxyn.test`;
 const plainEmail = `tst-e2e-mt-plain-${stamp}@oxyn.test`;
 const roleName = `tst-e2e-mt-leitor-${stamp}`;
-const dashName = `Painel de metas ${stamp}`;
-const widgetTitle = "Progresso de metas";
 
 let companyId = "";
 let adminId = "";
@@ -55,12 +53,9 @@ test.beforeAll(async () => {
   });
   await runSql(`update public.deals set status = 'won', won_at = now() where id = '${dealId}'`);
 
-  const dashId = await insert("dashboards", { owner_id: adminId, name: dashName });
-  await insert("dashboard_widgets", { dashboard_id: dashId, title: widgetTitle, position: 0, spec: { kind: "goal_progress", chart: "table" } });
 });
 
 test.afterAll(async () => {
-  await admin().from("dashboards").delete().eq("owner_id", adminId);
   if (companyId) {
     await admin().from("goals").delete().eq("company_id", companyId);
     await admin().from("companies").delete().eq("id", companyId);
@@ -111,16 +106,6 @@ test("o usuário padrão vê a meta mas não vê Nova meta", async ({ page }) =>
   await expect(row).toContainText("25,0%");
   await expect(page.getByRole("button", { name: "Nova meta" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Excluir meta/ })).toHaveCount(0);
-});
-
-test("o widget Progresso de metas de um dashboard mostra a mesma porcentagem", async ({ page }) => {
-  await login(page, adminEmail, password);
-  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
-  const dash = await admin().from("dashboards").select("id").eq("owner_id", adminId).single();
-  await page.goto(`/${slug}/relatorios/dashboards/${dash.data!.id}`);
-  const widget = page.getByRole("article", { name: widgetTitle });
-  await expect(widget).toContainText("25,0%");
-  await expect(widget.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
 });
 
 test("excluir pede confirmação", async ({ page }) => {

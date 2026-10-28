@@ -106,7 +106,7 @@ export function ShareDialog({ kind, id, companyId, open, onOpenChange, publicLin
                 <p className="text-xs text-muted-foreground">Quem tiver o link vê o painel com os dados que você vê, sem entrar no CRM.</p>
                 {url ? (
                   <div className="flex gap-1">
-                    <Input readOnly value={url} className="h-8 text-xs" onFocus={(e) => e.target.select()} />
+                    <Input readOnly value={url} aria-label="Link público" className="h-8 text-xs" onFocus={(e) => e.target.select()} />
                     <Button size="icon" variant="outline" className="size-8" aria-label="Copiar link" onClick={() => navigator.clipboard.writeText(url).then(() => toast.success("Link copiado."))}>
                       <Copy className="size-4" />
                     </Button>

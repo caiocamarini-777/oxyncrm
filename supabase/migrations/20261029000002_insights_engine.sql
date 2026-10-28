@@ -1004,8 +1004,8 @@ begin
     '  and (cardinality($4::uuid[]) > 0 or s.pipeline_id in (select pipeline_id from deals_f))), '
     -- maior posição alcançada pelo negócio no funil (histórico + etapa atual)
     'reach as (select d.id, d.m, d.status, d.pipeline_id, max(s.position) as maxpos from deals_f d '
-    '  join public.stages s on s.id = d.stage_id or s.id in (select h.to_stage_id from public.deal_stage_history h where h.deal_id = d.id) '
-    '  where s.pipeline_id = d.pipeline_id group by d.id, d.m, d.status, d.pipeline_id), '
+    '  cross join lateral (select d.stage_id as sid union select h.to_stage_id from public.deal_stage_history h where h.deal_id = d.id) z '
+    '  join public.stages s on s.id = z.sid and s.pipeline_id = d.pipeline_id group by d.id, d.m, d.status, d.pipeline_id), '
     'rows as (select st.id, st.name, st.position, (select %5$s from reach where reach.pipeline_id = st.pipeline_id and reach.maxpos >= st.position) as v '
     '  from st), '
     'won as (select %5$s as v from reach where status = ''won'') '
@@ -1135,9 +1135,11 @@ begin
   end loop;
 
   execute format(
-    'with vis as materialized (%1$s), ids as (select distinct r.id from %2$s where %3$s), '
-    'page as (select r.id, jsonb_build_array(%4$s) as cells, row_number() over (order by %5$s %6$s nulls last, r.id) as rn '
-    '  from public.%7$I r where r.id in (select id from ids) order by rn limit 50 offset %8$s) '
+    'with vis as materialized (%1$s), ids as materialized (select distinct r.id from %2$s where %3$s), '
+    -- ordena e corta a página antes de montar as células (as colunas têm subconsultas por linha)
+    'pg as (select r.id, row_number() over (order by %5$s %6$s nulls last, r.id) as rn '
+    '  from public.%7$I r where r.id in (select id from ids) order by rn limit 50 offset %8$s), '
+    'page as (select pg.id, pg.rn, jsonb_build_array(%4$s) as cells from pg join public.%7$I r on r.id = pg.id) '
     'select jsonb_build_object(''total'', (select count(*) from ids), '
     '  ''rows'', coalesce((select jsonb_agg(jsonb_build_array(id) || cells order by rn) from page), ''[]''::jsonb))',
     public.insights_vis(v_dtype), v_fw.v_from, v_where, v_sel, v_ord, v_dir, public.insights_table(v_dtype),

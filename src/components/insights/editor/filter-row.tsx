@@ -1,7 +1,7 @@
 "use client";
 
 import { Trash2 } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -25,6 +25,21 @@ type Props = {
 
 const PERIOD_MODE = "__period";
 
+/** Função de busca estável por empresa e tipo (o seletor refaz a busca quando a função muda). */
+const searchers = new Map<string, (q: string) => Promise<PickerOption[]>>();
+function searcher(companyId: string, kind: "orgs" | "persons" | "deals" | "leads") {
+  const key = `${companyId}:${kind}`;
+  let fn = searchers.get(key);
+  if (!fn) {
+    fn = async (q: string) => {
+      const r = await searchRecordsAction(companyId, kind, q);
+      return r.ok ? r.data : [];
+    };
+    searchers.set(key, fn);
+  }
+  return fn;
+}
+
 /** Uma linha de filtro: ENTIDADE › campo › operador › valor (como no Pipedrive). */
 export function FilterRow({ catalog, def, companyId, filter, onChange, onRemove, readOnly }: Props) {
   const groups = useMemo(() => filterGroups(catalog, def.data_type, def.report_type), [catalog, def.data_type, def.report_type]);
@@ -36,14 +51,7 @@ export function FilterRow({ catalog, def, companyId, filter, onChange, onRemove,
   const values = filterValues(filter);
   const kind = field ? searchKind(field) : null;
   const opts = field ? optionsFor(catalog, field) : null;
-  const search = useCallback(
-    async (q: string): Promise<PickerOption[]> => {
-      if (!kind) return [];
-      const r = await searchRecordsAction(companyId, kind, q);
-      return r.ok ? r.data : [];
-    },
-    [companyId, kind],
-  );
+  const search = kind ? searcher(companyId, kind) : undefined;
 
   const setOperand = (name: Operator, value: unknown) => onChange({ ...filter, period: null, operands: [{ name, defaultValue: value }] });
 

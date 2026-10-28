@@ -96,8 +96,8 @@ export function ReportEditor(props: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     const t = setTimeout(async () => {
+      setLoading(true);
       const r = await runInsightAction(companyId, runDef, compare ? { compare } : {});
       if (cancelled) return;
       setLoading(false);

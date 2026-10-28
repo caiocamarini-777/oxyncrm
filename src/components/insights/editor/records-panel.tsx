@@ -52,8 +52,8 @@ export function RecordsPanel({ empresa, companyId, catalog, def, overrides, resu
   useEffect(() => {
     if (tab !== "list") return;
     let cancelled = false;
-    setLoading(true);
     const t = setTimeout(async () => {
+      setLoading(true);
       const r = await recordsAction(companyId, def, overrides, page, sort, point);
       if (cancelled) return;
       setLoading(false);
@@ -70,7 +70,13 @@ export function RecordsPanel({ empresa, companyId, catalog, def, overrides, resu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, tab, companyId]);
 
-  useEffect(() => setPage(0), [point, def.parameters.filter_by]);
+  // filtro ou ponto novo: volta para a primeira página
+  const resetKey = JSON.stringify([point, def.parameters.filter_by]);
+  const [seenKey, setSeenKey] = useState(resetKey);
+  if (seenKey !== resetKey) {
+    setSeenKey(resetKey);
+    setPage(0);
+  }
 
   const groups = useMemo(() => columnGroups(catalog, def.data_type), [catalog, def.data_type]);
   const colOptions = groups.flatMap((g) =>

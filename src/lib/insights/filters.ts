@@ -51,6 +51,8 @@ export function chipText(catalog: Catalog, def: InsightDefinition, f: InsightFil
   if (!r) return null;
   if (f.period && isDateField(r.field)) return PERIOD_LABEL[f.period].toUpperCase();
   const op = filterOperator(f);
+  // "tem <registro> ligado" (vindo da etiqueta da empresa no Pipedrive): não vira chip, como lá
+  if (op === "isNotEmpty" && r.prefix && ["title", "name", "subject"].includes(f.filter.slice(r.prefix.length))) return null;
   if (op === "isEmpty") return `${r.field.name} vazio`.toUpperCase();
   if (op === "isNotEmpty") return `${r.field.name} preenchido`.toUpperCase();
   const opts = optionsFor(catalog, r.field);

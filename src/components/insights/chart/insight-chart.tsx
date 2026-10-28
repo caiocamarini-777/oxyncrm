@@ -80,7 +80,12 @@ export function InsightChart({ def, result, colors, compact = false, sort = "def
     const pc = pointColors(result, colors);
     const total = result.x.reduce((a, _p, i) => a + Number(result.totals?.[i] ?? result.values[i]?.[0] ?? 0), 0);
     const data = result.x.map((p, i) => ({ key: p.key, label: p.label, value: Number(result.totals?.[i] ?? result.values[i]?.[0] ?? 0) }));
-    const series: Series[] = data.map((d) => ({ key: d.key, label: d.label, color: pc[d.key]! }));
+    // no cartão do painel o valor vai para a legenda (rótulos em volta da pizza não cabem)
+    const series: Series[] = data.map((d) => ({
+      key: d.key,
+      label: compact ? `${d.label} · ${fmt(d.value)} (${formatPercent(total ? d.value / total : 0)})` : d.label,
+      color: pc[d.key]!,
+    }));
     return (
       <div className={compact ? "flex h-full min-h-0 flex-col gap-2" : "flex gap-4"}>
         <div className={compact ? "min-h-0 flex-1" : "h-80 flex-1"}>
@@ -91,11 +96,11 @@ export function InsightChart({ def, result, colors, compact = false, sort = "def
                 dataKey="value"
                 nameKey="label"
                 innerRadius="0%"
-                outerRadius={compact ? "62%" : "78%"}
+                outerRadius={compact ? "88%" : "78%"}
                 stroke="var(--background)"
                 strokeWidth={data.length > 1 ? 2 : 0}
                 isAnimationActive={false}
-                label={(p: { x?: number; y?: number; value?: number; textAnchor?: string }) => (
+                label={compact ? false : (p: { x?: number; y?: number; value?: number; textAnchor?: string }) => (
                   <text x={p.x} y={p.y} textAnchor={p.textAnchor as "start" | "middle" | "end"} dominantBaseline="central" className="fill-foreground" fontSize={11}>
                     {`${fmt(Number(p.value))} (${formatPercent(total ? Number(p.value) / total : 0)})`}
                   </text>

@@ -1227,7 +1227,7 @@ begin
           where tm.team_id = t.id and m.company_id = p_company))));
 end $$;
 
--- Busca de organizações, pessoas, negócios e leads para os filtros (até 20).
+-- Busca de organizações, pessoas, negócios e leads para os filtros (até 20), com a visibilidade de quem busca.
 create or replace function public.insights_search(p_company uuid, p_kind text, p_q text) returns jsonb
 language plpgsql stable security definer set search_path = public, pg_temp as $$
 declare
@@ -1238,16 +1238,16 @@ begin
   end if;
   return case p_kind
     when 'orgs' then (select coalesce(jsonb_agg(jsonb_build_object('id', o.id, 'label', o.name)), '[]'::jsonb) from (
-      select o.id, o.name from public.organizations o where o.company_id = p_company and o.deleted_at is null and o.name ilike v_q
+      select o.id, o.name from public.organizations o where o.company_id = p_company and o.deleted_at is null and public.can_access_for(auth.uid(), p_company, 'organizations', o.owner_id, 'read') and o.name ilike v_q
       order by o.name limit 20) o)
     when 'persons' then (select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'label', p.full_name)), '[]'::jsonb) from (
-      select p.id, p.full_name from public.persons p where p.company_id = p_company and p.deleted_at is null and p.full_name ilike v_q
+      select p.id, p.full_name from public.persons p where p.company_id = p_company and p.deleted_at is null and public.can_access_for(auth.uid(), p_company, 'persons', p.owner_id, 'read') and p.full_name ilike v_q
       order by p.full_name limit 20) p)
     when 'deals' then (select coalesce(jsonb_agg(jsonb_build_object('id', d.id, 'label', d.title)), '[]'::jsonb) from (
-      select d.id, d.title from public.deals d where d.company_id = p_company and d.deleted_at is null and d.title ilike v_q
+      select d.id, d.title from public.deals d where d.company_id = p_company and d.deleted_at is null and public.can_access_for(auth.uid(), p_company, 'deals', d.owner_id, 'read') and d.title ilike v_q
       order by d.title limit 20) d)
     when 'leads' then (select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'label', l.title)), '[]'::jsonb) from (
-      select l.id, l.title from public.leads l where l.company_id = p_company and l.deleted_at is null and l.title ilike v_q
+      select l.id, l.title from public.leads l where l.company_id = p_company and l.deleted_at is null and public.can_access_for(auth.uid(), p_company, 'leads', l.owner_id, 'read') and l.title ilike v_q
       order by l.title limit 20) l)
     else '[]'::jsonb end;
 end $$;

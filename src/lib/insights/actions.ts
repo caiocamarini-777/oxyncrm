@@ -7,7 +7,7 @@ import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { createServerClient } from "@/lib/supabase/server";
 import { UUID_RE } from "@/lib/uuid";
 import { definitionSchema } from "./definition";
-import { getRecords, runInsight } from "./queries";
+import { getRecords, getShares, listShareTargets, runInsight, type ShareState, type ShareTarget } from "./queries";
 import { PERIODS, type InsightDefinition, type InsightResult, type Overrides, type QuickFilters, type RecordsResult } from "./types";
 
 const uuid = z.string().regex(UUID_RE);
@@ -385,4 +385,29 @@ export async function revokePublicLink(linkId: string): Promise<ActionResult> {
   if (error) return { ok: false, error: translateDbError(error) };
   if (!data?.length) return NOT_FOUND;
   return { ok: true, data: undefined };
+}
+
+// Busca para filtros (organizações, pessoas, negócios, leads) ---------------------------------------------------
+export async function searchRecordsAction(
+  companyId: string,
+  kind: "orgs" | "persons" | "deals" | "leads",
+  q: string,
+): Promise<ActionResult<{ id: string; label: string }[]>> {
+  if (!uuid.safeParse(companyId).success || !["orgs", "persons", "deals", "leads"].includes(kind) || typeof q !== "string") return INVALID;
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.rpc("insights_search", { p_company: companyId, p_kind: kind, p_q: q.slice(0, 80) });
+  if (error) return { ok: false, error: translateDbError(error) };
+  return { ok: true, data: (data ?? []) as { id: string; label: string }[] };
+}
+
+// Compartilhamento (leitura para o diálogo) ---------------------------------------------------------------------
+export async function shareStateAction(
+  kind: "report" | "dashboard",
+  id: string,
+  companyId: string,
+): Promise<ActionResult<{ state: ShareState; targets: ShareTarget[] }>> {
+  if (!(await actor())) return { ok: false, error: NO_PERMISSION };
+  if (!uuid.safeParse(id).success || !uuid.safeParse(companyId).success || (kind !== "report" && kind !== "dashboard")) return INVALID;
+  const [state, targets] = await Promise.all([getShares(kind, id), listShareTargets(companyId)]);
+  return { ok: true, data: { state, targets } };
 }

@@ -91,11 +91,15 @@ export function InsightChart({ def, result, colors, compact = false, sort = "def
                 dataKey="value"
                 nameKey="label"
                 innerRadius="0%"
-                outerRadius="80%"
+                outerRadius={compact ? "62%" : "78%"}
                 stroke="var(--background)"
-                strokeWidth={2}
+                strokeWidth={data.length > 1 ? 2 : 0}
                 isAnimationActive={false}
-                label={({ value }) => `${fmt(Number(value))} (${formatPercent(total ? Number(value) / total : 0)})`}
+                label={(p: { x?: number; y?: number; value?: number; textAnchor?: string }) => (
+                  <text x={p.x} y={p.y} textAnchor={p.textAnchor as "start" | "middle" | "end"} dominantBaseline="central" className="fill-foreground" fontSize={11}>
+                    {`${fmt(Number(p.value))} (${formatPercent(total ? Number(p.value) / total : 0)})`}
+                  </text>
+                )}
                 labelLine={false}
                 onClick={(d) => onPointClick?.({ x: (d as { key?: string }).key })}
               >
@@ -139,6 +143,7 @@ export function InsightChart({ def, result, colors, compact = false, sort = "def
         layout={horizontal ? "vertical" : "horizontal"}
         margin={{ top: 18, right: horizontal ? 48 : 8, bottom: 0, left: 0 }}
         barCategoryGap={horizontal ? 6 : "18%"}
+        maxBarSize={horizontal ? 28 : 72}
       >
         <CartesianGrid stroke="currentColor" strokeOpacity={0.1} vertical={horizontal} horizontal={!horizontal} />
         {horizontal ? (

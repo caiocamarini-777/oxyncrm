@@ -3,13 +3,11 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { DashboardFilters } from "@/components/dashboards/dashboard-filters";
-import { DashboardView, type WidgetLoader } from "@/components/dashboards/dashboard-view";
-import { dayKey } from "@/lib/activities/time";
-import { resolveDashboardFilters } from "@/lib/dashboards/filters";
-import { buildWidgetFilters, type DashboardFilters as Filters } from "@/lib/reports/filters";
-import type { WidgetRow } from "@/lib/reports/rows";
-import { toReportResult } from "@/lib/reports/spec";
+import { StaticGrid } from "@/components/insights/dashboard/static-grid";
+import { Widget } from "@/components/insights/dashboard/widget";
+import { PERIOD_LABEL } from "@/lib/insights/meta";
+import { toDefinition } from "@/lib/insights/queries";
+import { PERIODS, type InsightResult, type PeriodKey } from "@/lib/insights/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/uuid";
 
@@ -18,7 +16,7 @@ export const instant = false;
 
 // Fora dos buscadores, e sem enviar o token como Referer para links ou recursos de terceiros.
 export const metadata: Metadata = {
-  title: "Dashboard | Oxyn",
+  title: "Painel | Oxyn",
   robots: { index: false, follow: false, nocache: true },
   referrer: "no-referrer",
 };
@@ -26,77 +24,89 @@ export const metadata: Metadata = {
 /** 32 bytes em base64url sem preenchimento: exatamente 43 caracteres. Outro formato nem chega ao banco. */
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
-type PublicDashboard = {
+type PublicItem = {
+  report_id: string;
   name: string;
-  default_filters: Filters | null;
-  widgets: { id: string; title: string | null; col_span: number; row_span: number; chart: string | null }[];
+  data_type: string;
+  report_type: string;
+  chart_type: string;
+  parameters: unknown;
+  columns: unknown;
+  colors: unknown;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 };
-
-const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+type PublicDashboard = { id: string; name: string; company_id: string; items: PublicItem[] };
 
 export default async function PublicDashboardPage({
   params,
   searchParams,
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: Promise<{ periodo?: string }>;
 }) {
   const { token } = await params;
   if (!TOKEN_RE.test(token)) notFound();
   await connection();
 
   const supabase = createAdminClient();
-  const { data, error } = await supabase.rpc("dashboard_public", { p_token: token });
+  const { data, error } = await supabase.rpc("insights_public_dashboard", { p_token: token });
   // Erro do banco, token desconhecido, expirado ou revogado: a mesma resposta, sem pistas.
   const dash = data as PublicDashboard | null;
-  if (error || !dash || typeof dash.name !== "string" || !Array.isArray(dash.widgets)) notFound();
+  if (error || !dash || typeof dash.name !== "string" || !Array.isArray(dash.items)) notFound();
 
   const sp = await searchParams;
-  // O período é o único filtro que a URL pública controla; empresa, responsável e equipe vêm só do padrão do dashboard.
-  const filters = resolveDashboardFilters({ de: first(sp.de), ate: first(sp.ate), periodo: first(sp.periodo) }, dash.default_filters ?? {}, null, null);
-  const urlOnly = resolveDashboardFilters({ de: first(sp.de), ate: first(sp.ate), periodo: first(sp.periodo) }, {}, null, null);
-  const today = dayKey(new Date());
-
-  const widgets: WidgetRow[] = dash.widgets
-    .filter((w) => isUuid(w.id))
-    .map((w, i) => ({
-      id: w.id,
-      dashboardId: "publico",
-      reportId: null,
-      // O tipo de gráfico vem no resultado de run_widget_public; o espectador público não lê a spec.
-      spec: null,
-      title: w.title ?? "",
-      position: i,
-      colSpan: w.col_span,
-      rowSpan: w.row_span,
-    }));
-
-  const load: WidgetLoader = async (widgetId, f) => {
-    const { data: raw, error: err } = await createAdminClient().rpc("run_widget_public", {
-      p_token: token,
-      p_widget: widgetId,
-      p_filters: buildWidgetFilters(f),
-    });
-    if (err) {
-      console.error("[dashboard público] widget:", err.code, err.message);
-      return { ok: false, error: "Não foi possível carregar este widget." };
-    }
-    return { ok: true, data: toReportResult(raw) };
-  };
+  const period = (PERIODS as readonly string[]).includes(sp.periodo ?? "") && sp.periodo !== "custom" ? (sp.periodo as PeriodKey) : null;
+  const items = dash.items.filter((i) => isUuid(i.report_id));
+  const [runs, colors] = await Promise.all([
+    Promise.all(
+      items.map(async (i) => {
+        const { data: r, error: err } = await supabase.rpc("insights_run_public", {
+          p_token: token,
+          p_report: i.report_id,
+          p_overrides: period ? { period: { period } } : {},
+        });
+        if (err) console.error("[painel público] relatório:", err.code, err.message);
+        return [i.report_id, err ? null : (r as InsightResult)] as const;
+      }),
+    ),
+    supabase.from("insight_colors").select("field, value, color").eq("company_id", dash.company_id),
+  ]);
+  const results = new Map(runs);
+  const company = Object.fromEntries((colors.data ?? []).map((c) => [`${c.field}:${c.value}`, c.color]));
+  const byId = new Map(items.map((i) => [i.report_id, i]));
 
   return (
-    <main className="mx-auto w-full max-w-6xl flex-1 space-y-6 px-4 py-6 md:px-8">
+    <main className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-4 py-6 md:px-8">
       <header className="flex items-center gap-3 border-b pb-4">
         <Image src="/oxyn-mark.png" alt="Oxyn" width={36} height={36} priority />
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.25em] text-muted-foreground">Oxyn</p>
           <h1 className="font-heading text-2xl font-semibold">{dash.name}</h1>
         </div>
+        {period ? <span className="ml-auto rounded-full bg-muted px-3 py-1 text-xs">{PERIOD_LABEL[period]}</span> : null}
       </header>
-
-      <DashboardFilters today={today} period={urlOnly.period ?? null} companies={null} company="" />
-
-      <DashboardView dashboardId="publico" widgets={widgets} filters={filters} readOnly load={load} />
+      <StaticGrid
+        items={items.map((i) => ({ reportId: i.report_id, x: i.x, y: i.y, w: i.w, h: i.h }))}
+        render={(id) => {
+          const i = byId.get(id)!;
+          const def = toDefinition(i);
+          const result = results.get(id) ?? null;
+          return (
+            <Widget
+              name={i.name}
+              def={def}
+              chips={[]}
+              result={result}
+              error={result ? null : "Não foi possível carregar este relatório."}
+              loading={false}
+              colors={{ report: def.colors, company }}
+            />
+          );
+        }}
+      />
     </main>
   );
 }

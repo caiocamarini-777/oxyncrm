@@ -109,3 +109,21 @@ describe("gráfico", () => {
     expect(isEmptyResult(base({ x: [], values: [], total: 0 }), "scorecard")).toBe(false);
   });
 });
+
+describe("período", () => {
+  // quarta-feira, 28/10/2026, 10h em São Paulo
+  const now = new Date("2026-10-28T13:00:00Z");
+  it("semana de domingo a sábado, mês e trimestre", async () => {
+    const { periodBounds } = await import("./period");
+    expect(periodBounds("week", now)).toEqual({ from: "2026-10-25", to: "2026-10-31" });
+    expect(periodBounds("lastWeek", now)).toEqual({ from: "2026-10-18", to: "2026-10-24" });
+    expect(periodBounds("month", now)).toEqual({ from: "2026-10-01", to: "2026-10-31" });
+    expect(periodBounds("lastMonth", now)).toEqual({ from: "2026-09-01", to: "2026-09-30" });
+    expect(periodBounds("quarter", now)).toEqual({ from: "2026-10-01", to: "2026-12-31" });
+    expect(periodBounds("yesterday", now)).toEqual({ from: "2026-10-27", to: "2026-10-27" });
+  });
+  it("meia-noite em São Paulo ainda é o dia anterior em UTC-3", async () => {
+    const { periodBounds } = await import("./period");
+    expect(periodBounds("today", new Date("2026-11-01T02:30:00Z"))).toEqual({ from: "2026-10-31", to: "2026-10-31" });
+  });
+});

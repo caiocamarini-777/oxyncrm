@@ -1,5 +1,5 @@
 begin;
-select plan(20);
+select plan(21);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -86,8 +86,12 @@ select pg_temp.as_user(12);
 select is((select count(*)::int from insight_dashboards), 0, 'sem view_reports não vê o painel compartilhado');
 select pg_temp.reset();
 
--- link público
+-- insert com returning (o que o app faz ao salvar)
 select pg_temp.as_user(11);
+select is(pg_temp.err(format($q$with x as (insert into insight_dashboards (company_id, owner_id, name) values (%L, %L, 'Novo') returning id) select id from x$q$,
+  pg_temp.u(1), pg_temp.u(11))), 'ok', 'insert ... returning do dono');
+
+-- link público
 select ok((public.create_insight_link(pg_temp.u(201))->>'token') is not null, 'dono cria link público');
 select pg_temp.reset();
 

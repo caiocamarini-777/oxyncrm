@@ -93,7 +93,6 @@ async function main() {
     ]);
     const meta = buildMeta(fields, new Map(pdUsers.map((u) => [String(u.id), u.email])));
     const repById = new Map(reports.map((r) => [r.id, r]));
-    const dashByName = new Map(dashboards.map((d) => [norm(d.name), d]));
 
     const companies = await sql<{ id: string; name: string; slug: string }[]>`
       select id, name, slug from companies where slug in ${sql(slugs.length ? slugs : [...new Set(Object.values(SLUG_OF))])} order by name`;

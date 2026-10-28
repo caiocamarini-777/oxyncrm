@@ -7,7 +7,7 @@
 //   do modelo "novo" das versões anteriores).
 // - Compartilha com os membros ativos da empresa e usa o filtro rápido de período salvo no Pipedrive.
 import postgres from "postgres";
-import { norm, pdCompanies, translateReport, type PdMeta, type PdReport, type Target } from "@/lib/insights/pipedrive/translate";
+import { pdCompanies, translateReport, type PdMeta, type PdReport, type Target } from "@/lib/insights/pipedrive/translate";
 import type { Catalog } from "@/lib/insights/types";
 import { loadEnv, requireDbUrl } from "./load-env";
 

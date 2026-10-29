@@ -3,7 +3,7 @@ import { AppShell } from "@/components/shell/app-shell";
 import { requireUser } from "@/lib/auth/session";
 import { LAST_COMPANY_COOKIE } from "@/lib/companies/constants";
 import { getAccessibleCompanies, hideTestCompanies } from "@/lib/companies/scope";
-import { financeCompanySlugs } from "@/lib/finance/permissions";
+import { financeCompanySlugs, salesCompanySlugs } from "@/lib/finance/permissions";
 import { hasSharedDashboards, reportCompanySlugs } from "@/lib/reports/permissions";
 
 // Bloqueante de propósito: o 404 de empresa precisa sair com status 404, e não
@@ -11,12 +11,13 @@ import { hasSharedDashboards, reportCompanySlugs } from "@/lib/reports/permissio
 export const instant = false;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [profile, companies, cookieStore, reportSlugs, financeSlugs, sharedDashboards] = await Promise.all([
+  const [profile, companies, cookieStore, reportSlugs, financeSlugs, salesSlugs, sharedDashboards] = await Promise.all([
     requireUser(),
     getAccessibleCompanies(),
     cookies(),
     reportCompanySlugs(),
     financeCompanySlugs(),
+    salesCompanySlugs(),
     hasSharedDashboards(),
   ]);
   const lastSlug = cookieStore.get(LAST_COMPANY_COOKIE)?.value;
@@ -32,6 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       lastSlug={lastSlug}
       reportSlugs={reportSlugs}
       financeSlugs={financeSlugs}
+      salesSlugs={salesSlugs}
       hasSharedDashboards={sharedDashboards}
     >
       {children}

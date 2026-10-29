@@ -489,3 +489,123 @@ export async function listActiveContractLines(companyId: string): Promise<Active
     };
   });
 }
+
+// --- Vendas de clientes ---------------------------------------------------------
+
+export type SaleRow = {
+  id: string;
+  contractId: string;
+  contractTitle: string;
+  clientName: string | null;
+  sellerId: string | null;
+  sellerName: string | null;
+  buyer: string;
+  soldOn: string;
+  setupValue: number;
+  recurringValue: number;
+  recurringMonths: number | null;
+  status: "active" | "cancelled";
+  /** Soma das comissões ainda não canceladas (previstas, incluindo as já recebidas). */
+  expected: number;
+  /** Soma das comissões já recebidas. */
+  received: number;
+};
+
+export type SalesFilters = { contractId: string | null; sellerId: string | null; month: string | null };
+
+/** Todas as vendas da empresa, com as comissões previstas e recebidas (somas dos lançamentos da venda). */
+export async function listSales(companyId: string, f: SalesFilters): Promise<SaleRow[]> {
+  const supabase = await createServerClient();
+  let q = supabase
+    .from("fin_client_sales")
+    .select(
+      "id, contract_id, buyer, sold_on, setup_value, recurring_value, recurring_months, status, created_by, fin_contracts(title, organizations(name))",
+    )
+    .eq("company_id", companyId)
+    .order("sold_on", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  if (f.contractId) q = q.eq("contract_id", f.contractId);
+  if (f.sellerId) q = q.eq("created_by", f.sellerId);
+  if (f.month) {
+    const [y, m] = f.month.split("-").map(Number);
+    const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+    q = q.gte("sold_on", `${f.month}-01`).lt("sold_on", next);
+  }
+  const sales = await q;
+  if (sales.error) fail("vendas", sales.error);
+  const rows = sales.data ?? [];
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((r) => r.id);
+  const sellerIds = [...new Set(rows.map((r) => r.created_by).filter((x): x is string => !!x))];
+  const [entries, sellers] = await Promise.all([
+    supabase.from("fin_entries").select("client_sale_id, amount, status, settled_amount").in("client_sale_id", ids).neq("status", "cancelled").limit(20000),
+    sellerIds.length > 0 ? supabase.from("profiles").select("id, full_name").in("id", sellerIds) : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (entries.error) fail("comissões das vendas", entries.error);
+  if (sellers.error) fail("vendedores", sellers.error);
+
+  const sums = new Map<string, { expected: number; received: number }>();
+  for (const e of entries.data ?? []) {
+    const s = sums.get(e.client_sale_id as string) ?? { expected: 0, received: 0 };
+    s.expected += num(e.amount);
+    if (e.status === "settled") s.received += e.settled_amount === null ? num(e.amount) : num(e.settled_amount);
+    sums.set(e.client_sale_id as string, s);
+  }
+  const names = new Map((sellers.data ?? []).map((p) => [p.id as string, p.full_name as string]));
+  type CJ = { title: string; organizations: OrgJoin };
+  return rows.map((r) => {
+    const c = (Array.isArray(r.fin_contracts) ? r.fin_contracts[0] : r.fin_contracts) as CJ | null;
+    const sum = sums.get(r.id) ?? { expected: 0, received: 0 };
+    return {
+      id: r.id,
+      contractId: r.contract_id,
+      contractTitle: c?.title ?? "—",
+      clientName: c ? (orgOf(c.organizations)?.name ?? null) : null,
+      sellerId: r.created_by,
+      sellerName: r.created_by ? (names.get(r.created_by) ?? null) : null,
+      buyer: r.buyer,
+      soldOn: r.sold_on,
+      setupValue: num(r.setup_value),
+      recurringValue: num(r.recurring_value),
+      recurringMonths: r.recurring_months,
+      status: r.status as SaleRow["status"],
+      expected: Math.round(sum.expected * 100) / 100,
+      received: Math.round(sum.received * 100) / 100,
+    };
+  });
+}
+
+/** Contratos (id e título) que já têm venda cadastrada, para o filtro da aba Vendas. */
+export async function listSalesFilterOptions(companyId: string): Promise<{
+  contracts: { id: string; title: string }[];
+  sellers: { id: string; name: string }[];
+}> {
+  const supabase = await createServerClient();
+  const r = await supabase.from("fin_client_sales").select("contract_id, created_by, fin_contracts(title)").eq("company_id", companyId).limit(5000);
+  if (r.error) fail("filtros de vendas", r.error);
+  const contracts = new Map<string, string>();
+  const sellerIds = new Set<string>();
+  for (const s of r.data ?? []) {
+    const c = (Array.isArray(s.fin_contracts) ? s.fin_contracts[0] : s.fin_contracts) as { title: string } | null;
+    if (c) contracts.set(s.contract_id, c.title);
+    if (s.created_by) sellerIds.add(s.created_by);
+  }
+  const profiles = sellerIds.size > 0 ? await supabase.from("profiles").select("id, full_name").in("id", [...sellerIds]) : { data: [], error: null };
+  if (profiles.error) fail("vendedores", profiles.error);
+  const byName = (a: { name?: string; title?: string }, b: { name?: string; title?: string }) =>
+    (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? "", "pt-BR");
+  return {
+    contracts: [...contracts].map(([id, title]) => ({ id, title })).sort(byName),
+    sellers: (profiles.data ?? []).map((p) => ({ id: p.id as string, name: p.full_name as string })).sort(byName),
+  };
+}
+
+/** Ids dos vendedores autorizados a registrar vendas no contrato (vazio: qualquer vendedor da empresa). */
+export async function listContractSellerIds(contractId: string): Promise<string[]> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from("fin_contract_sellers").select("user_id").eq("contract_id", contractId);
+  if (error) fail("vendedores do contrato", error);
+  return (data ?? []).map((r) => r.user_id as string);
+}

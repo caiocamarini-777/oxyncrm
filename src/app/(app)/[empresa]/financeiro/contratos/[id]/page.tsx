@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ContractSellers } from "@/components/finance/contract-sellers";
 import { ContractForm } from "@/components/finance/contract-form";
 import { Badge } from "@/components/ui/badge";
 import { requireUser } from "@/lib/auth/session";
@@ -8,7 +9,8 @@ import { todaySaoPaulo } from "@/lib/finance/dates";
 import { NATURE_LABEL, STATUS_LABEL } from "@/lib/finance/export";
 import { CONTRACT_STATUS_LABEL } from "@/lib/finance/labels";
 import { getFinanceAccess } from "@/lib/finance/permissions";
-import { getContract, listFinanceLookups, listOrganizations } from "@/lib/finance/queries";
+import { getContract, listContractSellerIds, listFinanceLookups, listOrganizations } from "@/lib/finance/queries";
+import { listAssignableOwners } from "@/lib/records/owners";
 import { formatDate, formatMoney } from "@/lib/records/format";
 import { z } from "zod";
 
@@ -28,6 +30,11 @@ export default async function FinanceContractPage({ params }: { params: Promise<
   ]);
   if (!contract) notFound();
   const today = todaySaoPaulo();
+  const hasCommission = contract.lines.some((l) => l.kind === "commission");
+  const [members, sellerIds] =
+    access.manage && hasCommission
+      ? await Promise.all([listAssignableOwners(company.id), listContractSellerIds(contract.id)])
+      : [[], []];
 
   return (
     <div className="flex flex-col gap-6">
@@ -48,6 +55,14 @@ export default async function FinanceContractPage({ params }: { params: Promise<
         canCreateServiceCategory={profile.isSuperAdmin}
         defaultMonth={today.slice(0, 7)}
       />
+      {access.manage && hasCommission ? (
+        <ContractSellers
+          key={sellerIds.join()}
+          contractId={contract.id}
+          members={members.filter((m) => m.active).map((m) => ({ id: m.id, name: m.fullName }))}
+          selected={sellerIds}
+        />
+      ) : null}
       <section className="flex flex-col gap-2" aria-label="Lançamentos do contrato">
         <h2 className="font-heading text-base font-semibold">Lançamentos</h2>
         {contract.entries.length === 0 ? (

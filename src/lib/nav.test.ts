@@ -57,6 +57,14 @@ describe("nav", () => {
     expect(isNavItemEnabled(get("financeiro"), true)).toBe(false);
     expect(navHref(get("financeiro"), "volt")).toBe("/volt/financeiro");
   });
+  it("vendas só aparece com canSell, mesmo sem acesso ao financeiro", () => {
+    const base = { canViewReports: true, hasSharedDashboards: false };
+    expect(isNavItemEnabled(get("vendas"), false, { ...base, canSell: true })).toBe(true);
+    expect(isNavItemEnabled(get("vendas"), false, base)).toBe(false);
+    expect(isNavItemEnabled(get("vendas"), true, { ...base, canSell: false })).toBe(false);
+    expect(isNavItemEnabled(get("vendas"), true)).toBe(false);
+    expect(navHref(get("vendas"), "volt")).toBe("/volt/vendas");
+  });
   it("view_finance vale só numa empresa específica, nunca em todas", () => {
     expect(scopeCanViewFinance("volt", "todas", ["volt"])).toBe(true);
     expect(scopeCanViewFinance("naia", "todas", ["volt"])).toBe(false);

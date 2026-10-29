@@ -65,7 +65,7 @@ Todas as tabelas têm `company_id`, `created_at`, `created_by`, `updated_at` e R
 | `deals` | `service_category_id` (opcional), usado quando o negócio não tem produtos |
 | `deal_items` | `service_category_id`, herdado do produto e editável no item |
 
-Tela: **Configurações › Categorias de serviço**, por empresa, para o admin geral e para quem tem `manage_products`. Criar em uma linha (só o nome é obrigatório), renomear, reordenar por arrastar, mudar a cor e desativar. Uma categoria em uso não é excluída, só desativada. Os seletores de categoria (produto, negócio, item e linha de contrato) oferecem "Nova categoria…" para quem pode cadastrar.
+Tela: **Configurações › Categorias de serviço**, por empresa, para o admin geral (como Produtos). Criar em uma linha (só o nome é obrigatório), renomear, reordenar por arrastar, mudar a cor e desativar. Uma categoria em uso não é excluída, só desativada. Os seletores de categoria (produto, negócio, item e linha de contrato) oferecem "Nova categoria…" para quem pode cadastrar.
 
 ### No Financeiro
 
@@ -152,7 +152,7 @@ O admin geral tem as duas. Os dados do Financeiro não seguem a visibilidade `ow
 
 ## Carga inicial
 
-Um script `pnpm import:financeiro` lê um JSON revisado, montado a partir da planilha. O JSON é revisado pelo usuário antes de rodar. O script pode ser repetido sem duplicar, porque casa os registros por uma chave de origem (aba, linha e mês).
+Um script `pnpm import:financeiro` lê um JSON montado a partir da planilha. O módulo já é entregue com a carga feita. Onde a planilha não diz, valem os padrões: regra de fim "renovação a confirmar", conta Itaú PJ sem saldo e as categorias de serviço informadas pelo usuário para cada cliente. O script pode ser repetido sem duplicar, porque casa os registros por uma chave de origem (aba, linha e mês).
 
 **Realizado (jan/2026 até o último mês conferido)**, como lançamentos `settled` com origem `import`:
 - **Saídas** da aba Despesas: cada célula com valor vira um lançamento. A categoria é o grupo da coluna B, a natureza vem do subgrupo ("despesas fixas" → `fixed`, "despesas variáveis" → `variable`), a descrição vem da coluna G e o dia vem da coluna E (sem dia, dia 1). Linhas de obras, móveis e equipamentos ("Obras – …", "Artigo fixo – …") entram como `non_recurring`.
@@ -160,7 +160,7 @@ Um script `pnpm import:financeiro` lê um JSON revisado, montado a partir da pla
 - O limite é a marcação "conferido até" da linha final de cada aba. Mês parcialmente conferido entra até a data marcada.
 
 **Futuro (a partir do primeiro mês não conferido)**, como cadastros que geram lançamentos:
-- contratos ativos (Omni 11, Harpix Operação/CRO/CTO/Mentoria, Naia), com valores, dias e retenções da aba Renda. A regra de fim de cada um é preenchida pelo usuário na revisão do JSON;
+- contratos ativos (Omni 11, Harpix Operação/CRO/CTO/Mentoria, Naia), com valores, dias e retenções da aba Renda. a regra de fim padrão é "renovação a confirmar" e pode ser trocada depois na tela do contrato;
 - despesas recorrentes vigentes, deduzidas das linhas da aba Despesas que se repetem nos meses futuros (salários em duas parcelas, VR, aluguéis, contabilidade, plano de saúde, cartão, parcelamentos e impostos estimados);
 - contas e saldo informado, digitados pelo usuário.
 

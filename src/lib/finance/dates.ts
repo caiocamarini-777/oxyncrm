@@ -23,3 +23,9 @@ export function weekdayShort(date: string): string {
   const [y, m, d] = date.split("-").map(Number);
   return ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 }
+
+/** "jan/2027" a partir de qualquer data do mês. */
+export function monthLabelShort(date: string): string {
+  const [y, m] = date.split("-").map(Number);
+  return `${MONTH_NAMES[m - 1].slice(0, 3)}/${y}`;
+}

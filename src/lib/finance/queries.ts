@@ -80,12 +80,16 @@ function mapEntry(r: RawEntry, fallbackAccountId: string | null): EntryRow {
  * Lançamentos sem conta (account_id nulo) são atribuídos à primeira conta ativa da empresa (por nome)
  * no EntryLite.accountId devolvido, para que o saldo (balanceSeries) os conte; sem conta ativa, ficam nulos.
  */
-export async function listEntries(companyId: string, f: FinanceFilters): Promise<EntryRow[]> {
+export async function listEntries(
+  companyId: string,
+  f: FinanceFilters,
+  opts: { basis?: "due" | "competence" } = {},
+): Promise<EntryRow[]> {
   const supabase = await createServerClient();
   const fallback = await defaultAccountId(supabase, companyId);
   const rows: EntryRow[] = [];
   for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await filteredQuery(supabase, companyId, f)
+    const { data, error } = await filteredQuery(supabase, companyId, f, false, opts.basis ?? "due")
       .order("due_date")
       .order("id")
       .range(offset, offset + PAGE - 1);
@@ -96,13 +100,19 @@ export async function listEntries(companyId: string, f: FinanceFilters): Promise
   return rows;
 }
 
-function filteredQuery(supabase: Awaited<ReturnType<typeof createServerClient>>, companyId: string, f: FinanceFilters, count = false) {
+function filteredQuery(
+  supabase: Awaited<ReturnType<typeof createServerClient>>,
+  companyId: string,
+  f: FinanceFilters,
+  count = false,
+  basis: "due" | "competence" = "due",
+) {
   let q = supabase
     .from("fin_entries")
     .select(ENTRY_COLUMNS, count ? { count: "exact" } : undefined)
-    .eq("company_id", companyId)
-    .gte("due_date", f.from)
-    .lte("due_date", f.to);
+    .eq("company_id", companyId);
+  // Competência é sempre o dia 1: o mês de `from` entra inteiro.
+  q = basis === "competence" ? q.gte("competence", `${f.from.slice(0, 7)}-01`).lte("competence", f.to) : q.gte("due_date", f.from).lte("due_date", f.to);
   if (!f.includePendingRenewals) q = q.eq("renewal_pending", false);
   if (!f.includeEstimatedCommissions) q = q.eq("estimated", false);
   q = f.statuses.length > 0 ? q.in("status", f.statuses) : q.neq("status", "cancelled");
@@ -175,7 +185,7 @@ export async function listSnapshots(companyId: string): Promise<Snapshot[]> {
 
 export type FinanceLookups = {
   accounts: { id: string; name: string }[];
-  serviceCategories: { id: string; name: string }[];
+  serviceCategories: { id: string; name: string; color: string }[];
   expenseCategories: { id: string; name: string; defaultNature: "fixed" | "variable" | "non_recurring" }[];
   incomeCategories: { id: string; name: string }[];
   /** Organizações que têm contrato (os "clientes" do Financeiro). */
@@ -187,7 +197,7 @@ export async function listFinanceLookups(companyId: string): Promise<FinanceLook
   const supabase = await createServerClient();
   const [accounts, services, expenses, incomes, contracts] = await Promise.all([
     supabase.from("fin_accounts").select("id, name").eq("company_id", companyId).eq("active", true).order("name"),
-    supabase.from("service_categories").select("id, name").eq("company_id", companyId).eq("active", true).order("position").order("name"),
+    supabase.from("service_categories").select("id, name, color").eq("company_id", companyId).eq("active", true).order("position").order("name"),
     supabase.from("fin_expense_categories").select("id, name, default_nature").eq("company_id", companyId).eq("active", true).order("position").order("name"),
     supabase.from("fin_income_categories").select("id, name").eq("company_id", companyId).eq("active", true).order("position").order("name"),
     supabase.from("fin_contracts").select("organization_id, organizations(id, name)").eq("company_id", companyId).not("organization_id", "is", null),
@@ -444,4 +454,38 @@ export async function getFinanceSettings(companyId: string): Promise<SettingsDat
     })),
     incomeCategories: incomes.data ?? [],
   };
+}
+
+export type ActiveContractLine = {
+  contractId: string;
+  organizationId: string | null;
+  endRule: "ends" | "auto_renew" | "renew_adjust" | "confirm" | null;
+  amount: number;
+  firstMonth: string;
+  months: number;
+};
+
+/** Linhas recorrentes dos contratos ativos (base do MRR atual e do fim da vigência por cliente). */
+export async function listActiveContractLines(companyId: string): Promise<ActiveContractLine[]> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from("fin_contract_lines")
+    .select("contract_id, amount, first_month, months, fin_contracts!inner(status, organization_id, end_rule)")
+    .eq("company_id", companyId)
+    .eq("kind", "recurring")
+    .eq("fin_contracts.status", "active")
+    .limit(5000);
+  if (error) fail("linhas dos contratos", error);
+  type Joined = { status: string; organization_id: string | null; end_rule: string | null };
+  return (data ?? []).map((l) => {
+    const c = (Array.isArray(l.fin_contracts) ? l.fin_contracts[0] : l.fin_contracts) as Joined;
+    return {
+      contractId: l.contract_id,
+      organizationId: c.organization_id,
+      endRule: c.end_rule as ActiveContractLine["endRule"],
+      amount: num(l.amount),
+      firstMonth: l.first_month,
+      months: l.months ?? 0,
+    };
+  });
 }

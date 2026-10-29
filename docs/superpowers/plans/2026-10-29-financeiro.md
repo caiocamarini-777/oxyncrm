@@ -35,7 +35,7 @@
 1. **Dia de vencimento 29–31 em mês curto.** Fevereiro e meses de 30 dias usam o último dia do mês, nunca transbordam para o mês seguinte. Teste na Task 5.
 2. **Editar um contrato ou despesa já parcialmente liquidado.** A regeneração mantém os lançamentos liquidados e `locked` e não duplica a competência deles. Testes nas Tasks 5 e 6.
 3. **Reabrir ou perder um negócio cujo contrato já foi ativado.** Nada é apagado, o contrato ganha `source_changed = true` e os lançamentos continuam. Teste na Task 7.
-4. **Usuário sem `view_finance`, empresa com Financeiro desligado, ou escopo "Todas as empresas".** Ele não vê o menu, a rota responde 404 e a RLS devolve zero linhas. Testes nas Tasks 3 e 10.
+4. **Usuário sem `view_finance` (inclusive o vendedor só com `register_sales`), empresa com Financeiro desligado, ou escopo "Todas as empresas".** Ele não vê o menu Financeiro, a rota responde 404 e a RLS devolve zero linhas; o vendedor não vê % nem comissão. Testes nas Tasks 3, 10, 15 e 16.
 5. **Projeção sem nenhum saldo informado.** A tela pede o saldo em vez de mostrar R$ 0 como se fosse real. A função de cálculo devolve `null`. Testes nas Tasks 9 e 11.
 
 ---
@@ -111,15 +111,17 @@
 **Interfaces:**
 - Produces:
   - `companies.finance_enabled boolean not null default false`;
-  - chaves `settings.view_finance` e `settings.manage_finance`, **opcionais** em `is_valid_permissions`. O conjunto de chaves de `settings` passa a ser as 6 atuais mais qualquer subconjunto das 2 novas. Assim, os fixtures dos testes pgTAP existentes continuam válidos;
-  - `public.can_finance(p_company uuid, p_action text) returns boolean` (`stable`, `security definer`), com `p_action` em `'view'` ou `'manage'`:
+  - chaves `settings.view_finance`, `settings.manage_finance` e `settings.register_sales`, **opcionais** em `is_valid_permissions`. O conjunto de chaves de `settings` passa a ser as 6 atuais mais qualquer subconjunto das 3 novas. Assim, os fixtures dos testes pgTAP existentes continuam válidos;
+  - `public.can_finance(p_company uuid, p_action text) returns boolean` (`stable`, `security definer`), com `p_action` em `'view'`, `'manage'` ou `'sell'`:
     - falso se `finance_enabled` é falso;
     - verdadeiro para o admin geral;
     - `view` = `view_finance` ou `manage_finance` no papel do usuário na empresa;
     - `manage` = `manage_finance`;
-  - TS: `SETTINGS` inclui `"view_finance"` e `"manage_finance"`; no `permissionsSchema` essas duas chaves são `z.boolean().optional()`; `DEFAULT_PERMISSIONS` traz as duas como `false`; labels "Ver financeiro" e "Gerenciar financeiro";
+    - `sell` = `register_sales` ou `manage_finance`. `sell` **não** dá `view`;
+  - TS: `SETTINGS` inclui `"view_finance"`, `"manage_finance"` e `"register_sales"`; no `permissionsSchema` essas três chaves são `z.boolean().optional()`; `DEFAULT_PERMISSIONS` traz as três como `false`; labels "Ver financeiro", "Gerenciar financeiro" e "Cadastrar vendas de clientes";
   - `src/lib/finance/permissions.ts` (`server-only`):
-    - `getFinanceAccess(companyId): Promise<{ view: boolean; manage: boolean }>`;
+    - `getFinanceAccess(companyId): Promise<{ view: boolean; manage: boolean; sell: boolean }>`;
+    - `salesCompanySlugs(): Promise<string[]>`, as empresas em que `can_finance(...,'sell')` é verdadeiro;
     - `financeCompanySlugs(): Promise<string[]>`, as empresas acessíveis em que `can_finance(...,'view')` é verdadeiro;
   - trigger: quando `finance_enabled` passa de falso para verdadeiro, chama `fin_seed_categories(company)`. Na Task 4 ela é criada com `create or replace`, e nesta migration fica um stub vazio para manter a ordem.
 
@@ -128,7 +130,7 @@
   - um papel com `view_finance:true` é válido;
   - uma chave desconhecida `foo` é inválida;
   - `can_finance` devolve `false` com `finance_enabled=false`, mesmo para o admin geral;
-  - com `finance_enabled=true`: o admin geral tem `true`; o papel sem as chaves tem `false`; `view_finance` dá `view=true` e `manage=false`; `manage_finance` dá `view=true` e `manage=true`; um não membro tem `false`;
+  - com `finance_enabled=true`: o admin geral tem `true`; o papel sem as chaves tem `false`; `view_finance` dá `view=true` e `manage=false`; `manage_finance` dá `view=true` e `manage=true`; `register_sales` dá `sell=true`, `view=false` e `manage=false`; um não membro tem `false`;
   - um não admin não consegue fazer `update companies set finance_enabled`.
 - [ ] **Step 2:** `pnpm test:db 44_` → FAIL.
 - [ ] **Step 3: Implement** a migration (`create or replace function is_valid_permissions`, coluna, função, stub e trigger).
@@ -186,20 +188,21 @@
     - `adjust_rate numeric(6,3) not null default 0`;
     - `source_changed bool not null default false`, `notes`;
   - `fin_contract_lines`:
-    - `id, contract_id, company_id, kind check in ('setup','recurring'), description, service_category_id null`;
-    - `amount numeric(14,2) > 0`, `first_month date (dia 1)`;
+    - `id, contract_id, company_id, kind check in ('setup','recurring','commission'), description, service_category_id null`;
+    - comissão: `setup_rate numeric(6,3) null`, `recurring_rate numeric(6,3) null`, `estimated_monthly numeric(14,2) null`; para `commission`, `amount` é nulo, `months` é obrigatório e pelo menos um dos dois % é preenchido (check);
+    - `amount numeric(14,2) null check > 0`, obrigatório em setup e recurring; `first_month date (dia 1)`;
     - `installments int not null default 1 check 1..60` (setup);
     - `months int null check 1..120`, obrigatório quando `kind='recurring'`;
   - `fin_entries`:
     - `id, company_id, direction check in ('in','out')`;
-    - `source_kind check in ('contract','recurring','manual','import')`;
+    - `source_kind check in ('contract','recurring','sale','manual','import')`;
     - `contract_id, contract_line_id, recurring_expense_id (FK adicionada na Task 6), source_key text null`;
     - `due_date date, competence date (dia 1)`;
     - `gross numeric(14,2) >= 0`, `retention numeric(14,2) default 0`, `amount numeric(14,2) generated always as (gross - retention) stored`;
     - `status check in ('open','settled','cancelled') default 'open'`, `settled_on date null`, `settled_amount numeric(14,2) null`;
     - `account_id, organization_id, service_category_id, income_category_id, expense_category_id`;
     - `nature null check in ('fixed','variable','non_recurring')`, `description`;
-    - `locked bool default false`, `is_renewal bool default false`, `renewal_pending bool default false`;
+    - `locked bool default false`, `is_renewal bool default false`, `renewal_pending bool default false`, `estimated bool default false`;
     - índices únicos parciais: `(contract_line_id, competence) where contract_line_id is not null` e `(company_id, source_key) where source_key is not null`;
     - checks: liquidado ⇒ `settled_on` e `settled_amount` preenchidos; `direction='out'` ⇒ `nature` não nula;
   - `fin_due_date(p_month date, p_day int) returns date`: `make_date(ano, mês, least(p_day, último dia do mês))`;
@@ -208,6 +211,7 @@
 
 **Algoritmo de `fin_regenerate_contract`** (o implementador não deduz isto sozinho):
 ```
+só mexe em entries com source_kind='contract' (as de vendas, source_kind='sale', são da Task 15)
 se status <> 'active': apaga as entries open e não locked do contrato; retorna
 apaga as entries do contrato com status='open' e locked=false
 para cada linha L:
@@ -221,6 +225,9 @@ para cada linha L:
         valor = amount * (1 + adjust_rate/100)^k (arredondado a 2 casas) se end_rule='renew_adjust', senão amount
         is_renewal=true, renewal_pending = (end_rule='confirm')
      a competência nunca passa de fin_horizon_end()
+  se L.kind='commission': só gera algo se estimated_monthly não é nulo:
+     mesmas competências e ciclos de renovação da recorrente (sem reajuste), gross = estimated_monthly,
+     estimated=true (e renewal_pending nos ciclos de 'confirm')
   para cada competência gerada sem entry existente (liquidada ou locked) na mesma (L.id, competence):
      insere a entry: direction='in', due_date=fin_due_date(competence, due_day),
      retention = round(gross*retention_rate/100, 2), service_category_id=L.service_category_id,
@@ -237,6 +244,8 @@ Triggers: `after insert/update/delete` em `fin_contract_lines` e `after update` 
   - liquidar a entry de fevereiro, mudar o `amount` da linha para 2.000 e conferir que fevereiro mantém o valor antigo, que março passa a 2.000 e que existe só uma entry de fevereiro;
   - uma entry `locked` também sobrevive à regeneração;
   - contrato `draft`: 0 entries;
+  - linha `commission` com `estimated_monthly = 2.000` por 3 meses: 3 entries `estimated=true` de 2.000; sem `estimated_monthly`: 0 entries;
+  - linha `commission` sem `setup_rate` e sem `recurring_rate` falha no check;
   - `recurring` sem `months` falha no check.
 - [ ] **Step 2:** `pnpm test:db 46_` → FAIL.
 - [ ] **Step 3: Implement** a migration.
@@ -414,15 +423,15 @@ Triggers: `after insert/update/delete` em `fin_contract_lines` e `after update` 
 **Interfaces:**
 - Consumes: Tasks 3, 8 e 9.
 - Produces:
-  - `FinanceFilters = { from: string; to: string; clients: string[]; serviceCategories: string[]; expenseCategories: string[]; natures: Nature[]; accounts: string[]; statuses: Status[]; includePendingRenewals: boolean; horizon: 3|6|12|24|36 }`;
-  - `parseFinanceFilters(sp: Record<string,string|string[]|undefined>, today: string): FinanceFilters`, com os padrões: `from` = 1º dia do mês corrente, `to` = último dia, `horizon` = 12, `includePendingRenewals` = false e listas vazias (= sem filtro, como em "Semântica dos filtros" do README);
+  - `FinanceFilters = { from: string; to: string; clients: string[]; serviceCategories: string[]; expenseCategories: string[]; natures: Nature[]; accounts: string[]; statuses: Status[]; includePendingRenewals: boolean; includeEstimatedCommissions: boolean; horizon: 3|6|12|24|36 }`;
+  - `parseFinanceFilters(sp: Record<string,string|string[]|undefined>, today: string): FinanceFilters`, com os padrões: `from` = 1º dia do mês corrente, `to` = último dia, `horizon` = 12, `includePendingRenewals` = false, `includeEstimatedCommissions` = false e listas vazias (= sem filtro, como em "Semântica dos filtros" do README);
   - `toFinanceSearchParams(f): URLSearchParams`, que omite os padrões;
   - `queries.ts` (`server-only`):
-    - `listEntries(companyId, f): Promise<EntryLite[]>`, com `renewal_pending=false` quando `!includePendingRenewals` e sem canceladas por padrão;
+    - `listEntries(companyId, f): Promise<EntryLite[]>`, com `renewal_pending=false` quando `!includePendingRenewals`, `estimated=false` quando `!includeEstimatedCommissions` e sem canceladas por padrão;
     - `listSnapshots(companyId): Promise<Snapshot[]>`;
     - `listFinanceLookups(companyId)`, que devolve contas, categorias e organizações com contrato;
   - nav: item `{ key: "financeiro", label: "Financeiro", icon: Wallet, path: "/financeiro", availableFromPhase: 8, scoped: true }`, com `8` em `DELIVERED_PHASES`. `isNavItemEnabled` recebe `canViewFinance` no objeto de acesso, e o item só aparece com o escopo de uma empresa (nunca em "todas") que esteja em `financeCompanySlugs()`;
-  - layout: resolve o escopo; com escopo "todas" ou `!getFinanceAccess(...).view` → `notFound()`. Renderiza as abas Mês · Projeção · Clientes · Serviços · Custos · Lançamentos · Contratos · Despesas · Configurações. Configurações só aparece com `manage`.
+  - layout: resolve o escopo; com escopo "todas" ou `!getFinanceAccess(...).view` → `notFound()`. Renderiza as abas Mês · Projeção · Clientes · Serviços · Custos · Lançamentos · Contratos · Despesas · Vendas · Configurações (a aba Vendas é criada na Task 16). Configurações só aparece com `manage`.
 
 - [ ] **Step 1: Failing Vitest**:
   - `parseFinanceFilters({}, "2026-10-29")` → from 2026-10-01, to 2026-10-31, horizon 12;
@@ -475,7 +484,7 @@ Triggers: `after insert/update/delete` em `fin_contract_lines` e `after update` 
 - Consumes: Tasks 4–8.
 - Produces:
   - `contractSchema`: `{ title, organizationId?, dueDay 1..31?, retentionRate 0..100, accountId?, endRule?, renewalMonths?, adjustKind, adjustIndex?, adjustRate, notes? }`, com o refine "Informe o índice." quando `adjustKind='index'` sem índice;
-  - `contractLineSchema`: `{ kind, description, serviceCategoryId?, amount>0, firstMonth (YYYY-MM), installments 1..60, months 1..120 obrigatório se recurring }`;
+  - `contractLineSchema`: `{ kind, description, serviceCategoryId?, amount>0 (setup e recurring), firstMonth (YYYY-MM), installments 1..60, months 1..120 obrigatório se recurring ou commission, setupRate? 0..100, recurringRate? 0..100, estimatedMonthly? }`. Para `commission`: "Informe ao menos um percentual." sem nenhum %. O editor de linhas mostra os campos de % e de estimativa só para o tipo Comissão;
   - `recurringExpenseSchema`, espelhando as colunas da Task 6;
   - ações:
     - `createContract`, `updateContract`, `saveContractLines(contractId, lines[])` (substitui o conjunto todo), `activateContract(id)` (chama `fin_activate_contract` e traduz o `detail` para "Faltam: …"), `cancelContract(id)`, `acknowledgeSourceChange(id)` (zera `source_changed`);
@@ -569,15 +578,93 @@ Triggers: `after insert/update/delete` em `fin_contract_lines` e `after update` 
   - Complete o rascunho com estes padrões:
     - `endRule = "confirm"` em todos os contratos, de modo que as renovações só entram na projeção com o filtro ligado;
     - uma conta `{ key: "itau", name: "Itaú PJ", bank: "Itaú" }` sem saldo (o usuário informa depois na tela);
-    - o mapa cliente → categoria de serviço informado pelo usuário no chat.
+    - o mapa cliente → categoria de serviço informado pelo usuário: Omni 11, Harpix Operação, Harpix CRO, Harpix CTO e Naia → Terceirização Vendas; Harpix Mentoria e Harpix Fase 1 → Consultoria Vendas.
   - Organização: se nenhuma organização da empresa casa com o nome (ignorando acentos e maiúsculas, aceitando que o nome da organização seja prefixo do nome da linha, ex.: "Harpix" para "Harpix CRO"), o import cria a organização e avisa.
   - Run: `pnpm import:financeiro scripts/.tmp/financeiro/draft.json --dry-run`, depois sem `--dry-run`. Ligue `finance_enabled` na empresa Oxyn antes.
   - Expected: a tabela de conferência com diferença 0,00 em nov e dez, ou cada diferença explicada (ex.: um valor da planilha que não se repete). Relate a tabela ao usuário.
 
-### Task 15: Documentação e verificação final
+### Task 15: Vendas do cliente e comissão (banco)
 
 **Files:**
-- Modify: `README.md` (seção "Financeiro": ativação por empresa, permissões, regras de geração, horizonte e job mensal, comandos da carga inicial) e `docs/superpowers/specs/2026-10-21-oxyn-crm-design.md` (link para a spec do Financeiro na seção de fases)
+- Create: `supabase/migrations/20261030000008_finance_client_sales.sql`, `supabase/tests/50_finance_client_sales.test.sql`
+
+**Interfaces:**
+- Consumes: `can_finance(...,'sell')` (Task 3), linhas `commission` e `fin_entries` (Task 5), `fin_due_date`.
+- Produces:
+  - `fin_contract_sellers(contract_id, user_id, company_id)`, com PK `(contract_id, user_id)`. RLS: leitura com `view`, escrita com `manage`;
+  - `fin_client_sales`:
+    - `id, company_id, contract_id, contract_line_id (linha commission), buyer text not null, sold_on date`;
+    - `setup_value numeric(14,2) default 0`, `setup_installments int default 1 check 1..60`, `setup_first_month date null`;
+    - `recurring_value numeric(14,2) default 0`, `recurring_start date null`, `recurring_months int null check 1..120`;
+    - `note`, `status check in ('active','cancelled') default 'active'`, `created_by`;
+    - checks: `setup_value > 0 ⇒ setup_first_month`; `recurring_value > 0 ⇒ recurring_start e recurring_months`; `setup_value + recurring_value > 0`;
+    - RLS: leitura com `view`. **Sem** políticas para `sell`; o vendedor usa só as funções abaixo;
+  - `fin_entries.client_sale_id uuid null references fin_client_sales on delete cascade`, com índice único parcial `(client_sale_id, competence, kind_tag)`, em que `kind_tag text null check in ('setup','recurring')` é uma coluna nova;
+  - `fin_regenerate_sale(p_sale uuid)` (`security definer`). Mantém liquidadas e `locked`, e na venda cancelada apaga as abertas não locked. Para cada mês M de recebimento do cliente gera uma entry `source_kind='sale'`, com `competence = M + 1 mês` e `due_date = fin_due_date(M + 1 mês, contrato.due_day)`:
+    - setup: parcelas de `setup_value/setup_installments` (resíduo na última) a partir de `setup_first_month`, `gross = round(parcela * setup_rate/100, 2)`;
+    - recorrência: `recurring_value` por `recurring_months` meses a partir de `recurring_start`, `gross = round(recurring_value * recurring_rate/100, 2)`;
+    - `contract_line_id` fica nulo nas entries de venda (o vínculo é `client_sale_id`, com `contract_id` preenchido), para não colidir com o índice da Task 5;
+    - retenção do contrato; `service_category_id` da linha; organização e conta do contrato; `description = 'Comissão – ' || buyer`;
+    - gera só para M dentro da vigência da linha (incluindo renovações não `confirm`) e com o % correspondente não nulo;
+  - triggers: mudança em `fin_client_sales` → `fin_regenerate_sale`; mudança de `setup_rate` ou `recurring_rate` numa linha → regenera todas as vendas da linha;
+  - funções do vendedor (`security definer`, todas exigem `can_finance(company,'sell')`, senão `42501`):
+    - `fin_sales_contracts(p_company uuid) returns table(contract_id uuid, line_id uuid, contract_title text, client_name text)`: contratos `active` com linha `commission`, filtrados por `fin_contract_sellers` quando o contrato tem vendedores; **não** devolve valores nem %;
+    - `fin_my_sales(p_company uuid) returns table(id, contract_title, buyer, sold_on, setup_value, recurring_value, recurring_months, status, editable bool)`: só `created_by = auth.uid()`; `editable` = nenhuma entry liquidada;
+    - `fin_save_sale(p_id uuid null, p_payload jsonb) returns uuid`: cria (`p_id` nulo) ou edita uma venda própria e editável; valida que o contrato e a linha estão em `fin_sales_contracts` para o usuário; quem tem `manage` edita qualquer venda;
+    - `fin_cancel_sale(p_id uuid)`: a mesma regra de dono e editável.
+
+- [ ] **Step 1: Failing pgTAP** `50_finance_client_sales.test.sql`, com um contrato ativo, `due_day = 10`, `retention_rate = 0` e uma linha de comissão com `setup_rate = 10`, `recurring_rate = 5`, de 2026-11 por 12 meses:
+  - uma venda com setup de 3.000 em 3x desde 2026-11 e recorrência de 1.000 por 3 meses desde 2026-11 gera:
+    - setup: 100 em 2026-12-10, 2027-01-10 e 2027-02-10;
+    - recorrência: 50 nos mesmos três vencimentos;
+  - uma venda com recebimento em 2027-11 (fora da vigência, `end_rule='ends'`) gera 0 entries;
+  - mudar o `recurring_rate` para 6% → as entries abertas de recorrência passam a 60 e as liquidadas mantêm 50;
+  - cancelar a venda → as abertas somem e as liquidadas ficam;
+  - um vendedor com só `register_sales`:
+    - lê 0 linhas em `fin_entries`, `fin_contracts` e `fin_client_sales` (RLS);
+    - `fin_sales_contracts` devolve o contrato sem colunas de valor;
+    - `fin_save_sale` cria a venda e `fin_my_sales` devolve só as dele;
+    - editar a venda de outro vendedor → `42501`;
+    - editar depois de uma entry liquidada → erro "Esta venda já tem comissão recebida e não pode ser alterada.";
+  - com `fin_contract_sellers` preenchido sem o vendedor → o contrato some de `fin_sales_contracts` e `fin_save_sale` nele dá `42501`;
+  - usuário sem `register_sales` → `42501` em todas as funções.
+- [ ] **Step 2:** `pnpm test:db 50_` → FAIL.
+- [ ] **Step 3: Implement** a migration.
+- [ ] **Step 4:** `pnpm db:migrate && pnpm test:db` → tudo PASS.
+- [ ] **Step 5: Commit** `feat(financeiro): vendas do cliente geram comissão no mês seguinte`
+
+### Task 16: Tela de Vendas e aba Vendas do Financeiro
+
+**Files:**
+- Create: `src/lib/finance/sales-schema.ts`, `src/lib/finance/sales-schema.test.ts`, `src/lib/finance/sales-actions.ts`, `src/app/(app)/[empresa]/vendas/page.tsx`, `src/app/(app)/[empresa]/financeiro/vendas/page.tsx`, `src/components/finance/sale-form.tsx`, `src/components/finance/sales-table.tsx`, `src/components/finance/contract-sellers.tsx`, `e2e/finance-sales.spec.ts`
+- Modify: `src/lib/nav.ts` e `src/lib/nav.test.ts`, `src/components/shell/app-shell.tsx`, a página de detalhe do contrato (Task 12), que ganha a seção "Vendedores autorizados" quando o contrato tem linha de comissão
+
+**Interfaces:**
+- Consumes: Task 15 (as funções `fin_sales_contracts`, `fin_my_sales`, `fin_save_sale` e `fin_cancel_sale`), `getFinanceAccess` e `salesCompanySlugs` (Task 3).
+- Produces:
+  - `saleSchema`:
+    - `{ contractLineId: uuid, buyer 1..120, soldOn ISO, setupValue (parseBRL, ≥0), setupInstallments 1..60, setupFirstMonth? YYYY-MM, recurringValue (≥0), recurringStart? YYYY-MM, recurringMonths? 1..120, note? ≤500 }`;
+    - refines: "Informe o valor do setup ou da recorrência." quando os dois são 0; "Informe o mês do primeiro recebimento do setup." quando há setup sem mês; "Informe início e meses da recorrência." quando há recorrência sem início ou meses;
+  - ações: `saveSale(companyId, id | null, input): ActionResult<{id}>`, `cancelSale(id)`, `setContractSellers(contractId, userIds: string[])` (exige `manage`);
+  - nav: item `{ key: "vendas", label: "Vendas", icon: Receipt, path: "/vendas", availableFromPhase: 8, scoped: true }`, que aparece com o escopo de uma empresa em `salesCompanySlugs()`;
+  - `/<empresa>/vendas`: sem `sell` → `notFound()`. Mostra "Nova venda" (contrato no select com "Contrato – Cliente", sem nenhum valor de comissão) e a lista "Minhas vendas", com editar e cancelar quando `editable`. **Nenhum** import de `queries.ts` ou de tabelas `fin_*` nesta página: só as RPCs do vendedor;
+  - `/<empresa>/financeiro/vendas` (exige `view`): todas as vendas, com contrato, vendedor, cliente final, valores, comissão prevista e recebida (somas das entries da venda) e filtros por contrato, vendedor e mês.
+
+- [ ] **Step 1: Failing Vitest**: `sales-schema.test.ts` cobre os três refines com as mensagens exatas; `nav.test.ts` confirma que "Vendas" aparece só com acesso `sell`.
+- [ ] **Step 2:** `pnpm test src/lib/finance/sales-schema src/lib/nav` → FAIL → implement → PASS.
+- [ ] **Step 3: Implement** as páginas e os componentes.
+- [ ] **Step 4: E2E** `finance-sales.spec.ts`:
+  - o admin cria no contrato "Harpix Operação" uma linha de comissão de 10% no setup e 5% na recorrência e autoriza o vendedor;
+  - o vendedor (papel só com `register_sales`) entra, vê "Vendas" e não vê "Financeiro" no menu, recebe 404 em `/<empresa>/financeiro` e cadastra uma venda com setup de 3.000 em 1x no mês corrente;
+  - o admin vê em Financeiro › Vendas a comissão prevista de R$ 300,00 e, na visão Mês do mês seguinte, a entrada "Comissão – <cliente final>".
+
+  Run: `pnpm test:e2e e2e/finance-sales.spec.ts` → PASS.
+- [ ] **Step 5:** `pnpm typecheck && pnpm lint` → limpos. **Commit** `feat(financeiro): tela de Vendas para vendedores e aba Vendas`
+
+### Task 17: Documentação e verificação final
+
+**Files:**
+- Modify: `README.md` (seção "Financeiro": ativação por empresa, permissões (inclusive `register_sales`), regras de geração e de comissão, horizonte e job mensal, comandos da carga inicial) e `docs/superpowers/specs/2026-10-21-oxyn-crm-design.md` (link para a spec do Financeiro na seção de fases)
 
 - [ ] **Step 1:** Escreva a documentação.
 - [ ] **Step 2:** `pnpm typecheck && pnpm lint && pnpm test && pnpm test:db && pnpm test:e2e` → tudo verde. Anote a saída.

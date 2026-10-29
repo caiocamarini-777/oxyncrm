@@ -24,6 +24,7 @@ const selectClass = "h-9 w-full rounded-md border border-input bg-background px-
 
 function toDrafts(c: ContractDetail): LineDraft[] {
   return c.lines.map((l) => ({
+    id: l.id,
     kind: l.kind,
     description: l.description,
     serviceCategoryId: l.serviceCategoryId,

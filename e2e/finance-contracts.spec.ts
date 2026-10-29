@@ -149,3 +149,58 @@ test("2) contrato pendente: falta de dados, ativação e lançamento no mês; de
   await expect(page.getByText("Aluguel").first()).toBeVisible();
   await expect(page.getByText(/4\.674,11/).first()).toBeVisible();
 });
+
+test("3) editar linha de contrato ativo mantém o mês liquidado e não deixa remover a linha", async ({ page }) => {
+  const a = admin();
+  const account = await a.from("fin_accounts").select("id").eq("company_id", companyId).limit(1).single();
+  const cat = await a.from("service_categories").select("id").eq("company_id", companyId).limit(1).single();
+  if (account.error || cat.error) throw account.error ?? cat.error;
+  const thisMonth = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7);
+  const c = await a
+    .from("fin_contracts")
+    .insert({ company_id: companyId, title: `Ativo E2E ${stamp}`, status: "draft", due_day: 5, account_id: account.data.id, end_rule: "ends" })
+    .select("id")
+    .single();
+  if (c.error) throw c.error;
+  const l = await a
+    .from("fin_contract_lines")
+    .insert({ contract_id: c.data.id, company_id: companyId, kind: "recurring", description: "Mensal ativa", service_category_id: cat.data.id, amount: 1000, first_month: `${thisMonth}-01`, months: 3 })
+    .select("id")
+    .single();
+  if (l.error) throw l.error;
+  const act = await a.from("fin_contracts").update({ status: "active" }).eq("id", c.data.id);
+  if (act.error) throw act.error;
+
+  const entries = async () => {
+    const r = await a.from("fin_entries").select("id, competence, gross, status, contract_line_id").eq("contract_id", c.data.id).order("competence");
+    if (r.error) throw r.error;
+    return r.data;
+  };
+  const before = await entries();
+  expect(before).toHaveLength(3);
+  const paid = await a
+    .from("fin_entries")
+    .update({ status: "settled", settled_on: `${thisMonth}-05`, settled_amount: 1000 })
+    .eq("id", before[0].id);
+  if (paid.error) throw paid.error;
+
+  await login(page, adminEmail, password);
+  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
+  await page.goto(`/${slug}/financeiro/contratos/${c.data.id}`);
+  await page.getByLabel("Valor (linha 1)").fill("1.200,00");
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect(page.getByText("Contrato salvo.")).toBeVisible();
+
+  const after = await entries();
+  expect(after).toHaveLength(3);
+  expect(after.filter((e) => e.competence === before[0].competence)).toHaveLength(1);
+  expect(after[0]).toMatchObject({ id: before[0].id, status: "settled", contract_line_id: l.data.id });
+  expect(after.slice(1).map((e) => Number(e.gross))).toEqual([1200, 1200]);
+  const lines = await a.from("fin_contract_lines").select("id").eq("contract_id", c.data.id);
+  expect(lines.data?.map((x) => x.id)).toEqual([l.data.id]);
+
+  await page.getByRole("button", { name: "Remover linha 1" }).click();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Esta linha já tem lançamentos liquidados ou editados e não pode ser removida." })).toBeVisible();
+  expect(await entries()).toHaveLength(3);
+});

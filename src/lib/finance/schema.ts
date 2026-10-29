@@ -161,6 +161,7 @@ const optMoney = z.preprocess(
 
 export const contractLineSchema = z
   .object({
+    id: optionalUuid,
     kind: z.enum(LINE_KINDS, { message: "Escolha o tipo da linha." }),
     description: z.string().trim().min(1, "Informe a descrição.").max(200, "Use no máximo 200 caracteres."),
     serviceCategoryId: optionalUuid,
@@ -191,6 +192,7 @@ export const contractLineSchema = z
   .transform((v) => {
     const commission = v.kind === "commission";
     return {
+      id: v.id,
       kind: v.kind,
       description: v.description,
       serviceCategoryId: v.serviceCategoryId,

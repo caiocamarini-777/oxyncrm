@@ -39,7 +39,7 @@ export default async function FinanceContractPage({ params }: { params: Promise<
         <Badge variant="secondary">{CONTRACT_STATUS_LABEL[contract.status]}</Badge>
       </div>
       <ContractForm
-        key={`${contract.id}:${contract.status}:${contract.sourceChanged}`}
+        key={`${contract.id}:${contract.status}:${contract.sourceChanged}:${contract.lines.map((l) => l.id).join()}`}
         contract={contract}
         empresa={company.slug}
         organizations={organizations}

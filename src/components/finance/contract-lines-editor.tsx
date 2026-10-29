@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label";
 import { LINE_KIND_LABEL } from "@/lib/finance/labels";
 
 export type LineDraft = {
+  /** Id da linha já gravada; ausente em linha nova. */
+  id?: string;
   kind: "setup" | "recurring" | "commission";
   description: string;
   serviceCategoryId: string | null;

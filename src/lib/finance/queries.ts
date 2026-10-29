@@ -263,6 +263,7 @@ export async function listContracts(
 }
 
 export type ContractLineRow = {
+  id: string;
   kind: "setup" | "recurring" | "commission";
   description: string;
   serviceCategoryId: string | null;
@@ -333,6 +334,7 @@ export async function getContract(companyId: string, id: string): Promise<Contra
     dealId: d.deal_id,
     notes: d.notes,
     lines: (lines.data ?? []).map((l) => ({
+      id: l.id,
       kind: l.kind as ContractLineRow["kind"],
       description: l.description,
       serviceCategoryId: l.service_category_id,

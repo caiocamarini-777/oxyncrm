@@ -1,5 +1,5 @@
 begin;
-select plan(30);
+select plan(31);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -155,6 +155,24 @@ select is(pg_temp.total(pg_temp.d('deals', 'stats', 'scorecard', jsonb_build_obj
   jsonb_build_array(pg_temp.f('status', 'isExactly', '"open"'))))), 250::numeric, 'valor ponderado pela probabilidade da etapa');
 
 -- 5. número com período anterior, filtros rápidos
+-- a comparação é sempre o período imediatamente anterior ao filtro (mês -> mês passado, semana -> semana passada...)
+select is(
+  (select array_agg(format('%s %s %s', p, b.d_from, b.d_to) order by p)
+   from unnest(array['today', 'week', 'month', 'lastMonth', 'quarter', 'year', 'last7Days', 'last30Days']) p,
+        lateral public.insights_period_bounds(p, 1, null, null) b)
+  || array[(select format('custom %s %s', d_from, d_to) from public.insights_period_bounds('custom', 1, '2026-10-01', '2026-10-10'))],
+  (with t as (select (now() at time zone 'America/Sao_Paulo')::date d)
+   select array[
+     format('last30Days %s %s', d - 59, d - 30),
+     format('last7Days %s %s', d - 13, d - 7),
+     format('lastMonth %s %s', (date_trunc('month', d) - interval '2 months')::date, (date_trunc('month', d) - interval '1 month')::date - 1),
+     format('month %s %s', (date_trunc('month', d) - interval '1 month')::date, date_trunc('month', d)::date - 1),
+     format('quarter %s %s', (date_trunc('quarter', d) - interval '3 months')::date, date_trunc('quarter', d)::date - 1),
+     format('today %s %s', d - 1, d - 1),
+     format('week %s %s', d - extract(dow from d)::int - 7, d - extract(dow from d)::int - 1),
+     format('year %s %s', (date_trunc('year', d) - interval '1 year')::date, date_trunc('year', d)::date - 1),
+     'custom 2026-09-21 2026-09-30'] from t),
+  'período anterior de cada filtro');
 select is(pg_temp.run(pg_temp.d('leads', 'performance', 'scorecard', jsonb_build_object('measure_by', 'count',
   'filter_by', jsonb_build_array(pg_temp.f('addTime', null, null, 'month')))))->'previous', '1'::jsonb, 'previous do mês passado');
 select is(pg_temp.total(pg_temp.d('leads', 'performance', 'scorecard', jsonb_build_object('measure_by', 'count',

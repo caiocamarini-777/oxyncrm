@@ -6,7 +6,7 @@ on:
   pull_request:
 
 concurrency:
-  group: shared-dev-db
+  group: ci-db
   cancel-in-progress: false
 
 env:

@@ -1,5 +1,5 @@
 begin;
-select plan(13);
+select plan(17);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -69,6 +69,27 @@ update fin_entries set gross = 1100 where contract_line_id = '00000000-0000-4000
 update fin_entries set gross = 600 where id = '00000000-0000-4000-8000-0000000000b4';
 select is((select locked::text from fin_entries where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-12-01')
   || '|' || (select locked::text from fin_entries where id = '00000000-0000-4000-8000-0000000000b4'), 'true|false', 'editar o gross trava contrato, mas não manual');
+
+-- Escopo da trava: categoria, conta e descrição de entry gerada; baixa com outra conta não trava.
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c4');
+insert into fin_accounts (id, company_id, name) values
+  ('00000000-0000-4000-8000-00000000ac02', '00000000-0000-4000-8000-0000000000d1', 'tst-conta-2');
+insert into fin_expense_categories (id, company_id, name, default_nature) values
+  ('00000000-0000-4000-8000-00000000ec01', '00000000-0000-4000-8000-0000000000d1', 'tst-desp-1', 'fixed'),
+  ('00000000-0000-4000-8000-00000000ec02', '00000000-0000-4000-8000-0000000000d1', 'tst-desp-2', 'fixed');
+insert into fin_entries (id, company_id, direction, source_kind, due_date, competence, gross, nature, expense_category_id, account_id, description) values
+  ('00000000-0000-4000-8000-0000000000b5', '00000000-0000-4000-8000-0000000000d1', 'out', 'recurring', '2026-11-05', '2026-11-01', 100, 'fixed', '00000000-0000-4000-8000-00000000ec01', '00000000-0000-4000-8000-00000000ac01', 'rec a'),
+  ('00000000-0000-4000-8000-0000000000b6', '00000000-0000-4000-8000-0000000000d1', 'out', 'recurring', '2026-11-05', '2026-11-01', 100, 'fixed', '00000000-0000-4000-8000-00000000ec01', '00000000-0000-4000-8000-00000000ac01', 'rec b'),
+  ('00000000-0000-4000-8000-0000000000b7', '00000000-0000-4000-8000-0000000000d1', 'out', 'recurring', '2026-11-05', '2026-11-01', 100, 'fixed', '00000000-0000-4000-8000-00000000ec01', '00000000-0000-4000-8000-00000000ac01', 'rec c');
+update fin_entries set expense_category_id = '00000000-0000-4000-8000-00000000ec02' where id = '00000000-0000-4000-8000-0000000000b5';
+select is((select locked from fin_entries where id = '00000000-0000-4000-8000-0000000000b5'), true, 'editar a categoria de despesa trava');
+select public.fin_settle_entries(array['00000000-0000-4000-8000-0000000000b6']::uuid[], '2026-11-10', '00000000-0000-4000-8000-00000000ac02');
+select is((select locked::text || '|' || account_id::text from fin_entries where id = '00000000-0000-4000-8000-0000000000b6'),
+  'false|00000000-0000-4000-8000-00000000ac02', 'baixar com outra conta não trava');
+select public.fin_reopen_entry('00000000-0000-4000-8000-0000000000b6');
+select is((select locked from fin_entries where id = '00000000-0000-4000-8000-0000000000b6'), false, 'reabrir não trava');
+update fin_entries set description = 'rec c editada' where id = '00000000-0000-4000-8000-0000000000b7';
+select is((select locked from fin_entries where id = '00000000-0000-4000-8000-0000000000b7'), true, 'editar a descrição trava');
 
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c3');
 select throws_ok($q$select public.fin_settle_entries(array['00000000-0000-4000-8000-0000000000b4']::uuid[], '2026-11-10')$q$, '42501', null, 'view_finance não liquida');

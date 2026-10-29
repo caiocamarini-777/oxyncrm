@@ -10,6 +10,9 @@ export const SETTINGS = [
   "view_reports",
   "create_dashboards",
   "share_dashboards",
+  "view_finance",
+  "manage_finance",
+  "register_sales",
 ] as const;
 
 const visibilityEnum = z.enum(VISIBILITY);
@@ -43,6 +46,10 @@ export const permissionsSchema = z
         view_reports: z.boolean(),
         create_dashboards: z.boolean(),
         share_dashboards: z.boolean(),
+        // Opcionais: papéis antigos não têm as chaves de finanças.
+        view_finance: z.boolean().optional(),
+        manage_finance: z.boolean().optional(),
+        register_sales: z.boolean().optional(),
       })
       .strict(),
   })
@@ -67,5 +74,8 @@ export const DEFAULT_PERMISSIONS: Permissions = {
     view_reports: true,
     create_dashboards: true,
     share_dashboards: false,
+    view_finance: false,
+    manage_finance: false,
+    register_sales: false,
   },
 };

@@ -33,4 +33,20 @@ describe("permissionsSchema", () => {
     expect(Object.keys(DEFAULT_PERMISSIONS.visibility)).toEqual([...ENTITIES]);
     expect(Object.values(DEFAULT_PERMISSIONS.visibility).every((v) => v === "own")).toBe(true);
   });
+  it("aceita papel sem as chaves de finanças", () => {
+    const p = clone();
+    delete p.settings.view_finance;
+    delete p.settings.manage_finance;
+    delete p.settings.register_sales;
+    expect(permissionsSchema.safeParse(p).success).toBe(true);
+  });
+  it("aceita view_finance verdadeiro", () => {
+    const p = { ...DEFAULT_PERMISSIONS, settings: { ...DEFAULT_PERMISSIONS.settings, view_finance: true } };
+    expect(permissionsSchema.safeParse(p).success).toBe(true);
+  });
+  it("padrão traz as chaves de finanças desligadas", () => {
+    expect(DEFAULT_PERMISSIONS.settings.manage_finance).toBe(false);
+    expect(DEFAULT_PERMISSIONS.settings.view_finance).toBe(false);
+    expect(DEFAULT_PERMISSIONS.settings.register_sales).toBe(false);
+  });
 });

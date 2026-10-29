@@ -61,3 +61,42 @@ export function matchOrganization<T extends { name: string }>(lineName: string, 
   }
   return best;
 }
+
+export type ImportDecision = { action: "keep"; id: string } | { action: "skip"; id: string } | { action: "create" };
+
+/**
+ * Contrato da planilha × contratos da empresa. "keep": já importado (marca "[import:<key>]" nas observações);
+ * "skip": sem a marca, mas há um contrato não cancelado do mesmo cliente com o mesmo título (a marca foi
+ * apagada ou foi criado à mão) — não cria outro, para não duplicar a projeção; "create": nenhum dos dois.
+ */
+export function decideContract(
+  existing: readonly { id: string; notes: string | null; title: string; organizationId: string | null; status: string }[],
+  c: { key: string; title: string; organizationId: string | null },
+): ImportDecision {
+  const marker = `[import:${c.key}]`;
+  const marked = existing.find((r) => (r.notes ?? "").includes(marker));
+  if (marked) return { action: "keep", id: marked.id };
+  const same = existing.find(
+    (r) =>
+      r.status !== "cancelled" &&
+      r.organizationId === c.organizationId &&
+      normalizeName(r.title) === normalizeName(c.title),
+  );
+  return same ? { action: "skip", id: same.id } : { action: "create" };
+}
+
+/**
+ * Despesa recorrente da planilha × despesas da empresa. "keep": mesma descrição, categoria e mês de início;
+ * "skip": mesma descrição normalizada com outra categoria/início (editada depois da carga) — não cria outra;
+ * "create": descrição nova.
+ */
+export function decideRecurring(
+  existing: readonly { id: string; description: string; expenseCategoryId: string; startMonth: string }[],
+  r: { description: string; expenseCategoryId: string; startMonth: string },
+): ImportDecision {
+  const n = normalizeName(r.description);
+  const same = existing.filter((e) => normalizeName(e.description) === n);
+  const exact = same.find((e) => e.expenseCategoryId === r.expenseCategoryId && e.startMonth === r.startMonth);
+  if (exact) return { action: "keep", id: exact.id };
+  return same[0] ? { action: "skip", id: same[0].id } : { action: "create" };
+}

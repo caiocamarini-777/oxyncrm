@@ -6,12 +6,20 @@
 //
 // Repetir não duplica:
 // - lançamentos: upsert por source_key = "import:<key>"; um lançamento já liquidado no sistema não é alterado;
-// - contratos: marcados nas observações com "[import:<key>]"; se já existe, fica como está;
-// - despesas recorrentes: casadas por (empresa, descrição, categoria, mês de início); se já existe, fica como está.
+// - contratos: marcados nas observações com "[import:<key>]"; se já existe, fica como está; sem a marca, um
+//   contrato não cancelado do mesmo cliente e título é pulado com aviso (nunca cria um segundo);
+// - despesas recorrentes: casadas por (empresa, descrição, categoria, mês de início); mesma descrição com outra
+//   categoria/início é pulada com aviso (nunca cria uma segunda).
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { loadEnv, requireDbUrl } from "./load-env";
-import { matchCategory, matchOrganization, normalizeName } from "../src/lib/finance/import/match";
+import {
+  decideContract,
+  decideRecurring,
+  matchCategory,
+  matchOrganization,
+  normalizeName,
+} from "../src/lib/finance/import/match";
 import { financeImportSchema, type FinanceImport } from "../src/lib/finance/import/schema";
 
 loadEnv();
@@ -146,17 +154,29 @@ async function run(tx: Tx, data: FinanceImport, opts: { dryRun: boolean; as?: st
   };
 
   // Contratos: criados em rascunho e ativados pela RPC (o trigger gera os lançamentos).
+  // Nunca duplica: sem a marca "[import:<key>]", um contrato não cancelado do mesmo cliente e título é pulado.
   let contractsCreated = 0;
   let contractsKept = 0;
+  let contractsSkipped = 0;
+  const existingContracts = (
+    await tx`select id, notes, title, organization_id, status from fin_contracts where company_id = ${companyId}`
+  ).map((r) => ({ id: r.id, notes: r.notes, title: r.title, organizationId: r.organization_id, status: r.status }));
   for (const c of data.contracts) {
     const marker = `[import:${c.key}]`;
-    const [existing] = await tx`
-      select id from fin_contracts where company_id = ${companyId} and position(${marker} in coalesce(notes, '')) > 0`;
-    if (existing) {
+    if (decideContract(existingContracts, { ...c, organizationId: null }).action === "keep") {
       contractsKept++;
       continue;
     }
     const orgId = await organization(c.organizationName, c.organizationId);
+    const decision = decideContract(existingContracts, { ...c, organizationId: orgId });
+    if (decision.action !== "create") {
+      contractsSkipped++;
+      warnings.push(
+        `Contrato "${c.title}" não foi criado: já existe um contrato do mesmo cliente com esse título ` +
+          `(${decision.id}) sem a marca ${marker}. Confira à mão.`,
+      );
+      continue;
+    }
     const [row] = await tx`
       insert into fin_contracts (company_id, organization_id, title, due_day, retention_rate, account_id, end_rule,
         renewal_months, adjust_kind, adjust_index, adjust_rate, notes)
@@ -172,27 +192,42 @@ async function run(tx: Tx, data: FinanceImport, opts: { dryRun: boolean; as?: st
           ${l.firstMonth}, ${l.installments ?? 1}, ${l.months ?? null})`;
     }
     await tx`select fin_activate_contract(${row.id})`;
+    existingContracts.push({ id: row.id, notes: `Importado da planilha ${marker}`, title: c.title, organizationId: orgId, status: "active" });
     contractsCreated++;
   }
 
-  // Despesas recorrentes (o trigger gera os lançamentos).
+  // Despesas recorrentes (o trigger gera os lançamentos). Nunca duplica: mesma descrição normalizada com outra
+  // categoria ou mês de início (editada depois da carga) é pulada com aviso.
   let expensesCreated = 0;
   let expensesKept = 0;
+  let expensesSkipped = 0;
+  const existingExpenses = (
+    await tx`
+      select id, description, expense_category_id, to_char(start_month, 'YYYY-MM-DD') as start_month
+        from fin_recurring_expenses where company_id = ${companyId}`
+  ).map((r) => ({ id: r.id, description: r.description, expenseCategoryId: r.expense_category_id, startMonth: r.start_month }));
   for (const r of data.recurringExpenses) {
-    const catId = expenseCat(r.expenseCategory);
-    const [existing] = await tx`
-      select id from fin_recurring_expenses
-       where company_id = ${companyId} and lower(description) = lower(${r.description})
-         and expense_category_id = ${catId} and start_month = ${r.startMonth}`;
-    if (existing) {
+    const catId = expenseCat(r.expenseCategory)!;
+    const decision = decideRecurring(existingExpenses, { description: r.description, expenseCategoryId: catId, startMonth: r.startMonth });
+    if (decision.action === "keep") {
       expensesKept++;
       continue;
     }
-    await tx`
+    if (decision.action === "skip") {
+      expensesSkipped++;
+      warnings.push(
+        `Despesa recorrente "${r.description}" não foi criada: já existe uma com essa descrição (${decision.id}) ` +
+          `com outra categoria ou mês de início. Confira à mão.`,
+      );
+      continue;
+    }
+    const [row] = await tx`
       insert into fin_recurring_expenses (company_id, description, expense_category_id, nature, amount, frequency,
         due_day, start_month, end_month, installments, account_id)
       values (${companyId}, ${r.description}, ${catId}, ${r.nature}, ${r.amount}, ${r.frequency}, ${r.dueDay},
-        ${r.startMonth}, ${r.endMonth ?? null}, ${r.installments ?? null}, ${account(r.accountKey)})`;
+        ${r.startMonth}, ${r.endMonth ?? null}, ${r.installments ?? null}, ${account(r.accountKey)})
+      returning id`;
+    existingExpenses.push({ id: row.id, description: r.description, expenseCategoryId: catId, startMonth: r.startMonth });
     expensesCreated++;
   }
 
@@ -252,8 +287,8 @@ async function run(tx: Tx, data: FinanceImport, opts: { dryRun: boolean; as?: st
            count(*) filter (where source_kind = 'recurring') as recurring
       from fin_entries where company_id = ${companyId}`;
   console.log(
-    `\nContratos: ${contractsCreated} criados e ativados, ${contractsKept} já existiam` +
-      `\nDespesas recorrentes: ${expensesCreated} criadas, ${expensesKept} já existiam` +
+    `\nContratos: ${contractsCreated} criados e ativados, ${contractsKept} já existiam, ${contractsSkipped} pulados` +
+      `\nDespesas recorrentes: ${expensesCreated} criadas, ${expensesKept} já existiam, ${expensesSkipped} puladas` +
       `\nOrganizações criadas: ${orgsCreated}` +
       `\nLançamentos do JSON: ${inserted} inseridos, ${updated} atualizados, ${kept} mantidos (já liquidados no sistema)` +
       `\nNo banco: ${counts.imported} lançamentos importados (${counts.settled} liquidados, ${counts.open} em aberto), ` +

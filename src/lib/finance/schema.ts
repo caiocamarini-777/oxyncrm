@@ -78,3 +78,173 @@ export const settleSchema = z
       ctx.addIssue({ code: "custom", path: ["amount"], message: "O valor só pode ser alterado ao baixar um lançamento." });
   });
 export type SettleInput = z.input<typeof settleSchema>;
+
+// ---------------------------------------------------------------------------
+// Contratos, despesas recorrentes e configurações (Task 12)
+// ---------------------------------------------------------------------------
+
+const blank = (v: unknown) => v === "" || v === undefined || v === null;
+
+/** Inteiro opcional vindo de formulário ("" vira null). */
+const optInt = (min: number, max: number, invalid: string) =>
+  z.preprocess(
+    (v) => (blank(v) ? null : typeof v === "string" ? Number(v.trim()) : v),
+    z
+      .number({ message: invalid })
+      .int(invalid)
+      .min(min, invalid)
+      .max(max, invalid)
+      .nullable(),
+  );
+
+/** Percentual de 0 a 100 (até 3 casas); vazio vale `empty`. */
+const pct = (empty: number | null) =>
+  z.preprocess(
+    (v) => (blank(v) ? empty : typeof v === "string" ? (parseBRL(v) ?? Number.NaN) : v),
+    z
+      .number({ message: "Informe um percentual válido." })
+      .refine((n) => Number.isFinite(n) && n >= 0 && n <= 100, "O percentual vai de 0 a 100.")
+      .nullable(),
+  );
+
+const optText = (max: number) =>
+  z.preprocess(
+    (v) => (typeof v === "string" ? (v.trim() === "" ? null : v.trim()) : (v ?? null)),
+    z.string().max(max, `Use no máximo ${max} caracteres.`).nullable(),
+  );
+
+/** "YYYY-MM" (ou "YYYY-MM-01") vira o primeiro dia do mês. */
+const monthStart = (required: string) =>
+  z
+    .string({ message: required })
+    .regex(/^\d{4}-(0[1-9]|1[0-2])(-01)?$/, required)
+    .transform((s) => `${s.slice(0, 7)}-01`);
+
+const optMonthStart = z.preprocess(
+  (v) => (blank(v) ? null : v),
+  monthStart("Informe um mês válido.").nullable(),
+);
+
+export const END_RULES = ["ends", "auto_renew", "renew_adjust", "confirm"] as const;
+export const ADJUST_KINDS = ["none", "percent", "index"] as const;
+export const ADJUST_INDEXES = ["IPCA", "IGP-M", "INPC"] as const;
+
+export const contractSchema = z
+  .object({
+    title: z.string().trim().min(1, "Informe o título.").max(200, "Use no máximo 200 caracteres."),
+    organizationId: optionalUuid,
+    dueDay: optInt(1, 31, "O dia de vencimento vai de 1 a 31."),
+    retentionRate: pct(0).transform((v) => v ?? 0),
+    accountId: optionalUuid,
+    endRule: z.preprocess((v) => (blank(v) ? null : v), z.enum(END_RULES, { message: "Escolha a regra de fim." }).nullable()),
+    renewalMonths: optInt(1, 120, "A renovação vai de 1 a 120 meses."),
+    adjustKind: z.enum(ADJUST_KINDS, { message: "Escolha o tipo de reajuste." }),
+    adjustIndex: z.preprocess((v) => (blank(v) ? null : v), z.enum(ADJUST_INDEXES, { message: "Informe o índice." }).nullable()),
+    adjustRate: pct(0).transform((v) => v ?? 0),
+    notes: optText(2000),
+  })
+  .superRefine((v, ctx) => {
+    if (v.adjustKind === "index" && !v.adjustIndex)
+      ctx.addIssue({ code: "custom", path: ["adjustIndex"], message: "Informe o índice." });
+  });
+export type ContractInput = z.input<typeof contractSchema>;
+
+export const LINE_KINDS = ["setup", "recurring", "commission"] as const;
+
+const optMoney = z.preprocess(
+  (v) => (blank(v) ? null : v),
+  brl("Informe um valor válido.")
+    .refine((n) => Number.isFinite(n) && n >= 0, "Informe um valor válido.")
+    .refine((n) => Number.isInteger(Math.round(n * 1e6) / 1e4), "Use no máximo 2 casas decimais.")
+    .nullable(),
+);
+
+export const contractLineSchema = z
+  .object({
+    kind: z.enum(LINE_KINDS, { message: "Escolha o tipo da linha." }),
+    description: z.string().trim().min(1, "Informe a descrição.").max(200, "Use no máximo 200 caracteres."),
+    serviceCategoryId: optionalUuid,
+    amount: z.unknown().optional(),
+    firstMonth: monthStart("Informe o mês inicial."),
+    installments: z.preprocess(
+      (v) => (blank(v) ? 1 : typeof v === "string" ? Number(v.trim()) : v),
+      z.number({ message: "Informe as parcelas (1 a 60)." }).int("Informe as parcelas (1 a 60).").min(1, "Informe as parcelas (1 a 60).").max(60, "Informe as parcelas (1 a 60)."),
+    ),
+    months: z.preprocess(
+      (v) => (blank(v) ? null : typeof v === "string" ? Number(v.trim()) : v),
+      z.number({ message: "Informe a duração em meses." }).int("Informe a duração em meses.").min(1, "A duração vai de 1 a 120 meses.").max(120, "A duração vai de 1 a 120 meses.").nullable(),
+    ),
+    setupRate: pct(null),
+    recurringRate: pct(null),
+    estimatedMonthly: optMoney,
+  })
+  .superRefine((v, ctx) => {
+    if (v.kind !== "commission") {
+      const r = money.safeParse(v.amount);
+      if (!r.success) ctx.addIssue({ code: "custom", path: ["amount"], message: r.error.issues[0].message });
+    }
+    if (v.kind !== "setup" && v.months === null)
+      ctx.addIssue({ code: "custom", path: ["months"], message: "Informe a duração em meses." });
+    if (v.kind === "commission" && v.setupRate === null && v.recurringRate === null)
+      ctx.addIssue({ code: "custom", path: ["setupRate"], message: "Informe ao menos um percentual." });
+  })
+  .transform((v) => {
+    const commission = v.kind === "commission";
+    return {
+      kind: v.kind,
+      description: v.description,
+      serviceCategoryId: v.serviceCategoryId,
+      amount: commission ? null : (money.parse(v.amount) as number),
+      firstMonth: v.firstMonth,
+      installments: v.kind === "setup" ? v.installments : 1,
+      months: v.kind === "setup" ? null : v.months,
+      setupRate: commission ? v.setupRate : null,
+      recurringRate: commission ? v.recurringRate : null,
+      estimatedMonthly: commission ? v.estimatedMonthly : null,
+    };
+  });
+export type ContractLineInput = z.input<typeof contractLineSchema>;
+
+export const recurringExpenseSchema = z.object({
+  description: z.string().trim().min(1, "Informe a descrição.").max(200, "Use no máximo 200 caracteres."),
+  payee: optText(200),
+  expenseCategoryId: z.string({ message: "Escolha a categoria da despesa." }).uuid("Escolha a categoria da despesa."),
+  nature: z.enum(ENTRY_NATURES, { message: "Escolha a natureza da despesa." }),
+  amount: money,
+  frequency: z.enum(["monthly", "quarterly", "yearly"], { message: "Escolha a frequência." }).default("monthly"),
+  dueDay: z.preprocess(
+    (v) => (typeof v === "string" ? Number(v.trim()) : v),
+    z.number({ message: "O dia de vencimento vai de 1 a 31." }).int("O dia de vencimento vai de 1 a 31.").min(1, "O dia de vencimento vai de 1 a 31.").max(31, "O dia de vencimento vai de 1 a 31."),
+  ),
+  startMonth: monthStart("Informe o mês inicial."),
+  endMonth: optMonthStart,
+  installments: optInt(1, 360, "As parcelas vão de 1 a 360."),
+  adjustRate: pct(0).transform((v) => v ?? 0),
+  adjustMonth: optInt(1, 12, "O mês de reajuste vai de 1 a 12."),
+  accountId: optionalUuid,
+});
+export type RecurringExpenseInput = z.input<typeof recurringExpenseSchema>;
+
+const name80 = z.string().trim().min(1, "Informe o nome.").max(80, "Use no máximo 80 caracteres.");
+
+export const accountSchema = z.object({ name: name80, bank: optText(80) });
+export type AccountInput = z.input<typeof accountSchema>;
+
+export const incomeCategorySchema = z.object({ name: name80 });
+export type IncomeCategoryInput = z.input<typeof incomeCategorySchema>;
+
+export const expenseCategorySchema = z.object({
+  name: name80,
+  defaultNature: z.enum(ENTRY_NATURES, { message: "Escolha a natureza padrão." }),
+});
+export type ExpenseCategoryInput = z.input<typeof expenseCategorySchema>;
+
+export const balanceSnapshotSchema = z.object({
+  asOf: isoDate,
+  balance: brl("Informe um valor válido.")
+    .refine((n) => Number.isFinite(n), "Informe um valor válido.")
+    .refine((n) => Number.isInteger(Math.round(n * 1e6) / 1e4), "Use no máximo 2 casas decimais.")
+    .refine((n) => Math.abs(n) < 1e12, "Valor muito alto."),
+  note: optText(200),
+});
+export type BalanceSnapshotInput = z.input<typeof balanceSnapshotSchema>;

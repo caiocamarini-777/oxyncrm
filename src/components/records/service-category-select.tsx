@@ -23,6 +23,7 @@ export function ServiceCategorySelect({
   id,
   disabled = false,
   ariaLabel,
+  emptyLabel = "Sem categoria",
 }: {
   companyId: string;
   value: string | null;
@@ -31,6 +32,8 @@ export function ServiceCategorySelect({
   id?: string;
   disabled?: boolean;
   ariaLabel?: string;
+  /** Texto da opção vazia (na inclusão de item ela significa "herdar do produto"). */
+  emptyLabel?: string;
 }) {
   const [options, setOptions] = useState<Option[]>([]);
   const [creating, setCreating] = useState(false);
@@ -88,7 +91,7 @@ export function ServiceCategorySelect({
           onChange(e.target.value || null);
         }}
       >
-        <option value="">Sem categoria</option>
+        <option value="">{emptyLabel}</option>
         {visible.map((o) => (
           <option key={o.id} value={o.id}>
             {o.name}

@@ -82,6 +82,7 @@ test("cria categoria, usa no produto e no item do negócio, e recusa nome repeti
   await page.goto(`/${slug}/negocios/${dealId}`);
   await page.getByRole("button", { name: "Adicionar produto" }).click();
   const dlg = page.getByRole("dialog");
+  await expect(dlg.getByLabel("Categoria de serviço").locator("option").first()).toHaveText("Categoria do produto");
   await dlg.getByLabel("Produto", { exact: true }).selectOption({ label: `${PRODUCT} (Setup)` });
   await expect(dlg.getByLabel("Categoria de serviço")).toHaveValue(/.+/);
   await dlg.getByLabel("Mês da 1ª parcela").fill("2026-05");

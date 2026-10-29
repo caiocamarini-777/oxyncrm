@@ -89,13 +89,13 @@ export async function reorderServiceCategories(companyId: string, ids: string[])
     return { ok: false, error: "Dados inválidos." };
   }
   const supabase = await createServerClient();
-  const results = await Promise.all(
-    ids.map((id, position) =>
-      supabase.from("service_categories").update({ position }).eq("id", id).eq("company_id", companyId),
-    ),
-  );
-  const failed = results.find((r) => r.error);
-  if (failed?.error) return { ok: false, error: translateDbError(failed.error) };
+  const { error } = await supabase.rpc("reorder_service_categories", { p_company: companyId, p_ids: ids });
+  if (error) {
+    if (error.message.includes("OXYN_CATEGORIES_MISMATCH")) {
+      return { ok: false, error: "A lista de categorias mudou. Recarregue a página." };
+    }
+    return { ok: false, error: translateDbError(error) };
+  }
   revalidatePath(PATH);
   return { ok: true, data: undefined };
 }

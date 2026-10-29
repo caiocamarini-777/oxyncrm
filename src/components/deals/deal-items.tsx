@@ -242,6 +242,7 @@ export function DealItems({
                   value={draft.serviceCategoryId}
                   onChange={(v) => setDraft((d) => ({ ...d, serviceCategoryId: v }))}
                   allowCreate={canCreateCategory}
+                  emptyLabel={editing ? "Sem categoria" : "Categoria do produto"}
                 />
               </Field>
               <div className="grid grid-cols-3 gap-3">

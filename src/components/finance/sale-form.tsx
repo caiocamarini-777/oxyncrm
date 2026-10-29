@@ -37,7 +37,7 @@ export type MySale = {
 const optionLabel = (o: SaleContractOption) => (o.clientName ? `${o.contractTitle} – ${o.clientName}` : o.contractTitle);
 const money = (n: number) => (n > 0 ? toInput(n) : "");
 
-function SaleDialog({
+export function SaleDialog({
   companyId,
   contracts,
   sale,
@@ -276,6 +276,45 @@ export function SalesManager({
           onOpenChange={(o) => !o && setEditing(null)}
           today={today}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/** Ações do gestor numa linha da aba Vendas do Financeiro: editar e cancelar qualquer venda. */
+export function ManagerSaleActions({
+  companyId,
+  contracts,
+  sale,
+  today,
+}: {
+  companyId: string;
+  contracts: SaleContractOption[];
+  sale: MySale;
+  today: string;
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+
+  async function cancel() {
+    if (!window.confirm(`Cancelar a venda para ${sale.buyer}?`)) return;
+    const r = await cancelSale(sale.id);
+    if (!r.ok) return toast.error(r.error);
+    toast.success("Venda cancelada.");
+    router.refresh();
+  }
+
+  if (sale.status !== "active") return null;
+  return (
+    <div className="flex justify-end gap-2">
+      <Button type="button" variant="outline" size="sm" aria-label={`Editar venda ${sale.buyer}`} onClick={() => setEditing(true)}>
+        Editar
+      </Button>
+      <Button type="button" variant="ghost" size="sm" aria-label={`Cancelar venda ${sale.buyer}`} onClick={cancel}>
+        Cancelar
+      </Button>
+      {editing ? (
+        <SaleDialog companyId={companyId} contracts={contracts} sale={sale} open onOpenChange={setEditing} today={today} />
       ) : null}
     </div>
   );

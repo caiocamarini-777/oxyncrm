@@ -190,3 +190,43 @@ test("4) o vendedor edita e cancela a venda; o admin vê a comissão sumir", asy
   const open = await admin().from("fin_entries").select("id, status").eq("company_id", companyId).eq("source_kind", "sale");
   expect(open.data ?? []).toHaveLength(0);
 });
+
+test("5) o gestor edita e cancela a venda de um vendedor em Financeiro > Vendas", async ({ page }) => {
+  const a = admin();
+  const line = await a.from("fin_contract_lines").select("id").eq("contract_id", contractId).eq("kind", "commission").single();
+  if (line.error) throw line.error;
+  const buyer2 = `Cliente Gestor ${stamp}`;
+  const sale = await a
+    .from("fin_client_sales")
+    .insert({
+      company_id: companyId,
+      contract_id: contractId,
+      contract_line_id: line.data.id,
+      buyer: buyer2,
+      sold_on: `${thisMonth}-05`,
+      setup_value: 3000,
+      setup_installments: 1,
+      setup_first_month: `${thisMonth}-01`,
+    })
+    .select("id")
+    .single();
+  if (sale.error) throw sale.error;
+
+  await signIn(page, adminEmail);
+  await page.goto(`/${slug}/financeiro/vendas`);
+  const row = () => page.getByRole("row", { name: new RegExp(buyer2) });
+  await expect(row()).toContainText("R$ 300,00");
+
+  await page.getByRole("button", { name: `Editar venda ${buyer2}` }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Valor do setup").fill("5.000,00");
+  await dialog.getByRole("button", { name: "Salvar" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(row()).toContainText("R$ 500,00");
+
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: `Cancelar venda ${buyer2}` }).click();
+  await expect(row()).toContainText("Cancelada");
+  await expect(row()).toContainText("R$ 0,00");
+  await expect(row()).not.toContainText("R$ 500,00");
+});

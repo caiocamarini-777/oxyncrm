@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ManagerSaleActions, type SaleContractOption } from "@/components/finance/sale-form";
 import { Button } from "@/components/ui/button";
 import type { SaleRow } from "@/lib/finance/queries";
 import { formatDate, formatMoney } from "@/lib/records/format";
@@ -10,11 +11,13 @@ type Props = {
   empresa: string;
   contracts: { id: string; title: string }[];
   sellers: { id: string; name: string }[];
+  /** Só para quem tem manage: habilita editar e cancelar (contratos = opções de fin_sales_contracts). */
+  manage?: { companyId: string; contracts: SaleContractOption[]; today: string };
   filters: { contractId: string | null; sellerId: string | null; month: string | null };
 };
 
 /** Aba Vendas do Financeiro: filtros (GET) e a tabela de todas as vendas com comissão prevista e recebida. */
-export function FinanceSalesTable({ sales, empresa, contracts, sellers, filters }: Props) {
+export function FinanceSalesTable({ sales, empresa, contracts, sellers, filters, manage }: Props) {
   const totalExpected = sales.reduce((a, s) => a + s.expected, 0);
   const totalReceived = sales.reduce((a, s) => a + s.received, 0);
   const filtered = !!(filters.contractId || filters.sellerId || filters.month);
@@ -66,6 +69,7 @@ export function FinanceSalesTable({ sales, empresa, contracts, sellers, filters 
                 <th className="px-3 py-2 text-right">Recorrência</th>
                 <th className="px-3 py-2 text-right">Comissão prevista</th>
                 <th className="px-3 py-2 text-right">Comissão recebida</th>
+                {manage ? <th className="px-3 py-2" /> : null}
               </tr>
             </thead>
             <tbody>
@@ -89,6 +93,31 @@ export function FinanceSalesTable({ sales, empresa, contracts, sellers, filters 
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatMoney(s.expected)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatMoney(s.received)}</td>
+                  {manage ? (
+                    <td className="px-3 py-2">
+                      <ManagerSaleActions
+                        companyId={manage.companyId}
+                        contracts={manage.contracts}
+                        today={manage.today}
+                        sale={{
+                          id: s.id,
+                          contractTitle: s.contractTitle,
+                          buyer: s.buyer,
+                          soldOn: s.soldOn,
+                          setupValue: s.setupValue,
+                          recurringValue: s.recurringValue,
+                          recurringMonths: s.recurringMonths,
+                          status: s.status,
+                          editable: true,
+                          lineId: s.lineId,
+                          setupInstallments: s.setupInstallments,
+                          setupFirstMonth: s.setupFirstMonth,
+                          recurringStart: s.recurringStart,
+                          note: s.note,
+                        }}
+                      />
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
@@ -97,6 +126,7 @@ export function FinanceSalesTable({ sales, empresa, contracts, sellers, filters 
                 <td className="px-3 py-2" colSpan={6}>Total</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatMoney(totalExpected)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatMoney(totalReceived)}</td>
+                {manage ? <td /> : null}
               </tr>
             </tfoot>
           </table>

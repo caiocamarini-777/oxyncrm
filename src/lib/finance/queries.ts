@@ -505,6 +505,11 @@ export type SaleRow = {
   recurringValue: number;
   recurringMonths: number | null;
   status: "active" | "cancelled";
+  lineId: string;
+  setupInstallments: number;
+  setupFirstMonth: string | null;
+  recurringStart: string | null;
+  note: string | null;
   /** Soma das comissões ainda não canceladas (previstas, incluindo as já recebidas). */
   expected: number;
   /** Soma das comissões já recebidas. */
@@ -519,7 +524,7 @@ export async function listSales(companyId: string, f: SalesFilters): Promise<Sal
   let q = supabase
     .from("fin_client_sales")
     .select(
-      "id, contract_id, buyer, sold_on, setup_value, recurring_value, recurring_months, status, created_by, fin_contracts(title, organizations(name))",
+      "id, contract_id, buyer, sold_on, setup_value, recurring_value, recurring_months, status, created_by, contract_line_id, setup_installments, setup_first_month, recurring_start, note, fin_contracts(title, organizations(name))",
     )
     .eq("company_id", companyId)
     .order("sold_on", { ascending: false })
@@ -571,6 +576,11 @@ export async function listSales(companyId: string, f: SalesFilters): Promise<Sal
       recurringValue: num(r.recurring_value),
       recurringMonths: r.recurring_months,
       status: r.status as SaleRow["status"],
+      lineId: r.contract_line_id,
+      setupInstallments: r.setup_installments,
+      setupFirstMonth: r.setup_first_month,
+      recurringStart: r.recurring_start,
+      note: r.note,
       expected: Math.round(sum.expected * 100) / 100,
       received: Math.round(sum.received * 100) / 100,
     };

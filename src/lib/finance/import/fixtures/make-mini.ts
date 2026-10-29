@@ -38,7 +38,7 @@ async function main() {
       { e: 10, g: "Cliente X", values: { 9: 100, 11: 100, 12: 100 } }, // 4
       { e: 10, g: "Cliente Y Setup", values: { 11: 1000 } }, // 5
       { g: "Vendas líquidas (entra no banco)", values: { 9: 90, 11: 1090, 12: 90 }, formula: true }, // 6
-      { b: "Investimentos", g: "Total mensal:", values: { 3: 1.5 }, formula: true }, // 7
+      { b: "Investimentos", values: { 3: 1.5 }, formula: true }, // 7 (na planilha real, só Vendas tem "Total mensal:")
       { g: "rendimento conta", values: { 3: 1.5 } }, // 8
     ],
     9,

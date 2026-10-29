@@ -113,17 +113,19 @@ function readLines(sheet: SheetName, rows: SheetRow[], markerRow: number, retent
 
   for (const r of rows) {
     if (r.row >= markerRow) break;
-    if (r.g && /^total mensal/i.test(r.g)) {
+    const bn = r.b ? normalizeName(r.b) : "";
+    if (bn === "despesasfixas") nature = "fixed";
+    else if (bn === "despesasvariaveis") nature = "variable";
+    // Grupo: texto na coluna B que não é marcador de subgrupo (na aba Renda, só Vendas tem "Total mensal:")
+    else if (r.b || (r.g && /^total mensal/i.test(r.g))) {
       group = r.b;
       nature = null;
       category = group ? matchCategory(group, options) : null;
       if (!category) unmapped.add(group ?? `(linha ${r.row} sem grupo)`);
       continue;
     }
-    const bn = r.b ? normalizeName(r.b) : "";
-    if (bn === "despesasfixas") nature = "fixed";
-    else if (bn === "despesasvariaveis") nature = "variable";
     if (!r.g || !group || !category) continue;
+    if (/^total mensal/i.test(r.g)) continue;
     if (/^(despesas pagas|vendas l[ií]quidas)/i.test(r.g)) continue;
     if (!r.months.some((v) => v !== null)) continue;
 

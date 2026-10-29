@@ -84,6 +84,12 @@ describe("extractWorkbook", () => {
     expect(draft.warnings.some((w) => w.includes("Internet"))).toBe(true);
   });
 
+  it("grupo da aba Renda sem \"Total mensal:\" também abre um grupo novo", () => {
+    const e = entry("Renda:8:2026-03");
+    expect(e).toMatchObject({ direction: "in", gross: 1.5, incomeCategory: "Investimentos/rendimentos", status: "settled" });
+    expect(e?.organizationName).toBeUndefined();
+  });
+
   it("check soma entradas líquidas e saídas por mês a partir do primeiro não conferido", () => {
     expect(draft.check).toEqual({
       "2026-11": { in: 1090, out: 600 },

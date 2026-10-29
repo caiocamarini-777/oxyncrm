@@ -1,8 +1,9 @@
 # Oxyn CRM
 
-CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades. A fase 6 entrega Relatórios, dashboards e metas. A fase 3.5 entrega a importação do Pipedrive.
+CRM multiempresa da Oxyn (Next.js 16 e Supabase hospedado). A fase 1 entrega a fundação: login, convites, empresas, usuários, papéis com permissões, equipes e perfil. A fase 2 entrega Contatos e Leads. A fase 3 entrega o funil de vendas e a receita (módulo Negócios). A fase 4 entrega as Atividades. A fase 6 entrega Relatórios, dashboards e metas. A fase 3.5 entrega a importação do Pipedrive. O módulo Financeiro entrega fluxo de caixa, contratos, despesas e vendas.
 
 - Especificação: [docs/superpowers/specs/2026-10-21-oxyn-crm-design.md](docs/superpowers/specs/2026-10-21-oxyn-crm-design.md)
+- Financeiro: [docs/superpowers/specs/2026-10-29-financeiro-design.md](docs/superpowers/specs/2026-10-29-financeiro-design.md)
 - Plano da fase 1: [docs/superpowers/plans/2026-10-21-fase-1-fundacao.md](docs/superpowers/plans/2026-10-21-fase-1-fundacao.md)
 - Pendências da fase 3.5: [docs/superpowers/followups/2026-10-26-fase-3-5-pendencias.md](docs/superpowers/followups/2026-10-26-fase-3-5-pendencias.md)
 - Pendências da fase 6: [docs/superpowers/followups/2026-10-25-fase-6-pendencias.md](docs/superpowers/followups/2026-10-25-fase-6-pendencias.md)
@@ -119,6 +120,51 @@ Atividades importadas ficam marcadas como legado. O canal é deduzido pelo tipo 
 ### Trava
 
 Só uma execução por job de cada vez: cada fatia toma uma concessão de 120 s, renovada a cada passo. Se o assistente e a linha de comando competirem, o segundo recebe "ocupado". Se uma execução cair, a concessão expira sozinha em até 120 s.
+
+## Financeiro
+
+Módulo de fluxo de caixa por empresa: contratos, despesas, lançamentos, projeção e vendas. Especificação: [docs/superpowers/specs/2026-10-29-financeiro-design.md](docs/superpowers/specs/2026-10-29-financeiro-design.md).
+
+### Ativação e permissões
+
+- **Ativação por empresa**: Configurações › Empresas › "Financeiro ativo", só para o admin geral (super admin). Ao ativar, as categorias padrão são criadas.
+- **Permissões**: `settings.view_finance` (ver), `settings.manage_finance` (gerir) e `register_sales` (registrar vendas). Quem só tem `register_sales` enxerga apenas `/<empresa>/vendas` e nunca os dados `fin_*`.
+
+### Telas
+
+- `/<empresa>/financeiro`: Mês, Projeção, Clientes, Serviços, Custos, Lançamentos, Contratos, Despesas, Vendas e Configurações.
+- `/<empresa>/vendas`: registro de vendas para quem só vende.
+
+### Regras de geração
+
+- **Contratos** geram lançamentos de parcelas de setup, recorrência e linhas de comissão. Regras de fim: `ends` (termina), `auto_renew` (renova sozinho), `renew_adjust` (renova com reajuste) e `confirm` (pede confirmação). O dia de vencimento é ajustado ao último dia do mês quando o mês é mais curto. Há retenção de impostos.
+- **Despesas recorrentes** têm frequência, parcelas e reajuste.
+- **Horizonte**: 36 meses, estendido pelo job do pg_cron `fin-extend-horizon`, mensal.
+- **Preservação**: lançamentos quitados e editados à mão (travados) nunca são regerados.
+- **Negócio ganho** gera um contrato em rascunho; é preciso ativá-lo.
+- **Vendas a clientes** geram a comissão no mês seguinte ao recebimento do cliente.
+- Linhas com vendas ou lançamentos quitados não podem ser removidas.
+
+### Saldo
+
+Cada conta tem um saldo informado em uma data. Lançamentos em aberto sempre contam; os quitados contam depois da data informada. Os quitados no mesmo dia do saldo informado são considerados já incluídos nele.
+
+### Carga inicial (planilha)
+
+```bash
+pnpm financeiro:extract <planilha.xlsx> [saida.json]
+pnpm import:financeiro <arquivo.json> [--dry-run] [--as <email>]
+```
+
+A carga roda com a identidade de um admin geral (`--as`). Reexecutar não duplica: os contratos são encontrados pela marca `[import:<chave>]` nas observações, e uma correspondência por fallback é ignorada com aviso. Os dados vão apenas para o banco de `.env.local`.
+
+### Migrações
+
+`20261030000001`, `000002`, `000100`, `000104` a `000109` e `000115` a `000117`. A `000100` foi aplicada antes das demais, por isso as seguintes usam a numeração `0001NN`.
+
+### E2E
+
+Se outro checkout já ocupa a porta 3000, rode os specs do Playwright contra um servidor próprio com `E2E_BASE_URL` (por exemplo `E2E_BASE_URL=http://localhost:3100 pnpm test:e2e`).
 
 ## Lembretes de atividades
 

@@ -6,13 +6,14 @@ import {
   isNavItemEnabled,
   navHref,
   reportsSharedOnly,
+  scopeCanViewFinance,
   scopeCanViewReports,
 } from "./nav";
 
 const get = (key: string) => NAV_ITEMS.find((i) => i.key === key)!;
 
 describe("nav", () => {
-  it("fases entregues pulam a 5", () => expect(DELIVERED_PHASES).toEqual([1, 2, 3, 4, 6]));
+  it("fases entregues pulam a 5", () => expect(DELIVERED_PHASES).toEqual([1, 2, 3, 4, 6, 8]));
   it("itens de fases futuras ficam desabilitados", () => {
     expect(isNavItemEnabled(get("email"), true)).toBe(false);
   });
@@ -46,6 +47,21 @@ describe("nav", () => {
     expect(scopeCanViewReports("naia", "todas", ["volt"])).toBe(false);
     expect(scopeCanViewReports("volt", "todas", ["volt"])).toBe(true);
     expect(scopeCanViewReports(null, "todas", ["volt"])).toBe(false);
+  });
+  it("financeiro só aparece com canViewFinance, até para o admin geral", () => {
+    const base = { canViewReports: true, hasSharedDashboards: false };
+    expect(DELIVERED_PHASES).toContain(8);
+    expect(isNavItemEnabled(get("financeiro"), false, { ...base, canViewFinance: true })).toBe(true);
+    expect(isNavItemEnabled(get("financeiro"), false, base)).toBe(false);
+    expect(isNavItemEnabled(get("financeiro"), true, { ...base, canViewFinance: false })).toBe(false);
+    expect(isNavItemEnabled(get("financeiro"), true)).toBe(false);
+    expect(navHref(get("financeiro"), "volt")).toBe("/volt/financeiro");
+  });
+  it("view_finance vale só numa empresa específica, nunca em todas", () => {
+    expect(scopeCanViewFinance("volt", "todas", ["volt"])).toBe(true);
+    expect(scopeCanViewFinance("naia", "todas", ["volt"])).toBe(false);
+    expect(scopeCanViewFinance("todas", "todas", ["volt"])).toBe(false);
+    expect(scopeCanViewFinance(null, "todas", ["volt"])).toBe(false);
   });
   it("configurações só para admin geral", () => {
     expect(isNavItemEnabled(get("configuracoes"), false)).toBe(false);

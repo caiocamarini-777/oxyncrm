@@ -1,12 +1,17 @@
 begin;
-select plan(31);
+select plan(36);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   perform set_config('role', 'authenticated', true);
 end $$;
-grant execute on function pg_temp.as_user(uuid) to public;
+create function pg_temp.as_pg() returns void language plpgsql as $$
+begin
+  perform set_config('role', 'none', true);
+  perform set_config('request.jwt.claims', '', true);
+end $$;
+grant execute on function pg_temp.as_user(uuid), pg_temp.as_pg() to public;
 
 insert into companies (id, name, slug) values
   ('00000000-0000-4000-8000-0000000000d1', 'Fin Vendas', 'tst-fin-sales');
@@ -137,6 +142,18 @@ select is((select string_agg(kind_tag || ':' || status || ':' || gross, ',') fro
 select is((select status from fin_client_sales where id = current_setting('tst.s1')::uuid), 'cancelled', 'venda marcada cancelada');
 select is((select count(*)::int from fin_client_sales), 3, 'gestor lê as vendas');
 
+-- Linha de comissão ou contrato com vendas não podem ser apagados (sem cascata silenciosa).
+select set_config('tst.snap', (select string_agg(client_sale_id || ':' || competence || ':' || kind_tag || ':' || status || ':' || gross, ',' order by client_sale_id, competence, kind_tag)
+  from fin_entries where client_sale_id is not null), true);
+select throws_ok($q$delete from fin_contract_lines where id = '00000000-0000-4000-8000-000000000a11'$q$, '23503', null,
+  'apagar linha de comissão com vendas dá 23503');
+select throws_ok($q$delete from fin_contracts where id = '00000000-0000-4000-8000-0000000000f1'$q$, '23503', null,
+  'apagar contrato com vendas dá 23503');
+select is((select count(*)::int from fin_client_sales s join fin_contract_lines l on l.id = s.contract_line_id
+            where s.contract_id = '00000000-0000-4000-8000-0000000000f1'), 3, 'vendas, linha e contrato continuam');
+select is((select string_agg(client_sale_id || ':' || competence || ':' || kind_tag || ':' || status || ':' || gross, ',' order by client_sale_id, competence, kind_tag)
+  from fin_entries where client_sale_id is not null), current_setting('tst.snap'), 'entries das vendas inalteradas');
+
 -- Sem register_sales: 42501 em todas as funções.
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c7');
 select throws_ok($q$select * from public.fin_sales_contracts('00000000-0000-4000-8000-0000000000d1')$q$, '42501', null, 'sem permissão: fin_sales_contracts');
@@ -144,6 +161,10 @@ select throws_ok($q$select * from public.fin_my_sales('00000000-0000-4000-8000-0
 select throws_ok($q$select public.fin_save_sale(null, '{"contract_id":"00000000-0000-4000-8000-0000000000f1","line_id":"00000000-0000-4000-8000-000000000a11","buyer":"Z","sold_on":"2026-10-20","setup_value":10,"setup_first_month":"2026-11-01"}'::jsonb)$q$,
   '42501', null, 'sem permissão: fin_save_sale');
 select throws_ok(format($q$select public.fin_cancel_sale(%L)$q$, current_setting('tst.s3')), '42501', null, 'sem permissão: fin_cancel_sale');
+
+-- Apagar a empresa leva contratos e vendas juntos (o bloqueio vale só para apagar contrato/linha).
+select pg_temp.as_pg();
+select lives_ok($q$delete from companies where id = '00000000-0000-4000-8000-0000000000d1'$q$, 'apagar a empresa com vendas funciona');
 
 select * from finish();
 rollback;

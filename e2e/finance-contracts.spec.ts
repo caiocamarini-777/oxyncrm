@@ -204,3 +204,47 @@ test("3) editar linha de contrato ativo mantém o mês liquidado e não deixa re
   await expect(page.getByRole("alert").filter({ hasText: "Esta linha já tem lançamentos liquidados ou editados e não pode ser removida." })).toBeVisible();
   expect(await entries()).toHaveLength(3);
 });
+
+test("4) linha de comissão com vendas cadastradas não pode ser removida", async ({ page }) => {
+  const a = admin();
+  const account = await a.from("fin_accounts").select("id").eq("company_id", companyId).limit(1).single();
+  const cat = await a.from("service_categories").select("id").eq("company_id", companyId).limit(1).single();
+  if (account.error || cat.error) throw account.error ?? cat.error;
+  const c = await a
+    .from("fin_contracts")
+    .insert({ company_id: companyId, title: `Comissão E2E ${stamp}`, status: "active", due_day: 10, account_id: account.data.id, end_rule: "ends" })
+    .select("id")
+    .single();
+  if (c.error) throw c.error;
+  const l = await a
+    .from("fin_contract_lines")
+    .insert({ contract_id: c.data.id, company_id: companyId, kind: "commission", description: "Comissão vendas", service_category_id: cat.data.id, recurring_rate: 5, first_month: startIso, months: 12 })
+    .select("id")
+    .single();
+  if (l.error) throw l.error;
+  const sale = await a
+    .from("fin_client_sales")
+    .insert({ company_id: companyId, contract_id: c.data.id, contract_line_id: l.data.id, buyer: "Comprador E2E", sold_on: startIso, recurring_value: 1000, recurring_start: startIso, recurring_months: 2 })
+    .select("id")
+    .single();
+  if (sale.error) throw sale.error;
+  const saleEntries = async () => {
+    const r = await a.from("fin_entries").select("id").eq("client_sale_id", sale.data.id);
+    if (r.error) throw r.error;
+    return r.data.length;
+  };
+  expect(await saleEntries()).toBe(2);
+
+  await login(page, adminEmail, password);
+  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
+  await page.goto(`/${slug}/financeiro/contratos/${c.data.id}`);
+  await page.getByRole("button", { name: "Remover linha 1" }).click();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Esta linha de comissão tem vendas cadastradas e não pode ser removida." })).toBeVisible();
+
+  const lines = await a.from("fin_contract_lines").select("id").eq("contract_id", c.data.id);
+  expect(lines.data?.map((x) => x.id)).toEqual([l.data.id]);
+  const still = await a.from("fin_client_sales").select("status").eq("id", sale.data.id).single();
+  expect(still.data?.status).toBe("active");
+  expect(await saleEntries()).toBe(2);
+});

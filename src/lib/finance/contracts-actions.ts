@@ -114,6 +114,14 @@ export async function saveContractLines(contractId: string, lines: ContractLineI
     if (used.error) return dbFailure(used.error);
     if ((used.count ?? 0) > 0)
       return { ok: false, error: "Esta linha já tem lançamentos liquidados ou editados e não pode ser removida." };
+    // Linha de comissão com vendas de cliente cadastradas também não (o banco recusa com 23503).
+    const sold = await supabase
+      .from("fin_client_sales")
+      .select("id", { count: "exact", head: true })
+      .in("contract_line_id", diff.remove);
+    if (sold.error) return dbFailure(sold.error);
+    if ((sold.count ?? 0) > 0)
+      return { ok: false, error: "Esta linha de comissão tem vendas cadastradas e não pode ser removida." };
     const del = await supabase.from("fin_contract_lines").delete().in("id", diff.remove);
     if (del.error) return dbFailure(del.error);
   }

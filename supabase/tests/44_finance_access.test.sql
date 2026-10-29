@@ -51,8 +51,8 @@ select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');
 select is(public.can_finance('00000000-0000-4000-8000-0000000000d1', 'view'), false, 'desligado: admin geral não vê');
 select is(public.can_finance('00000000-0000-4000-8000-0000000000d1', 'sell'), false, 'desligado: admin geral não vende');
 
--- Liga (como superusuário, pois a trigger roda o stub).
-select pg_temp.as_pg();
+-- Liga como admin geral (a trigger semeia categorias de serviço, que exige super admin).
+select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');
 update companies set finance_enabled = true where id = '00000000-0000-4000-8000-0000000000d1';
 
 select pg_temp.as_user('00000000-0000-4000-8000-0000000000c1');

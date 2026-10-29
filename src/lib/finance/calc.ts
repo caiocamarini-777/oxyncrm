@@ -19,6 +19,13 @@ export type EntryLite = {
   nature: "fixed" | "variable" | "non_recurring" | null;
 };
 
+/** Lançamento com os campos de exibição (listas, tabela e CSV). */
+export type EntryRow = EntryLite & {
+  description: string | null;
+  incomeCategoryId: string | null;
+  locked: boolean;
+};
+
 export type Snapshot = { accountId: string; asOf: string; balance: number };
 
 export type MonthRow = {

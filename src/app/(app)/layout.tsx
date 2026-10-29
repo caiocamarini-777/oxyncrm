@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { AppShell } from "@/components/shell/app-shell";
 import { requireUser } from "@/lib/auth/session";
 import { LAST_COMPANY_COOKIE } from "@/lib/companies/constants";
-import { getAccessibleCompanies } from "@/lib/companies/scope";
+import { getAccessibleCompanies, hideTestCompanies } from "@/lib/companies/scope";
 import { hasSharedDashboards, reportCompanySlugs } from "@/lib/reports/permissions";
 
 // Bloqueante de propósito: o 404 de empresa precisa sair com status 404, e não
@@ -26,7 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         avatarUrl: profile.avatarUrl,
         isSuperAdmin: profile.isSuperAdmin,
       }}
-      companies={companies}
+      companies={hideTestCompanies(companies, profile.email)}
       lastSlug={lastSlug}
       reportSlugs={reportSlugs}
       hasSharedDashboards={sharedDashboards}

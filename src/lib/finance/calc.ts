@@ -86,14 +86,18 @@ export function balanceSeries(
       .filter((e) => e.accountId === accountId)
       .map((e) => ({
         date: cashDate(e, today),
+        open: e.status === "open",
         cents: (e.direction === "in" ? 1 : -1) * effectiveCents(e),
       }))
-      .filter((x): x is { date: string; cents: number } => x.date !== null);
+      .filter((x): x is { date: string; open: boolean; cents: number } => x.date !== null);
 
     dates.forEach((d, i) => {
       let c = toCents(snap.balance);
       for (const ev of events) {
-        if (ev.date > snap.asOf && ev.date <= d) c += ev.cents;
+        // Em aberto nunca faz parte de um saldo informado: conta assim que o dia chega.
+        if (ev.open) {
+          if (ev.date <= d) c += ev.cents;
+        } else if (ev.date > snap.asOf && ev.date <= d) c += ev.cents;
         else if (ev.date <= snap.asOf && ev.date > d) c -= ev.cents; // dias antes do snapshot
       }
       totals[i] += c;

@@ -36,6 +36,24 @@ describe("balanceSeries", () => {
     e({ id: "4", direction: "out", status: "cancelled", dueDate: "2026-10-28", amount: 777 }),
   ];
 
+  it("snapshot de hoje: saída aberta de hoje entra no saldo de hoje", () => {
+    const r = balanceSeries(
+      [{ accountId: "a1", asOf: "2026-10-29", balance: 10000 }],
+      [e({ direction: "out", status: "open", dueDate: "2026-10-29", amount: 2000 })],
+      "2026-10-29", "2026-10-31", "2026-10-29",
+    );
+    expect(r?.map((p) => p.balance)).toEqual([8000, 8000, 8000]);
+  });
+
+  it("snapshot de hoje: entrada vencida há 3 dias conta hoje e não antes", () => {
+    const r = balanceSeries(
+      [{ accountId: "a1", asOf: "2026-10-29", balance: 10000 }],
+      [e({ direction: "in", status: "open", dueDate: "2026-10-26", amount: 3000 })],
+      "2026-10-27", "2026-10-30", "2026-10-29",
+    );
+    expect(r?.map((p) => p.balance)).toEqual([10000, 10000, 13000, 13000]);
+  });
+
   it("sem snapshot devolve null", () => {
     expect(balanceSeries([], entries, "2026-10-26", "2026-10-29", "2026-10-29")).toBeNull();
   });

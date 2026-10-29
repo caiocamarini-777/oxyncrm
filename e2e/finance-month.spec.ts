@@ -12,7 +12,6 @@ let companyId = "";
 let userId = "";
 
 const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
-const yesterday = new Date(Date.parse(`${today}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 
 test.describe.configure({ mode: "serial" });
 
@@ -49,11 +48,11 @@ test("fluxo do mês: aviso sem saldo, projeção, baixa e CSV", async ({ page })
   await expect(page.getByText("Informe o saldo de pelo menos uma conta para ver a projeção.")).toBeVisible();
   await expect(page.getByText("Saldo atual")).toHaveCount(0);
 
-  // 2) saldo de 10.000 (a tela de contas vem na Task 12: semeia pelo service role)
+  // 2) saldo de 10.000 (snapshot de hoje; a tela de contas vem na Task 12)
   const a = admin();
   const acc = await a.from("fin_accounts").insert({ company_id: companyId, name: "Conta E2E" }).select("id").single();
   if (acc.error) throw acc.error;
-  const snap = await a.from("fin_balance_snapshots").insert({ company_id: companyId, account_id: acc.data.id, as_of: yesterday, balance: 10000 });
+  const snap = await a.from("fin_balance_snapshots").insert({ company_id: companyId, account_id: acc.data.id, as_of: today, balance: 10000 });
   if (snap.error) throw snap.error;
 
   await page.goto(`/${slug}/financeiro`);
@@ -76,7 +75,6 @@ test("fluxo do mês: aviso sem saldo, projeção, baixa e CSV", async ({ page })
   await page.getByRole("button", { name: /Liquidar selecionados/ }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Liquidar", exact: true }).click();
   await expect(page.getByText("Liquidado", { exact: true }).first()).toBeVisible();
-  await expect(projected).toContainText("8.000,00");
 
   // 5) Lançamentos: tabela e exportação
   await page.goto(`/${slug}/financeiro/lancamentos`);

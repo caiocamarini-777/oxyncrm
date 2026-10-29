@@ -35,6 +35,7 @@ export async function createProduct(companyId: string, input: ProductInput): Pro
       name: parsed.data.name,
       kind: parsed.data.kind,
       default_price: parsed.data.defaultPrice,
+      service_category_id: parsed.data.serviceCategoryId,
     })
     .select("id")
     .single();
@@ -68,7 +69,12 @@ export async function updateProduct(id: string, input: ProductInput): Promise<Ac
   }
   const { error } = await supabase
     .from("products")
-    .update({ name: parsed.data.name, kind: parsed.data.kind, default_price: parsed.data.defaultPrice })
+    .update({
+      name: parsed.data.name,
+      kind: parsed.data.kind,
+      default_price: parsed.data.defaultPrice,
+      service_category_id: parsed.data.serviceCategoryId,
+    })
     .eq("id", id);
   if (error) return dbFailure(error);
   revalidatePath(PATH);

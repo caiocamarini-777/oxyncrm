@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ServiceCategorySelect } from "@/components/records/service-category-select";
 import { addDealItem, removeDealItem, updateDealItem } from "@/lib/deals/actions";
 import type { DealDetail, DealItemRow, ProductOption } from "@/lib/deals/queries";
 import { contractDatesNeeded } from "@/lib/deals/schema";
@@ -18,9 +19,9 @@ import { PRODUCT_KIND_LABELS } from "@/lib/products/schema";
 const selectClass = "h-8 w-full rounded-md border border-input bg-background px-2 text-sm";
 const num = (v: number) => String(v).replace(".", ",");
 
-type Draft = { productId: string; quantity: string; unitPrice: string; discount: string; mrrStart: string; contractMonths: string; setupFirstDue: string };
+type Draft = { serviceCategoryId: string | null; productId: string; quantity: string; unitPrice: string; discount: string; mrrStart: string; contractMonths: string; setupFirstDue: string };
 
-const EMPTY: Draft = { productId: "", quantity: "1", unitPrice: "", discount: "", mrrStart: "", contractMonths: "", setupFirstDue: "" };
+const EMPTY: Draft = { serviceCategoryId: null, productId: "", quantity: "1", unitPrice: "", discount: "", mrrStart: "", contractMonths: "", setupFirstDue: "" };
 
 /** Id do cartão Produtos (o diálogo de obrigatórios leva o foco até ele). */
 export const DEAL_PRODUCTS_ID = "produtos";
@@ -30,11 +31,14 @@ export function DealItems({
   deal,
   products,
   canEdit,
+  canCreateCategory = false,
 }: {
-  deal: Pick<DealDetail, "id" | "items" | "mrrStart" | "contractMonths" | "setupFirstDue">;
+  deal: Pick<DealDetail, "id" | "companyId" | "items" | "mrrStart" | "contractMonths" | "setupFirstDue">;
   /** Somente produtos ativos da empresa. */
   products: ProductOption[];
   canEdit: boolean;
+  /** Só o admin geral cria categorias de serviço. */
+  canCreateCategory?: boolean;
 }) {
   const router = useRouter();
   const [dialog, setDialog] = useState<{ item: DealItemRow | null } | null>(null);
@@ -55,7 +59,7 @@ export function DealItems({
     setFormError(null);
     setDraft(
       item
-        ? { ...EMPTY, productId: item.productId, quantity: num(item.quantity), unitPrice: num(item.unitPrice), discount: item.discount ? num(item.discount) : "" }
+        ? { ...EMPTY, serviceCategoryId: item.serviceCategoryId, productId: item.productId, quantity: num(item.quantity), unitPrice: num(item.unitPrice), discount: item.discount ? num(item.discount) : "" }
         : EMPTY,
     );
     setDialog({ item });
@@ -66,7 +70,7 @@ export function DealItems({
     setErrors({});
     setFormError(null);
     startTransition(async () => {
-      const values = { quantity: draft.quantity, unitPrice: draft.unitPrice, discount: draft.discount };
+      const values = { quantity: draft.quantity, unitPrice: draft.unitPrice, discount: draft.discount, serviceCategoryId: draft.serviceCategoryId };
       const res = editing
         ? await updateDealItem(editing.id, values)
         : await addDealItem(
@@ -111,6 +115,7 @@ export function DealItems({
               quantity: item.quantity,
               unitPrice: item.unitPrice,
               discount: item.discount,
+              serviceCategoryId: item.serviceCategoryId,
             });
             if (back.ok) router.refresh();
             else {
@@ -150,6 +155,7 @@ export function DealItems({
               <thead className="text-left text-muted-foreground">
                 <tr>
                   <th scope="col" className="py-1 pr-2 font-medium">Produto</th>
+                  <th scope="col" className="py-1 pr-2 font-medium">Categoria</th>
                   <th scope="col" className="py-1 pr-2 text-right font-medium">Qtd.</th>
                   <th scope="col" className="py-1 pr-2 text-right font-medium">Preço</th>
                   <th scope="col" className="py-1 pr-2 text-right font-medium">Desc.</th>
@@ -165,6 +171,7 @@ export function DealItems({
                       {!i.productActive ? <span className="text-muted-foreground"> (inativo)</span> : null}
                       <span className="block text-muted-foreground">{PRODUCT_KIND_LABELS[i.kind]}</span>
                     </th>
+                    <td data-testid="item-category" className="py-1.5 pr-2">{i.serviceCategoryName ?? "-"}</td>
                     <td className="py-1.5 pr-2 text-right tabular-nums">{num(i.quantity)}</td>
                     <td className="py-1.5 pr-2 text-right tabular-nums">{formatMoney(i.unitPrice)}</td>
                     <td className="py-1.5 pr-2 text-right tabular-nums">{formatMoney(i.discount)}</td>
@@ -211,7 +218,12 @@ export function DealItems({
                     className={selectClass}
                     onChange={(e) => {
                       const p = products.find((x) => x.id === e.target.value);
-                      setDraft((d) => ({ ...d, productId: e.target.value, unitPrice: p ? num(p.defaultPrice) : d.unitPrice }));
+                      setDraft((d) => ({
+                        ...d,
+                        productId: e.target.value,
+                        unitPrice: p ? num(p.defaultPrice) : d.unitPrice,
+                        serviceCategoryId: p ? p.serviceCategoryId : d.serviceCategoryId,
+                      }));
                     }}
                   >
                     <option value="">Escolha um produto</option>
@@ -223,6 +235,15 @@ export function DealItems({
                   </select>
                 </Field>
               )}
+              <Field id="item-category" label="Categoria de serviço" error={errors.serviceCategoryId}>
+                <ServiceCategorySelect
+                  id="item-category"
+                  companyId={deal.companyId}
+                  value={draft.serviceCategoryId}
+                  onChange={(v) => setDraft((d) => ({ ...d, serviceCategoryId: v }))}
+                  allowCreate={canCreateCategory}
+                />
+              </Field>
               <div className="grid grid-cols-3 gap-3">
                 <Field id="item-quantity" label="Quantidade" error={errors.quantity}>
                   <Input id="item-quantity" inputMode="decimal" value={draft.quantity} onChange={(e) => setDraft((d) => ({ ...d, quantity: e.target.value }))} />

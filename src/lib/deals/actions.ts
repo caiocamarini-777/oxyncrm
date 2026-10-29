@@ -130,6 +130,7 @@ export async function updateDeal(id: string, input: DealInput): Promise<DealResu
       estimated_value: d.estimatedValue,
       expected_close_date: d.expectedCloseDate,
       custom_fields: merged,
+      ...(d.serviceCategoryId !== undefined ? { service_category_id: d.serviceCategoryId } : {}),
     })
     .eq("id", id)
     .is("deleted_at", null)
@@ -454,6 +455,7 @@ export async function addDealItem(
       quantity: item.quantity,
       unit_price: item.unitPrice,
       discount: item.discount,
+      service_category_id: item.serviceCategoryId ?? null,
       position: (last.data?.position ?? -1) + 1,
     })
     .select("id")
@@ -474,7 +476,12 @@ export async function updateDealItem(itemId: string, input: DealItemUpdateInput)
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("deal_items")
-    .update({ quantity: parsed.data.quantity, unit_price: parsed.data.unitPrice, discount: parsed.data.discount })
+    .update({
+      quantity: parsed.data.quantity,
+      unit_price: parsed.data.unitPrice,
+      discount: parsed.data.discount,
+      ...(parsed.data.serviceCategoryId !== undefined ? { service_category_id: parsed.data.serviceCategoryId } : {}),
+    })
     .eq("id", itemId)
     .select("id");
   if (error) return dbFailure(error);

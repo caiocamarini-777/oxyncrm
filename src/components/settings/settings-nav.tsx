@@ -15,6 +15,7 @@ const ITEMS = [
   { href: "/configuracoes/motivos", label: "Motivos de desqualificação" },
   { href: "/configuracoes/funis", label: "Funis" },
   { href: "/configuracoes/produtos", label: "Produtos" },
+  { href: "/configuracoes/categorias-servico", label: "Categorias de serviço" },
   { href: "/configuracoes/motivos-perda", label: "Motivos de perda" },
   { href: "/configuracoes/atividades", label: "Atividades" },
   { href: "/configuracoes/importacao", label: "Importação" },

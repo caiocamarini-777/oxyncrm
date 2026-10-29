@@ -18,5 +18,11 @@ export const productSchema = z.object({
   name: z.string().trim().min(1, "Informe o nome do produto.").max(120, "Use no máximo 120 caracteres."),
   kind: z.enum(PRODUCT_KINDS, { message: "Escolha o tipo." }),
   defaultPrice: price,
+  serviceCategoryId: z
+    .string()
+    .uuid()
+    .optional()
+    .nullable()
+    .transform((v) => v ?? null),
 });
 export type ProductInput = z.input<typeof productSchema>;

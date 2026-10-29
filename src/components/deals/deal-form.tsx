@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ServiceCategorySelect } from "@/components/records/service-category-select";
 import type { CustomFieldDef } from "@/lib/custom-fields/schema";
 import { updateDeal } from "@/lib/deals/actions";
 import type { DealDetail, DealLink } from "@/lib/deals/queries";
@@ -28,18 +29,22 @@ export function DealForm({
   defs,
   owners,
   canEdit,
+  canCreateCategory = false,
 }: {
   deal: DealDetail;
   /** Somente definições ativas. */
   defs: CustomFieldDef[];
   owners: AssignableOwner[];
   canEdit: boolean;
+  /** Só o admin geral cria categorias de serviço. */
+  canCreateCategory?: boolean;
 }) {
   const router = useRouter();
   const [title, setTitle] = useState(deal.title);
   const [person, setPerson] = useState<PartyValue | null>(toParty(deal.personId, deal.person));
   const [organization, setOrganization] = useState<PartyValue | null>(toParty(deal.organizationId, deal.organization));
   const [value, setValue] = useState(deal.estimatedValue === null ? "" : String(deal.estimatedValue).replace(".", ","));
+  const [categoryId, setCategoryId] = useState<string | null>(deal.serviceCategoryId);
   const [closeDate, setCloseDate] = useState(deal.expectedCloseDate ?? "");
   const [custom, setCustom] = useState<Record<string, unknown>>(() => {
     const out: Record<string, unknown> = {};
@@ -61,6 +66,8 @@ export function DealForm({
         organizationId: organization?.id ?? null,
         estimatedValue: value,
         expectedCloseDate: closeDate || null,
+        // Com itens, cada item carrega a sua categoria; o campo do negócio fica de fora.
+        ...(deal.items.length === 0 ? { serviceCategoryId: categoryId } : {}),
         customFields: custom,
       });
       if (res.ok) {
@@ -111,6 +118,11 @@ export function DealForm({
             <Field id="deal-close" label="Data de fechamento esperada" error={errors.expectedCloseDate}>
               <Input id="deal-close" type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
             </Field>
+            {deal.items.length === 0 ? (
+              <Field id="deal-category" label="Categoria de serviço" error={errors.serviceCategoryId}>
+                <ServiceCategorySelect id="deal-category" companyId={deal.companyId} value={categoryId} onChange={setCategoryId} allowCreate={canCreateCategory} />
+              </Field>
+            ) : null}
             {defs.length > 0 ? (
               <p className="mt-1 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Campos personalizados

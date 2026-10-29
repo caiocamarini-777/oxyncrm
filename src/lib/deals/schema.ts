@@ -74,6 +74,8 @@ export const dealSchema = z.object({
   estimatedValue: moneyField().default(null),
   expectedCloseDate: isoDate,
   ownerId: z.string().uuid().optional(),
+  /** Ausente = não mexe; null = sem categoria. Só vale para negócio sem itens (com itens, cada item tem a sua). */
+  serviceCategoryId: z.string().uuid().nullable().optional(),
   customFields: z.record(z.string(), z.unknown()).default({}),
 });
 export type DealInput = z.input<typeof dealSchema>;
@@ -126,6 +128,8 @@ const itemBase = z.object({
   ),
   unitPrice: moneyField().transform((v) => v ?? 0),
   discount: moneyField().transform((v) => v ?? 0),
+  /** Ausente/null na inclusão: o banco copia a categoria do produto. */
+  serviceCategoryId: z.string().uuid().nullable().optional(),
 });
 
 function checkDiscount(v: { quantity: number; unitPrice: number; discount: number }, ctx: z.RefinementCtx) {

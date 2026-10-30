@@ -20,6 +20,7 @@
     "import:pipedrive-etapas": "tsx scripts/import-pipedrive-stage-history.ts",
     "insights:pipedrive": "tsx scripts/insights-pipedrive.ts",
     "financeiro:extract": "tsx scripts/financeiro-extract.ts",
+    "financeiro:fill": "tsx scripts/financeiro-fill-defaults.ts",
     "import:financeiro": "tsx scripts/import-financeiro.ts"
   },
   "dependencies": {

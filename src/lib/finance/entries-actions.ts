@@ -5,6 +5,7 @@ import { z } from "zod";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
+import { scaledRetention } from "./retention";
 import { entryInputSchema, settleSchema, type EntryInput, type SettleInput } from "./schema";
 
 const uuid = z.string().uuid();
@@ -20,6 +21,7 @@ function dbFailure(err: { code?: string; message?: string }): ActionResult<never
     return { ok: false, error: "O valor só pode ser alterado ao baixar um lançamento." };
   if (msg.includes("OXYN_ENTRY_NOT_SETTLED")) return { ok: false, error: "Este lançamento não está baixado." };
   if (msg.includes("OXYN_INVALID_ARGS")) return { ok: false, error: INVALID };
+  if (msg.includes("fin_entries_retention_le_gross")) return { ok: false, error: "A retenção não pode ser maior que o valor." };
   return { ok: false, error: translateDbError(err) };
 }
 
@@ -68,11 +70,21 @@ export async function updateEntry(id: string, input: EntryInput): Promise<Action
   if (!parsed.ok) return parsed.result;
   const v = parsed.data;
   const supabase = await createServerClient();
+  // Mudar o bruto de um lançamento com retenção (contrato, venda, importado) leva a retenção junto,
+  // na mesma proporção; senão o líquido ficaria errado (ou negativo).
+  const current = await supabase.from("fin_entries").select("gross, retention").eq("id", id).maybeSingle();
+  if (current.error) return dbFailure(current.error);
+  if (!current.data) return { ok: false, error: "Só é possível editar lançamentos em aberto." };
+  const oldGross = Number(current.data.gross);
+  const oldRetention = Number(current.data.retention);
+  const retention =
+    oldRetention > 0 && v.gross !== oldGross ? { retention: scaledRetention(v.gross, oldGross, oldRetention) } : {};
   const { data, error } = await supabase
     .from("fin_entries")
     .update({
       due_date: v.dueDate,
       gross: v.gross,
+      ...retention,
       description: v.description,
       account_id: v.accountId,
       organization_id: v.organizationId,

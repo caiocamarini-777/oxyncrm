@@ -100,9 +100,10 @@ select is((select gross from fin_entries where contract_line_id = '00000000-0000
 select is((select count(*)::int from fin_entries where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-02-01'), 1, 'só uma entry de fevereiro');
 select is((select count(*)::int || '|' || max(gross)::text from fin_entries where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-01-01'), '1|555.00', 'entry locked sobrevive à regeneração');
 
--- Cancelar o contrato apaga as abertas, preserva liquidada e locked.
+-- Cancelar o contrato apaga só as abertas do mês corrente em diante: as de jan–mar/2026 já venceram
+-- e ficam (4 abertas vencidas + liquidada + locked).
 update fin_contracts set status = 'cancelled' where id = '00000000-0000-4000-8000-0000000000f1';
-select is((select count(*)::int from fin_entries where contract_id = '00000000-0000-4000-8000-0000000000f1'), 2, 'contrato cancelado: sobram só liquidada e locked');
+select is((select count(*)::int from fin_entries where contract_id = '00000000-0000-4000-8000-0000000000f1'), 6, 'contrato cancelado: vencidas abertas, liquidada e locked ficam');
 
 -- Apagar o contrato preserva liquidada e locked (sem vínculo).
 delete from fin_contracts where id = '00000000-0000-4000-8000-0000000000f1';
@@ -115,15 +116,18 @@ insert into fin_contracts (id, company_id, title, status, due_day) values
 insert into fin_contract_lines (contract_id, company_id, kind, description, amount, first_month, months) values
   ('00000000-0000-4000-8000-0000000000f5', '00000000-0000-4000-8000-0000000000d1', 'recurring', 'Mensal', 300, '2026-01-01', 2);
 select is((select count(*)::int from fin_entries where contract_id = '00000000-0000-4000-8000-0000000000f5'), 0, 'rascunho não gera entries');
+-- rascunho → ativo direto só com a marca que fin_activate_contract põe (o contrato E não tem cliente/conta)
+select set_config('oxyn.activating_contract', '00000000-0000-4000-8000-0000000000f5', true);
 update fin_contracts set status = 'active' where id = '00000000-0000-4000-8000-0000000000f5';
+select set_config('oxyn.activating_contract', '', true);
 select is((select count(*)::int from fin_entries where contract_id = '00000000-0000-4000-8000-0000000000f5'), 2, 'ativar gera as entries');
 
 -- C6: comissão.
 insert into fin_contracts (id, company_id, title, status, due_day, end_rule) values
   ('00000000-0000-4000-8000-0000000000f6', '00000000-0000-4000-8000-0000000000d1', 'Contrato F', 'active', 15, 'ends');
 insert into fin_contract_lines (id, contract_id, company_id, kind, description, recurring_rate, estimated_monthly, first_month, months) values
-  ('00000000-0000-4000-8000-000000000a61', '00000000-0000-4000-8000-0000000000f6', '00000000-0000-4000-8000-0000000000d1', 'commission', 'Comissão', 10, 2000, '2026-01-01', 3),
-  ('00000000-0000-4000-8000-000000000a62', '00000000-0000-4000-8000-0000000000f6', '00000000-0000-4000-8000-0000000000d1', 'commission', 'Comissão sem estimativa', 10, null, '2026-01-01', 3);
+  ('00000000-0000-4000-8000-000000000a61', '00000000-0000-4000-8000-0000000000f6', '00000000-0000-4000-8000-0000000000d1', 'commission', 'Comissão', 10, 2000, public.fin_current_month(), 3),
+  ('00000000-0000-4000-8000-000000000a62', '00000000-0000-4000-8000-0000000000f6', '00000000-0000-4000-8000-0000000000d1', 'commission', 'Comissão sem estimativa', 10, null, public.fin_current_month(), 3);
 select is((select count(*)::int from fin_entries where contract_line_id = '00000000-0000-4000-8000-000000000a61' and estimated and gross = 2000), 3, 'comissão estimada gera 3 entries de 2.000');
 select is((select count(*)::int from fin_entries where contract_line_id = '00000000-0000-4000-8000-000000000a62'), 0, 'comissão sem estimativa não gera');
 

@@ -104,10 +104,10 @@ select is((select string_agg(competence::text, ',' order by competence) from fin
             where contract_id = '00000000-0000-4000-8000-0000000000f2' and status = 'open'),
   pg_temp.m(-2)::text || ',' || pg_temp.m(-1)::text, 'contrato cancelado mantém as abertas vencidas e tira as do mês corrente em diante');
 
-insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month, installments) values
+insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month, end_month, installments) values
   ('00000000-0000-4000-8000-000000000e01', '00000000-0000-4000-8000-0000000000d1', 'tst-Aluguel',
    (select id from fin_expense_categories where company_id = '00000000-0000-4000-8000-0000000000d1' order by position, name limit 1),
-   'fixed', 500, 5, pg_temp.m(-2), 4);
+   'fixed', 500, 5, pg_temp.m(-2), pg_temp.m(1), 4);
 update fin_recurring_expenses set active = false where id = '00000000-0000-4000-8000-000000000e01';
 select is((select string_agg(competence::text, ',' order by competence) from fin_entries
             where recurring_expense_id = '00000000-0000-4000-8000-000000000e01'),

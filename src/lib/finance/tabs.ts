@@ -9,7 +9,7 @@ export const FINANCE_TABS: FinanceTab[] = [
   { key: "custos", label: "Custos", path: "/custos" },
   { key: "lancamentos", label: "Lançamentos", path: "/lancamentos" },
   { key: "contratos", label: "Contratos", path: "/contratos" },
-  { key: "despesas", label: "Despesas", path: "/despesas" },
+  { key: "despesas", label: "Recorrentes", path: "/despesas" },
   { key: "vendas", label: "Vendas", path: "/vendas" },
   { key: "configuracoes", label: "Configurações", path: "/configuracoes", manageOnly: true },
 ];

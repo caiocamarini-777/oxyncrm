@@ -9,6 +9,7 @@ import { cancelEntry, reopenEntry } from "@/lib/finance/entries-actions";
 import { NATURE_LABEL, STATUS_LABEL } from "@/lib/finance/export";
 import { formatDate, formatMoney } from "@/lib/records/format";
 import { cn } from "cn";
+import { ChangeBadge } from "./change-badge";
 import { EntryDialog, type EntryDialogLookups } from "./entry-dialog";
 import { SettleDialog } from "./settle-dialog";
 
@@ -111,7 +112,10 @@ export function EntriesTable({
                   </td>
                 ) : null}
                 <td className="px-3 py-2 whitespace-nowrap">{formatDate(e.dueDate)}</td>
-                <td className="px-3 py-2">{e.description ?? ""}</td>
+                <td className="px-3 py-2">
+                  {e.description ?? ""}
+                  <ChangeBadge entry={e} />
+                </td>
                 <td className="px-3 py-2">{name(lookups.clients, e.organizationId)}</td>
                 <td className="px-3 py-2">{categoryName(e, lookups)}</td>
                 <td className="px-3 py-2">{e.nature ? NATURE_LABEL[e.nature] : ""}</td>

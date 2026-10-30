@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { EntryRow } from "@/lib/finance/calc";
 import { createManualEntry, updateEntry } from "@/lib/finance/entries-actions";
+import { createRecurringItem } from "@/lib/finance/expenses-actions";
 import type { FinanceLookups } from "@/lib/finance/queries";
 
 const selectClass = "h-8 w-full rounded-lg border bg-background px-2 text-sm";
@@ -43,6 +44,8 @@ export function EntryDialog({
   const [description, setDescription] = useState(entry?.description ?? "");
   const [gross, setGross] = useState(entry ? entry.gross.toFixed(2).replace(".", ",") : "");
   const [dueDate, setDueDate] = useState(entry?.dueDate ?? today);
+  const [periodicity, setPeriodicity] = useState<"once" | "monthly" | "quarterly" | "yearly">("once");
+  const [endDate, setEndDate] = useState("");
   const [accountId, setAccountId] = useState(entry?.accountId ?? "");
   const [organizationId, setOrganizationId] = useState(entry?.organizationId ?? "");
   // Receita: "s:<serviço>" ou "i:<categoria de receita>"; despesa: id da categoria.
@@ -66,10 +69,9 @@ export function EntryDialog({
     setBusy(true);
     setErrors({});
     setFormError(null);
-    const input = {
+    const recurring = !editing && periodicity !== "once";
+    const common = {
       direction,
-      dueDate,
-      gross,
       description,
       accountId: accountId || null,
       organizationId: organizationId || null,
@@ -78,14 +80,29 @@ export function EntryDialog({
       expenseCategoryId: direction === "out" ? expenseCat || null : null,
       nature: direction === "out" && nature ? (nature as "fixed" | "variable" | "non_recurring") : null,
     };
-    const r = entry ? await updateEntry(entry.id, input) : await createManualEntry(companyId, input);
+    const r = recurring
+      ? await createRecurringItem(companyId, {
+          ...common,
+          amount: gross,
+          payee: null,
+          installments: null,
+          adjustRate: 0,
+          adjustMonth: null,
+          frequency: periodicity,
+          dueDay: Number(dueDate.slice(8, 10)),
+          startMonth: dueDate.slice(0, 7),
+          endMonth: endDate.slice(0, 7),
+        })
+      : entry
+        ? await updateEntry(entry.id, { ...common, dueDate, gross })
+        : await createManualEntry(companyId, { ...common, dueDate, gross });
     setBusy(false);
     if (!r.ok) {
       setErrors(r.fieldErrors ?? {});
       setFormError(r.error);
       return;
     }
-    toast.success(editing ? "Lançamento atualizado." : "Lançamento criado.");
+    toast.success(editing ? "Lançamento atualizado." : periodicity === "once" ? "Lançamento criado." : "Lançamentos recorrentes criados.");
     onOpenChange(false);
   }
 
@@ -123,13 +140,36 @@ export function EntryDialog({
             <div className="flex flex-col gap-1">
               <Label htmlFor="entry-gross">Valor</Label>
               <Input id="entry-gross" inputMode="decimal" placeholder="0,00" value={gross} onChange={(e) => setGross(e.target.value)} />
-              {err("gross")}
+              {err("gross")}{err("amount")}
             </div>
+            {editing ? null : (
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="entry-periodicity">Periodicidade</Label>
+                <select
+                  id="entry-periodicity"
+                  className={selectClass}
+                  value={periodicity}
+                  onChange={(e) => setPeriodicity(e.target.value as typeof periodicity)}
+                >
+                  <option value="once">Única</option>
+                  <option value="monthly">Mensal</option>
+                  <option value="quarterly">Trimestral</option>
+                  <option value="yearly">Anual</option>
+                </select>
+              </div>
+            )}
             <div className="flex flex-col gap-1">
-              <Label htmlFor="entry-due">Vencimento</Label>
+              <Label htmlFor="entry-due">{editing ? "Vencimento" : "Início"}</Label>
               <Input id="entry-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-              {err("dueDate")}
+              {err("dueDate")}{err("startMonth")}{err("dueDay")}
             </div>
+            {!editing && periodicity !== "once" ? (
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="entry-end">Fim</Label>
+                <Input id="entry-end" type="month" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                {err("endMonth")}
+              </div>
+            ) : null}
           </div>
           {direction === "in" ? (
             <div className="flex flex-col gap-1">

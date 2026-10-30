@@ -2,6 +2,7 @@ import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 import type { EntryRow, Snapshot } from "./calc";
 import type { FinanceFilters } from "./filters";
+import { contractVigencia } from "./months";
 
 const PAGE = 1000;
 
@@ -13,7 +14,7 @@ function fail(what: string, error: { message: string; code?: string }): never {
 const num = (v: number | string | null): number => (v === null ? 0 : Number(v));
 
 const ENTRY_COLUMNS =
-  "id, direction, status, due_date, settled_on, competence, gross, retention, amount, settled_amount, account_id, organization_id, service_category_id, income_category_id, expense_category_id, nature, description, locked";
+  "id, direction, status, due_date, settled_on, competence, gross, retention, amount, settled_amount, account_id, organization_id, service_category_id, income_category_id, expense_category_id, nature, description, locked, original_gross, original_due_date";
 
 /** Primeira conta ativa da empresa (por nome): destino dos lançamentos sem conta no saldo. */
 async function defaultAccountId(supabase: Awaited<ReturnType<typeof createServerClient>>, companyId: string) {
@@ -47,6 +48,8 @@ type RawEntry = {
   nature: string | null;
   description: string | null;
   locked: boolean;
+  original_gross: number | string | null;
+  original_due_date: string | null;
 };
 
 function mapEntry(r: RawEntry, fallbackAccountId: string | null): EntryRow {
@@ -69,6 +72,8 @@ function mapEntry(r: RawEntry, fallbackAccountId: string | null): EntryRow {
     description: r.description,
     incomeCategoryId: r.income_category_id,
     locked: r.locked,
+    originalGross: r.original_gross === null ? null : num(r.original_gross),
+    originalDueDate: r.original_due_date,
   };
 }
 
@@ -121,6 +126,8 @@ function filteredQuery(
   if (f.expenseCategories.length > 0) q = q.in("expense_category_id", f.expenseCategories);
   if (f.natures.length > 0) q = q.in("nature", f.natures);
   if (f.accounts.length > 0) q = q.in("account_id", f.accounts);
+  // is_changed: coluna gerada (locked ou liquidado com valor diferente); o PostgREST não compara colunas entre si.
+  if (f.onlyChanged) q = q.eq("is_changed", true);
   return q;
 }
 
@@ -236,6 +243,7 @@ export type ContractSummary = {
   organizationName: string | null;
   sourceChanged: boolean;
   dealId: string | null;
+  vigencia: { start: string; end: string } | null;
 };
 
 type OrgJoin = { id: string; name: string } | { id: string; name: string }[] | null;
@@ -250,7 +258,7 @@ export async function listContracts(
   const [list, pending] = await Promise.all([
     supabase
       .from("fin_contracts")
-      .select("id, title, status, organization_id, source_changed, deal_id, organizations(id, name)")
+      .select("id, title, status, organization_id, source_changed, deal_id, organizations(id, name), fin_contract_lines(kind, first_month, installments, months)")
       .eq("company_id", companyId)
       .in("status", statuses)
       .order("created_at", { ascending: false })
@@ -269,6 +277,9 @@ export async function listContracts(
       organizationName: orgOf(c.organizations as OrgJoin)?.name ?? null,
       sourceChanged: c.source_changed,
       dealId: c.deal_id,
+      vigencia: contractVigencia(
+        (c.fin_contract_lines ?? []).map((l) => ({ kind: l.kind, firstMonth: l.first_month, installments: l.installments, months: l.months })),
+      ),
     })),
   };
 }
@@ -305,6 +316,7 @@ export type ContractDetail = {
   sourceChanged: boolean;
   dealId: string | null;
   notes: string | null;
+  vigencia: { start: string; end: string } | null;
   lines: ContractLineRow[];
   entries: EntryRow[];
 };
@@ -344,6 +356,9 @@ export async function getContract(companyId: string, id: string): Promise<Contra
     sourceChanged: d.source_changed,
     dealId: d.deal_id,
     notes: d.notes,
+    vigencia: contractVigencia(
+      (lines.data ?? []).map((l) => ({ kind: l.kind, firstMonth: l.first_month, installments: l.installments, months: l.months })),
+    ),
     lines: (lines.data ?? []).map((l) => ({
       id: l.id,
       kind: l.kind as ContractLineRow["kind"],
@@ -375,12 +390,16 @@ export async function listOrganizations(companyId: string): Promise<{ id: string
   return data ?? [];
 }
 
-export type RecurringExpenseRow = {
+export type RecurringItemRow = {
   id: string;
+  direction: "in" | "out";
   description: string;
   payee: string | null;
-  expenseCategoryId: string;
-  nature: "fixed" | "variable" | "non_recurring";
+  organizationId: string | null;
+  incomeCategoryId: string | null;
+  serviceCategoryId: string | null;
+  expenseCategoryId: string | null;
+  nature: "fixed" | "variable" | "non_recurring" | null;
   amount: number;
   frequency: "monthly" | "quarterly" | "yearly";
   dueDay: number;
@@ -393,7 +412,7 @@ export type RecurringExpenseRow = {
   active: boolean;
 };
 
-export async function listRecurringExpenses(companyId: string): Promise<RecurringExpenseRow[]> {
+export async function listRecurringItems(companyId: string): Promise<RecurringItemRow[]> {
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("fin_recurring_expenses")
@@ -404,12 +423,16 @@ export async function listRecurringExpenses(companyId: string): Promise<Recurrin
   if (error) fail("despesas recorrentes", error);
   return (data ?? []).map((r) => ({
     id: r.id,
+    direction: r.direction as RecurringItemRow["direction"],
     description: r.description,
     payee: r.payee,
+    organizationId: r.organization_id,
+    incomeCategoryId: r.income_category_id,
+    serviceCategoryId: r.service_category_id,
     expenseCategoryId: r.expense_category_id,
-    nature: r.nature as RecurringExpenseRow["nature"],
+    nature: r.nature as RecurringItemRow["nature"],
     amount: num(r.amount),
-    frequency: r.frequency as RecurringExpenseRow["frequency"],
+    frequency: r.frequency as RecurringItemRow["frequency"],
     dueDay: r.due_day,
     startMonth: r.start_month,
     endMonth: r.end_month,

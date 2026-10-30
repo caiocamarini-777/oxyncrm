@@ -46,7 +46,7 @@ export default async function FinanceEntriesPage({
           filters={filters}
           lookups={lookups}
           today={today}
-          controls={["period", "clients", "services", "expenses", "natures", "accounts", "statuses", "renewals", "estimated"]}
+          controls={["period", "clients", "services", "expenses", "natures", "accounts", "statuses", "renewals", "estimated", "changed"]}
         />
         <a
           href={`/${company.slug}/financeiro/lancamentos/export${qs ? `?${qs}` : ""}`}

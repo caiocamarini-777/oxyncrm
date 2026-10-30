@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EntryLite } from "./calc";
-import { addMonths, clientContractInfo, endsWithin, formatCoverage, formatShare, monthsBetween, shareOfDirection } from "./views";
+import type { EntryLite, MonthRow } from "./calc";
+import { addMonths, clientContractInfo, cumulativeSeries, endsWithin, formatCoverage, formatShare, monthsBetween, shareOfDirection } from "./views";
 
 const base = { status: "open", dueDate: "2026-10-10", settledOn: null, competence: "2026-10-01", gross: 0, retention: 0, settledAmount: null, accountId: null, serviceCategoryId: null, expenseCategoryId: null, nature: null } as const;
 const e = (o: Partial<EntryLite>): EntryLite => ({ id: "x", direction: "in", organizationId: null, amount: 0, ...base, ...o }) as EntryLite;
@@ -41,5 +41,17 @@ describe("views", () => {
     expect(formatShare(0.6)).toBe("60,0%");
     expect(formatCoverage(12.34)).toBe("12,3 meses");
     expect(formatCoverage(null)).toBe("—");
+  });
+});
+
+describe("cumulativeSeries", () => {
+  const row = (month: string, netIn: number, out: number): MonthRow => ({
+    month, grossIn: netIn, retention: 0, netIn, fixed: out, variable: 0, nonRecurring: 0, result: netIn - out, realized: false,
+  });
+  it("acumula entradas, saídas e resultado", () => {
+    const s = cumulativeSeries([row("2026-01-01", 200, 100), row("2026-02-01", 50, 100), row("2026-03-01", 130, 100)]);
+    expect(s.map((x) => x.resultAcc)).toEqual([100, 50, 80]);
+    expect(s.map((x) => x.inAcc)).toEqual([200, 250, 380]);
+    expect(s.map((x) => x.outAcc)).toEqual([100, 200, 300]);
   });
 });

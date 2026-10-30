@@ -19,6 +19,8 @@ export type FinanceFilters = {
   statuses: Status[];
   includePendingRenewals: boolean;
   includeEstimatedCommissions: boolean;
+  /** Só lançamentos alterados à mão (editados ou pagos com valor diferente do previsto). */
+  onlyChanged: boolean;
   horizon: Horizon;
 };
 
@@ -73,6 +75,7 @@ export function parseFinanceFilters(sp: SearchParams, today: string): FinanceFil
     statuses: only(STATUSES, sp.statuses),
     includePendingRenewals: first(sp.pending) === "1",
     includeEstimatedCommissions: first(sp.estimated) === "1",
+    onlyChanged: first(sp.changed) === "1",
     horizon: (HORIZONS as readonly number[]).includes(h) ? (h as Horizon) : DEFAULT_HORIZON,
   };
 }
@@ -95,6 +98,7 @@ export function toFinanceSearchParams(f: FinanceFilters, today?: string): URLSea
   for (const [k, v] of lists) if (v.length > 0) sp.set(k, v.join(","));
   if (f.includePendingRenewals) sp.set("pending", "1");
   if (f.includeEstimatedCommissions) sp.set("estimated", "1");
+  if (f.onlyChanged) sp.set("changed", "1");
   if (f.horizon !== DEFAULT_HORIZON) sp.set("horizon", String(f.horizon));
   return sp;
 }

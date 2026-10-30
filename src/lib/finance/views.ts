@@ -1,5 +1,5 @@
 // Helpers puros das telas analíticas do Financeiro (Projeção, Clientes, Serviços, Custos).
-import type { EntryLite } from "./calc";
+import type { EntryLite, MonthRow } from "./calc";
 import { shareBy } from "./calc";
 
 /** Primeiro dia do mês `month` ('YYYY-MM-DD') deslocado de `n` meses. */
@@ -89,4 +89,16 @@ export function formatCoverage(months: number | null): string {
 export function countableEntries<T extends EntryLite>(entries: T[], today: string): T[] {
   const current = `${today.slice(0, 7)}-01`;
   return entries.filter((e) => !(e.status === "open" && e.competence < current));
+}
+
+/** Entradas, saídas e resultado acumulados mês a mês (somas em centavos). */
+export function cumulativeSeries(rows: MonthRow[]): { month: string; inAcc: number; outAcc: number; resultAcc: number }[] {
+  const c = (v: number) => Math.round(v * 100);
+  let inAcc = 0, outAcc = 0, resultAcc = 0;
+  return rows.map((r) => {
+    inAcc += c(r.netIn);
+    outAcc += c(r.fixed) + c(r.variable) + c(r.nonRecurring);
+    resultAcc += c(r.result);
+    return { month: r.month, inAcc: inAcc / 100, outAcc: outAcc / 100, resultAcc: resultAcc / 100 };
+  });
 }

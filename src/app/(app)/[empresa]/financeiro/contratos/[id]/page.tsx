@@ -1,3 +1,4 @@
+import { ChangeBadge } from "@/components/finance/change-badge";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ContractSellers } from "@/components/finance/contract-sellers";
@@ -8,6 +9,7 @@ import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/sco
 import { todaySaoPaulo } from "@/lib/finance/dates";
 import { NATURE_LABEL, STATUS_LABEL } from "@/lib/finance/export";
 import { CONTRACT_STATUS_LABEL } from "@/lib/finance/labels";
+import { vigenciaLabel } from "@/lib/finance/months";
 import { getFinanceAccess } from "@/lib/finance/permissions";
 import { getContract, listContractSellerIds, listFinanceLookups, listOrganizations } from "@/lib/finance/queries";
 import { listAssignableOwners } from "@/lib/records/owners";
@@ -44,6 +46,7 @@ export default async function FinanceContractPage({ params }: { params: Promise<
         </Link>
         <h2 className="font-heading text-lg font-semibold">{contract.title}</h2>
         <Badge variant="secondary">{CONTRACT_STATUS_LABEL[contract.status]}</Badge>
+        <span className="text-sm text-muted-foreground">{vigenciaLabel(contract.vigencia)}</span>
       </div>
       <ContractForm
         key={`${contract.id}:${contract.status}:${contract.sourceChanged}:${contract.lines.map((l) => l.id).join()}`}
@@ -85,6 +88,7 @@ export default async function FinanceContractPage({ params }: { params: Promise<
                     <td className="px-3 py-2">
                       {e.description}
                       {e.nature ? <span className="ml-2 text-xs text-muted-foreground">{NATURE_LABEL[e.nature]}</span> : null}
+                      <ChangeBadge entry={e} />
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatMoney(e.amount)}</td>
                     <td className="px-3 py-2">{STATUS_LABEL[e.status]}</td>

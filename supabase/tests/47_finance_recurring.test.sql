@@ -42,8 +42,8 @@ insert into fin_expense_categories (id, company_id, name, default_nature) values
   ('00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000d1', 'Aluguel', 'fixed');
 
 -- A: mensal de 500, 10 parcelas a partir de 2026-10.
-insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month, installments) values
-  ('00000000-0000-4000-8000-000000000e01', '00000000-0000-4000-8000-0000000000d1', 'Aluguel sala', '00000000-0000-4000-8000-0000000000b1', 'fixed', 500, 5, '2026-10-01', 10);
+insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month, end_month, installments) values
+  ('00000000-0000-4000-8000-000000000e01', '00000000-0000-4000-8000-0000000000d1', 'Aluguel sala', '00000000-0000-4000-8000-0000000000b1', 'fixed', 500, 5, '2026-10-01', '2027-07-01', 10);
 select is((select count(*)::int from fin_entries where recurring_expense_id = '00000000-0000-4000-8000-000000000e01'), 10, 'mensal com 10 parcelas gera 10 entries');
 select is((select max(competence)::text || '|' || (array_agg(description order by competence desc))[1] from fin_entries where recurring_expense_id = '00000000-0000-4000-8000-000000000e01'),
   '2027-07-01|Aluguel sala (10/10)', 'última parcela em 2027-07 com (10/10)');
@@ -52,15 +52,15 @@ select is((select count(*)::int from fin_entries where recurring_expense_id = '0
              and expense_category_id = '00000000-0000-4000-8000-0000000000b1' and gross = 500 and retention = 0), 10,
   'entries de saída com natureza, categoria e valor da despesa');
 
--- B: trimestral sem fim, do início do horizonte.
-insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, frequency, due_day, start_month) values
+-- B: trimestral até o fim do horizonte, do início do horizonte.
+insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, frequency, due_day, start_month, end_month) values
   ('00000000-0000-4000-8000-000000000e02', '00000000-0000-4000-8000-0000000000d1', 'Seguro', '00000000-0000-4000-8000-0000000000b1', 'fixed', 900, 'quarterly', 10,
-   (public.fin_horizon_end() - interval '36 months')::date);
+   (public.fin_horizon_end() - interval '36 months')::date, (public.fin_horizon_end() - interval '1 month')::date);
 select is((select count(*)::int || '|' || max(competence)::text from fin_entries where recurring_expense_id = '00000000-0000-4000-8000-000000000e02'),
   '12|' || (public.fin_horizon_end() - interval '3 months')::date::text, 'trimestral: de 3 em 3 meses até o horizonte');
-insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, frequency, due_day, start_month) values
+insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, frequency, due_day, start_month, end_month) values
   ('00000000-0000-4000-8000-000000000e05', '00000000-0000-4000-8000-0000000000d1', 'Anuidade', '00000000-0000-4000-8000-0000000000b1', 'fixed', 1200, 'yearly', 10,
-   (public.fin_horizon_end() - interval '36 months')::date);
+   (public.fin_horizon_end() - interval '36 months')::date, (public.fin_horizon_end() - interval '1 month')::date);
 select is((select count(*)::int from fin_entries where recurring_expense_id = '00000000-0000-4000-8000-000000000e05'), 3, 'anual: 3 ocorrências em 36 meses');
 
 -- C: end_month inclusive.
@@ -70,8 +70,8 @@ select is((select count(*)::int || '|' || max(competence)::text from fin_entries
   '3|2026-12-01', 'end_month inclusive: última competência é dezembro');
 
 -- D: reajuste de 5% em janeiro.
-insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month, adjust_rate, adjust_month) values
-  ('00000000-0000-4000-8000-000000000e04', '00000000-0000-4000-8000-0000000000d1', 'Internet', '00000000-0000-4000-8000-0000000000b1', 'fixed', 500, 20, '2026-10-01', 5, 1);
+insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month, end_month, adjust_rate, adjust_month) values
+  ('00000000-0000-4000-8000-000000000e04', '00000000-0000-4000-8000-0000000000d1', 'Internet', '00000000-0000-4000-8000-0000000000b1', 'fixed', 500, 20, '2026-10-01', '2028-12-01', 5, 1);
 select is((select array_agg(gross order by competence) from fin_entries where recurring_expense_id = '00000000-0000-4000-8000-000000000e04'
              and competence in ('2026-10-01','2026-11-01','2026-12-01','2027-01-01','2028-01-01')),
   array[500.00, 500.00, 500.00, 525.00, 551.25]::numeric[], 'reajuste anual: 500 até dez, 525 em jan/27, 551,25 em jan/28');
@@ -99,11 +99,11 @@ select is((select count(*)::int from fin_entries where recurring_expense_id is n
   'apagar despesa mantém liquidada e locked');
 
 -- Cross-company.
-select throws_ok($q$insert into fin_recurring_expenses (company_id, description, expense_category_id, nature, amount, due_day, start_month) values
-  ('00000000-0000-4000-8000-0000000000d1', 'x', '00000000-0000-4000-8000-0000000000b2', 'fixed', 10, 1, '2026-10-01')$q$,
+select throws_ok($q$insert into fin_recurring_expenses (company_id, description, expense_category_id, nature, amount, due_day, start_month, end_month) values
+  ('00000000-0000-4000-8000-0000000000d1', 'x', '00000000-0000-4000-8000-0000000000b2', 'fixed', 10, 1, '2026-10-01', '2026-12-01')$q$,
   'P0001', 'OXYN_CROSS_COMPANY', 'categoria de outra empresa é rejeitada');
-select throws_ok($q$insert into fin_recurring_expenses (company_id, description, expense_category_id, nature, amount, due_day, start_month) values
-  ('00000000-0000-4000-8000-0000000000d1', 'x', '00000000-0000-4000-8000-0000000000b1', 'fixed', 10, 1, '2026-10-15')$q$,
+select throws_ok($q$insert into fin_recurring_expenses (company_id, description, expense_category_id, nature, amount, due_day, start_month, end_month) values
+  ('00000000-0000-4000-8000-0000000000d1', 'x', '00000000-0000-4000-8000-0000000000b1', 'fixed', 10, 1, '2026-10-15', '2026-12-01')$q$,
   '23514', null, 'start_month precisa ser dia 1');
 
 -- fin_extend_horizon: contrato "ends" encerrado vira ended; ativo permanece.

@@ -5,7 +5,7 @@ import {
   contractLineSchema,
   contractSchema,
   expenseCategorySchema,
-  recurringExpenseSchema,
+  recurringItemSchema,
   entryInputSchema,
   settleSchema,
 } from "./schema";
@@ -97,15 +97,33 @@ describe("contractLineSchema", () => {
   });
 });
 
-describe("recurringExpenseSchema", () => {
-  const base = { description: "Aluguel", expenseCategoryId: CAT, nature: "fixed", amount: "4.674,11", dueDay: 1, startMonth: "2026-11" };
+describe("recurringItemSchema", () => {
+  const out = { direction: "out", description: "Aluguel", expenseCategoryId: CAT, nature: "fixed", amount: "4.674,11", dueDay: 1, startMonth: "2026-11", endMonth: "2027-10" };
+  const inn = { direction: "in", description: "Mensalidade", incomeCategoryId: CAT, amount: "2.000,00", dueDay: 5, startMonth: "2026-11", endMonth: "2027-01" };
+  const msg = (r: { success: boolean; error?: { issues: { message: string }[] } }) => r.error?.issues.map((i) => i.message) ?? [];
   it("converte mês e valor e aplica padrões", () => {
-    const r = recurringExpenseSchema.parse(base);
-    expect(r).toMatchObject({ amount: 4674.11, startMonth: "2026-11-01", frequency: "monthly", adjustRate: 0, endMonth: null });
+    const r = recurringItemSchema.parse(out);
+    expect(r).toMatchObject({ amount: 4674.11, startMonth: "2026-11-01", endMonth: "2027-10-01", frequency: "monthly", adjustRate: 0 });
   });
-  it("exige categoria e dia válido", () => {
-    expect(recurringExpenseSchema.safeParse({ ...base, expenseCategoryId: "" }).success).toBe(false);
-    expect(recurringExpenseSchema.safeParse({ ...base, dueDay: 0 }).success).toBe(false);
+  it("exige o fim", () => {
+    expect(msg(recurringItemSchema.safeParse({ ...out, endMonth: "" }))).toContain("Informe o fim.");
+    expect(msg(recurringItemSchema.safeParse({ ...out, endMonth: undefined }))).toContain("Informe o fim.");
+  });
+  it("o fim não pode ser antes do início", () => {
+    expect(msg(recurringItemSchema.safeParse({ ...out, endMonth: "2026-10" }))).toContain("O fim não pode ser antes do início.");
+    expect(recurringItemSchema.safeParse({ ...out, endMonth: "2026-11" }).success).toBe(true);
+  });
+  it("saída exige categoria de despesa e natureza", () => {
+    expect(recurringItemSchema.safeParse({ ...out, expenseCategoryId: "" }).success).toBe(false);
+    expect(recurringItemSchema.safeParse({ ...out, nature: undefined }).success).toBe(false);
+    expect(recurringItemSchema.safeParse({ ...out, dueDay: 0 }).success).toBe(false);
+  });
+  it("entrada exige categoria de receita ou de serviço e não leva natureza", () => {
+    expect(recurringItemSchema.safeParse(inn).success).toBe(true);
+    expect(recurringItemSchema.safeParse({ ...inn, incomeCategoryId: undefined, serviceCategoryId: CAT }).success).toBe(true);
+    expect(msg(recurringItemSchema.safeParse({ ...inn, incomeCategoryId: undefined }))).toContain("Escolha a categoria da receita.");
+    const r = recurringItemSchema.parse({ ...inn, nature: "fixed", expenseCategoryId: CAT });
+    expect(r).toMatchObject({ nature: null, expenseCategoryId: null });
   });
 });
 

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINE_KIND_LABEL } from "@/lib/finance/labels";
+import { shiftMonth, formatMonth, monthCount } from "@/lib/finance/months";
 
 export type LineDraft = {
   /** Id da linha já gravada; ausente em linha nova. */
@@ -36,6 +37,21 @@ export const emptyLine = (firstMonth: string): LineDraft => ({
 });
 
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
+
+/** Fim (mês) de uma linha com duração; "" se a duração não é um número válido. */
+function endOf(l: LineDraft, defaultMonth: string): string {
+  const n = Number(l.months);
+  if (l.months.trim() === "" || !Number.isInteger(n) || n < 1) return "";
+  return shiftMonth(l.firstMonth || defaultMonth, n - 1);
+}
+
+/** Mensagem do erro de duração, dita em termos de início e fim. */
+function endError(l: LineDraft, serverMessage: string | undefined): string | null {
+  if (!serverMessage) return null;
+  if (l.months.trim() === "") return "Informe o fim.";
+  if (Number(l.months) < 1) return "O fim não pode ser antes do início.";
+  return serverMessage;
+}
 
 /** Linhas do contrato. Os campos de % e a estimativa aparecem só no tipo Comissão. */
 export function ContractLinesEditor({
@@ -117,21 +133,39 @@ export function ContractLinesEditor({
               </div>
             ) : null}
             <div className="flex flex-col gap-1">
-              <Label htmlFor={`line-first-${i}`}>Mês inicial (linha {n})</Label>
+              <Label htmlFor={`line-first-${i}`}>Início (linha {n})</Label>
               <Input id={`line-first-${i}`} type="month" value={l.firstMonth || defaultMonth} disabled={disabled} onChange={(e) => set(i, { firstMonth: e.target.value })} />
               {err(i, "firstMonth")}
             </div>
             {l.kind === "setup" ? (
+              <>
               <div className="flex flex-col gap-1">
                 <Label htmlFor={`line-inst-${i}`}>Parcelas (linha {n})</Label>
                 <Input id={`line-inst-${i}`} inputMode="numeric" value={l.installments} disabled={disabled} onChange={(e) => set(i, { installments: e.target.value })} />
                 {err(i, "installments")}
               </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-medium">Fim (linha {n})</span>
+                <p className="flex h-9 items-center text-sm text-muted-foreground" data-testid={`line-setup-end-${i}`}>
+                  {Number.isInteger(Number(l.installments)) && Number(l.installments) >= 1
+                    ? formatMonth(shiftMonth(l.firstMonth || defaultMonth, Number(l.installments) - 1))
+                    : "—"}
+                </p>
+              </div>
+              </>
             ) : (
               <div className="flex flex-col gap-1">
-                <Label htmlFor={`line-months-${i}`}>Duração em meses (linha {n})</Label>
-                <Input id={`line-months-${i}`} inputMode="numeric" value={l.months} disabled={disabled} onChange={(e) => set(i, { months: e.target.value })} />
-                {err(i, "months")}
+                <Label htmlFor={`line-end-${i}`}>Fim (linha {n})</Label>
+                <Input
+                  id={`line-end-${i}`}
+                  type="month"
+                  value={endOf(l, defaultMonth)}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    set(i, { months: e.target.value ? String(monthCount(l.firstMonth || defaultMonth, e.target.value)) : "" })
+                  }
+                />
+                {endError(l, errors[`${i}.months`]) ? <p className="text-xs text-destructive">{endError(l, errors[`${i}.months`])}</p> : null}
               </div>
             )}
             {l.kind === "commission" ? (

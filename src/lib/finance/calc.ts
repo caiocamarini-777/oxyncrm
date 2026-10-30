@@ -24,6 +24,8 @@ export type EntryRow = EntryLite & {
   description: string | null;
   incomeCategoryId: string | null;
   locked: boolean;
+  originalGross: number | null;
+  originalDueDate: string | null;
 };
 
 export type Snapshot = { accountId: string; asOf: string; balance: number };

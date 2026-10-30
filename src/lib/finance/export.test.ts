@@ -28,6 +28,8 @@ const row = (o: Partial<EntryRow>): EntryRow => ({
   description: "Mensalidade",
   incomeCategoryId: null,
   locked: false,
+  originalGross: null,
+  originalDueDate: null,
   ...o,
 });
 

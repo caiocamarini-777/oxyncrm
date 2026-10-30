@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { buttonVariants, Button } from "@/components/ui/button";
+import { ChangeBadge } from "./change-badge";
 import type { EntryRow } from "@/lib/finance/calc";
 import { formatDate, formatMoney } from "@/lib/records/format";
 import { weekdayShort } from "@/lib/finance/dates";
@@ -122,6 +123,7 @@ export function MonthView({
                           {[clientName(e.organizationId), categoryName(e, lookups)].filter(Boolean).join(" · ")}
                           {overdue ? ` · venceu em ${formatDate(e.dueDate)}` : ""}
                         </p>
+                        <ChangeBadge entry={e} />
                       </div>
                       <span className="text-xs text-muted-foreground">{e.status === "settled" ? "Liquidado" : "Em aberto"}</span>
                       <span className={cn("w-28 text-right tabular-nums", !overdue && e.direction === "out" && "text-destructive")}>

@@ -114,8 +114,8 @@ test("1) o admin cria a linha de comissão e autoriza o vendedor", async ({ page
   await page.getByLabel("Tipo (linha 1)").selectOption({ label: "Comissão" });
   await page.getByLabel("Descrição (linha 1)").fill("Comissão de vendas");
   await page.getByLabel("Categoria de serviço (linha 1)").selectOption({ label: "Comissionamento E2E" });
-  await page.getByLabel("Mês inicial (linha 1)").fill(thisMonth);
-  await page.getByLabel("Duração em meses (linha 1)").fill("12");
+  await page.getByLabel("Início (linha 1)").fill(thisMonth);
+  await page.getByLabel("Fim (linha 1)").fill(new Date(Date.UTC(now.getFullYear(), now.getMonth() + 11, 1)).toISOString().slice(0, 7));
   await page.getByLabel("% sobre o setup (linha 1)").fill("10");
   await page.getByLabel("% sobre o recorrente (linha 1)").fill("5");
   await page.getByRole("button", { name: "Salvar", exact: true }).click();

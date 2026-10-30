@@ -20,10 +20,7 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const sharedOnly = reportsSharedOnly(isSuperAdmin, reports);
-  // Financeiro sem ativação/permissão some do menu (nada de item cinza).
-  const items = NAV_ITEMS.filter(
-    (i) => (!i.superAdminOnly || isSuperAdmin) && (i.key !== "financeiro" || reports.canViewFinance),
-  );
+  const items = NAV_ITEMS.filter((i) => !i.superAdminOnly || isSuperAdmin);
 
   return (
     <aside className="sticky top-0 flex h-screen w-16 shrink-0 flex-col items-center gap-2 bg-[var(--color-sidebar)] py-3 text-sidebar-foreground">

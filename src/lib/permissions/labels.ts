@@ -27,8 +27,5 @@ export const PERMISSION_LABELS = {
     view_reports: "Ver relatórios",
     create_dashboards: "Criar dashboards",
     share_dashboards: "Compartilhar dashboards",
-    view_finance: "Ver financeiro",
-    manage_finance: "Gerenciar financeiro",
-    register_sales: "Cadastrar vendas de clientes",
   } satisfies Record<(typeof SETTINGS)[number], string>,
 };

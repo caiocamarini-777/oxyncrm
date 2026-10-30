@@ -199,8 +199,6 @@ O papel "Usuário padrão" vem com `own` em todas as entidades. A tela de papéi
 
 ## 6. Fases e funcionalidades
 
-> Módulo Financeiro (fluxo de caixa, contratos, despesas e vendas): especificação própria em [2026-10-29-financeiro-design.md](2026-10-29-financeiro-design.md).
-
 ### Fase 1: Fundação
 
 - Login, convite, recuperação de senha, perfil.

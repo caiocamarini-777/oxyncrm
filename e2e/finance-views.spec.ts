@@ -97,9 +97,13 @@ test("Clientes, Projeção, Custos e Serviços", async ({ page }) => {
   await expect(page.getByRole("row", { name: new RegExp(`Cliente B ${stamp}`) })).toContainText("40,0%");
   await expect(page.getByRole("row", { name: new RegExp(`Cliente A ${stamp}`) })).toContainText("60.000,00");
 
-  // Projeção de 12 meses: 12 colunas
+  // Projeção: de janeiro do ano corrente até mês corrente + 11 (horizonte padrão de 12)
   await page.goto(`/${slug}/financeiro/projecao`);
-  await expect(page.getByTestId("proj-month")).toHaveCount(12);
+  await expect(page.getByTestId("proj-month")).toHaveCount(Number(today.slice(5, 7)) + 11);
+  await expect(page.getByTestId("proj-month").first()).toContainText(new RegExp(`jan/${today.slice(0, 4)}`, "i"));
+  await expect(page.getByText("Entradas acumuladas")).toBeVisible();
+  await expect(page.getByText("Resultado do mês", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: "Resultado acumulado" })).toBeVisible();
   await expect(page.getByRole("rowheader", { name: "Saldo no fim do mês" })).toBeVisible();
   await expect(page.getByText("Informe o saldo de uma conta em Configurações › Contas para ver o saldo projetado.")).toBeVisible();
 

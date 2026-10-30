@@ -1,4 +1,5 @@
 import type { MonthRow } from "@/lib/finance/calc";
+import { cumulativeSeries } from "@/lib/finance/views";
 import { monthLabelShort } from "@/lib/finance/dates";
 import { formatMoney } from "@/lib/records/format";
 import { cn } from "cn";
@@ -13,6 +14,7 @@ export function ProjectionTable({ rows, balances }: { rows: MonthRow[]; balances
     { label: "Custos variáveis", values: rows.map((r) => -r.variable) },
     { label: "Não recorrentes", values: rows.map((r) => -r.nonRecurring) },
     { label: "Resultado", values: rows.map((r) => r.result), strong: true, sign: true },
+    { label: "Resultado acumulado", values: cumulativeSeries(rows).map((r) => r.resultAcc), strong: true, sign: true },
     {
       label: "Saldo no fim do mês",
       values: balances ?? rows.map(() => null),

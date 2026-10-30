@@ -171,13 +171,14 @@ export async function listBalanceEntries(
   return rows;
 }
 
-/** Saldos informados por conta (todos, do mais antigo ao mais novo). */
+/** Saldos informados das contas ativas (do mais antigo ao mais novo). Conta inativa sai do saldo. */
 export async function listSnapshots(companyId: string): Promise<Snapshot[]> {
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("fin_balance_snapshots")
-    .select("account_id, as_of, balance")
+    .select("account_id, as_of, balance, fin_accounts!inner(active)")
     .eq("company_id", companyId)
+    .eq("fin_accounts.active", true)
     .order("as_of");
   if (error) fail("saldos", error);
   return (data ?? []).map((s) => ({ accountId: s.account_id, asOf: s.as_of, balance: num(s.balance) }));

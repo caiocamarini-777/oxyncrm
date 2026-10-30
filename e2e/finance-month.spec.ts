@@ -54,6 +54,11 @@ test("fluxo do mês: aviso sem saldo, projeção, baixa e CSV", async ({ page })
   if (acc.error) throw acc.error;
   const snap = await a.from("fin_balance_snapshots").insert({ company_id: companyId, account_id: acc.data.id, as_of: today, balance: 10000 });
   if (snap.error) throw snap.error;
+  // Conta inativa com saldo: fica fora do saldo (o projetado abaixo continua 8.000, não 58.000).
+  const off = await a.from("fin_accounts").insert({ company_id: companyId, name: "Conta Inativa E2E", active: false }).select("id").single();
+  if (off.error) throw off.error;
+  const offSnap = await a.from("fin_balance_snapshots").insert({ company_id: companyId, account_id: off.data.id, as_of: today, balance: 50000 });
+  if (offSnap.error) throw offSnap.error;
 
   await page.goto(`/${slug}/financeiro`);
   await expect(page.getByText("Saldo atual")).toBeVisible();

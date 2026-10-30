@@ -166,7 +166,7 @@ export function EntryDialog({
             {!editing && periodicity !== "once" ? (
               <div className="flex flex-col gap-1">
                 <Label htmlFor="entry-end">Fim</Label>
-                <Input id="entry-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                <Input id="entry-end" type="month" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
                 {err("endMonth")}
               </div>
             ) : null}

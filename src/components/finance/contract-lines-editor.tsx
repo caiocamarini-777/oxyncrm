@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINE_KIND_LABEL } from "@/lib/finance/labels";
-import { addMonths, formatMonth, monthsBetween } from "@/lib/finance/months";
+import { shiftMonth, formatMonth, monthCount } from "@/lib/finance/months";
 
 export type LineDraft = {
   /** Id da linha já gravada; ausente em linha nova. */
@@ -42,7 +42,7 @@ const selectClass = "h-9 w-full rounded-md border border-input bg-background px-
 function endOf(l: LineDraft, defaultMonth: string): string {
   const n = Number(l.months);
   if (l.months.trim() === "" || !Number.isInteger(n) || n < 1) return "";
-  return addMonths(l.firstMonth || defaultMonth, n - 1);
+  return shiftMonth(l.firstMonth || defaultMonth, n - 1);
 }
 
 /** Mensagem do erro de duração, dita em termos de início e fim. */
@@ -148,7 +148,7 @@ export function ContractLinesEditor({
                 <span className="text-sm font-medium">Fim (linha {n})</span>
                 <p className="flex h-9 items-center text-sm text-muted-foreground" data-testid={`line-setup-end-${i}`}>
                   {Number.isInteger(Number(l.installments)) && Number(l.installments) >= 1
-                    ? formatMonth(addMonths(l.firstMonth || defaultMonth, Number(l.installments) - 1))
+                    ? formatMonth(shiftMonth(l.firstMonth || defaultMonth, Number(l.installments) - 1))
                     : "—"}
                 </p>
               </div>
@@ -162,7 +162,7 @@ export function ContractLinesEditor({
                   value={endOf(l, defaultMonth)}
                   disabled={disabled}
                   onChange={(e) =>
-                    set(i, { months: e.target.value ? String(monthsBetween(l.firstMonth || defaultMonth, e.target.value)) : "" })
+                    set(i, { months: e.target.value ? String(monthCount(l.firstMonth || defaultMonth, e.target.value)) : "" })
                   }
                 />
                 {endError(l, errors[`${i}.months`]) ? <p className="text-xs text-destructive">{endError(l, errors[`${i}.months`])}</p> : null}

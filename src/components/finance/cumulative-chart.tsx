@@ -11,6 +11,7 @@ const tick = { fontSize: 11, fill: "currentColor" };
 export function CumulativeChart({ data }: { data: CumulativePoint[] }) {
   return (
     <div className="h-80 w-full" role="img" aria-label="Entradas e saídas acumuladas por mês">
+      <p className="mb-1 text-sm font-medium">Entradas × saídas acumuladas</p>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: 320 }}>
         <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke="currentColor" strokeOpacity={0.1} vertical={false} />

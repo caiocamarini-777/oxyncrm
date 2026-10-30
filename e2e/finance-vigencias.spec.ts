@@ -17,7 +17,7 @@ const ym = (delta: number) => {
 };
 // Início: dia 10 do mês que vem (sempre no futuro); fim: dois meses depois.
 const startDate = `${ym(1)}-10`;
-const endDate = `${ym(3)}-10`;
+const endDate = ym(3);
 
 test.describe.configure({ mode: "serial" });
 

@@ -16,7 +16,7 @@ const ym = (delta: number) => {
   return new Date(Date.UTC(y, m - 1 + delta, 1)).toISOString().slice(0, 7);
 };
 const startDate = `${ym(1)}-10`;
-const endDate = `${ym(3)}-10`;
+const endDate = ym(3);
 const range = `from=${ym(1)}-01&to=${ym(3)}-28`;
 
 test.describe.configure({ mode: "serial" });

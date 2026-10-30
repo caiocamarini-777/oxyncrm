@@ -24,8 +24,8 @@ describe("changeInfo", () => {
     const r = changeInfo({ ...base, locked: true, originalGross: 1000 });
     expect(nbsp(r.text)).toBe("editado · previsto R$ 1.000,00");
   });
-  it("travado sem original (sem edição manual) não é editado", () => {
-    expect(changeInfo({ ...base, locked: true }).kind).toBeNull();
+  it("travado sem original (editado antes dos originais): selo simples", () => {
+    expect(changeInfo({ ...base, locked: true })).toEqual({ kind: "edited", text: "editado" });
   });
   it("pago com valor diferente", () => {
     const r = changeInfo({ ...base, status: "settled", settledAmount: 900 });

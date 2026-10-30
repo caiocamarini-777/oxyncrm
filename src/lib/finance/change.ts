@@ -17,6 +17,10 @@ const cents = (n: number) => Math.round(n * 100);
 export function changeInfo(e: ChangeInput): ChangeInfo {
   const paidDiff = e.status === "settled" && e.settledAmount !== null && cents(e.settledAmount) !== cents(e.amount);
   const paid = paidDiff ? `pago ${formatMoney(e.settledAmount)}` : "";
+  if (e.locked && e.originalGross === null) {
+    // editada antes de guardarmos o original: só sabemos que foi alterada
+    return { kind: "edited", text: paid ? `editado · ${paid}` : "editado" };
+  }
   if (e.locked && e.originalGross !== null) {
     const [, m, d] = e.originalDueDate?.split("-") ?? [];
     const when = e.originalDueDate ? ` em ${d}/${m}` : "";

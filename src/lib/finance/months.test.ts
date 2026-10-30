@@ -1,21 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { addMonths, contractVigencia, monthsBetween, vigenciaLabel } from "./months";
+import { shiftMonth, contractVigencia, monthCount, vigenciaLabel } from "./months";
 
-describe("monthsBetween", () => {
+describe("monthCount", () => {
   it("conta início e fim inclusive", () => {
-    expect(monthsBetween("2026-11", "2027-10")).toBe(12);
-    expect(monthsBetween("2026-11-01", "2026-11-01")).toBe(1);
-    expect(monthsBetween("2026-12", "2027-02")).toBe(3);
+    expect(monthCount("2026-11", "2027-10")).toBe(12);
+    expect(monthCount("2026-11-01", "2026-11-01")).toBe(1);
+    expect(monthCount("2026-12", "2027-02")).toBe(3);
   });
   it("devolve valor menor que 1 quando o fim é antes do início", () => {
-    expect(monthsBetween("2026-11", "2026-10")).toBe(0);
+    expect(monthCount("2026-11", "2026-10")).toBe(0);
   });
 });
 
-describe("addMonths", () => {
+describe("shiftMonth", () => {
   it("devolve o último mês da vigência", () => {
-    expect(addMonths("2026-11", 11)).toBe("2027-10");
-    expect(addMonths("2026-01-01", 0)).toBe("2026-01");
+    expect(shiftMonth("2026-11", 11)).toBe("2027-10");
+    expect(shiftMonth("2026-01-01", 0)).toBe("2026-01");
   });
 });
 

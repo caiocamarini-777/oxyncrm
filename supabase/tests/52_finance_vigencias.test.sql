@@ -1,5 +1,5 @@
 begin;
-select plan(23);
+select plan(26);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -151,6 +151,18 @@ select is((select locked::text || '|' || coalesce(original_gross::text, 'null') 
             from fin_entries
             where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-12-01'),
   'false|null|null', 'liquidar não trava nem preenche os originais');
+
+select is((select is_changed from fin_entries
+            where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-11-01'),
+  true, 'is_changed: editado à mão');
+select is((select is_changed from fin_entries
+            where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-12-01'),
+  false, 'is_changed: liquidado com o mesmo valor não conta');
+update fin_entries set settled_amount = 900
+ where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-12-01';
+select is((select is_changed from fin_entries
+            where contract_line_id = '00000000-0000-4000-8000-000000000a11' and competence = '2026-12-01'),
+  true, 'is_changed: liquidado com valor diferente');
 
 select * from finish();
 rollback;

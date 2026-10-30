@@ -20,7 +20,7 @@ export function CumulativeChart({ data }: { data: CumulativePoint[] }) {
           <Legend wrapperStyle={{ fontSize: 12 }} />
           <Area dataKey="faixa" name="Diferença" legendType="none" tooltipType="none" stroke="none" fill="var(--chart-1)" fillOpacity={0.15} isAnimationActive={false} />
           <Line dataKey="entradas" name="Entradas acumuladas" type="monotone" stroke="var(--chart-1)" strokeWidth={2} dot={false} isAnimationActive={false} />
-          <Line dataKey="saidas" name="Saídas acumuladas" type="monotone" stroke="var(--chart-5)" strokeWidth={2} dot={false} isAnimationActive={false} />
+          <Line dataKey="saidas" name="Saídas acumuladas" type="monotone" stroke="var(--destructive)" strokeWidth={2} dot={false} isAnimationActive={false} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>

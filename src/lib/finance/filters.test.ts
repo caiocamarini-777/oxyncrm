@@ -40,6 +40,13 @@ describe("parseFinanceFilters", () => {
     const f = parseFinanceFilters({}, "2026-10-29");
     expect(toFinanceSearchParams(f, "2026-10-29").toString()).toBe("");
   });
+  it("só alterados: padrão falso, vai e volta pela URL", () => {
+    expect(parseFinanceFilters({}, "2026-10-29").onlyChanged).toBe(false);
+    const f = parseFinanceFilters({ changed: "1" }, "2026-10-29");
+    expect(f.onlyChanged).toBe(true);
+    expect(toFinanceSearchParams(f, "2026-10-29").get("changed")).toBe("1");
+    expect(parseFinanceFilters(Object.fromEntries(toFinanceSearchParams(f, "2026-10-29")), "2026-10-29")).toEqual(f);
+  });
   it("aceita lista repetida (array)", () => {
     expect(parseFinanceFilters({ clients: ["a", "b"] }, "2026-10-29").clients).toEqual(["a", "b"]);
   });

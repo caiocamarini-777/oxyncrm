@@ -54,7 +54,7 @@ export default async function FinanceMonthPage({
       filters={filters}
       lookups={lookups}
       today={today}
-      controls={["renewals", "estimated"]}
+      controls={["renewals", "estimated", "changed"]}
     />
   );
 

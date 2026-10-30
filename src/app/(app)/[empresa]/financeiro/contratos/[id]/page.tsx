@@ -1,3 +1,4 @@
+import { ChangeBadge } from "@/components/finance/change-badge";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ContractSellers } from "@/components/finance/contract-sellers";
@@ -87,6 +88,7 @@ export default async function FinanceContractPage({ params }: { params: Promise<
                     <td className="px-3 py-2">
                       {e.description}
                       {e.nature ? <span className="ml-2 text-xs text-muted-foreground">{NATURE_LABEL[e.nature]}</span> : null}
+                      <ChangeBadge entry={e} />
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatMoney(e.amount)}</td>
                     <td className="px-3 py-2">{STATUS_LABEL[e.status]}</td>

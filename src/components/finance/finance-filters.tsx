@@ -33,7 +33,8 @@ export type FilterControl =
   | "accounts"
   | "statuses"
   | "renewals"
-  | "estimated";
+  | "estimated"
+  | "changed";
 
 const NATURE_OPTIONS: { id: Nature; name: string }[] = [
   { id: "fixed", name: "Fixa" },
@@ -157,6 +158,12 @@ export function FinanceFilterBar({
         <div className="flex items-center gap-2">
           <Switch id="fin-estimated" size="sm" checked={filters.includeEstimatedCommissions} onCheckedChange={(v) => update({ includeEstimatedCommissions: v })} />
           <Label htmlFor="fin-estimated" className="text-sm">Incluir comissões estimadas</Label>
+        </div>
+      ) : null}
+      {has("changed") ? (
+        <div className="flex items-center gap-2">
+          <Switch id="fin-changed" size="sm" checked={filters.onlyChanged} onCheckedChange={(v) => update({ onlyChanged: v })} />
+          <Label htmlFor="fin-changed" className="text-sm">Só alterados</Label>
         </div>
       ) : null}
     </div>

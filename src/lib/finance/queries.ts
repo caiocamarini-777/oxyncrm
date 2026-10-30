@@ -14,7 +14,7 @@ function fail(what: string, error: { message: string; code?: string }): never {
 const num = (v: number | string | null): number => (v === null ? 0 : Number(v));
 
 const ENTRY_COLUMNS =
-  "id, direction, status, due_date, settled_on, competence, gross, retention, amount, settled_amount, account_id, organization_id, service_category_id, income_category_id, expense_category_id, nature, description, locked";
+  "id, direction, status, due_date, settled_on, competence, gross, retention, amount, settled_amount, account_id, organization_id, service_category_id, income_category_id, expense_category_id, nature, description, locked, original_gross, original_due_date";
 
 /** Primeira conta ativa da empresa (por nome): destino dos lançamentos sem conta no saldo. */
 async function defaultAccountId(supabase: Awaited<ReturnType<typeof createServerClient>>, companyId: string) {
@@ -48,6 +48,8 @@ type RawEntry = {
   nature: string | null;
   description: string | null;
   locked: boolean;
+  original_gross: number | string | null;
+  original_due_date: string | null;
 };
 
 function mapEntry(r: RawEntry, fallbackAccountId: string | null): EntryRow {
@@ -70,6 +72,8 @@ function mapEntry(r: RawEntry, fallbackAccountId: string | null): EntryRow {
     description: r.description,
     incomeCategoryId: r.income_category_id,
     locked: r.locked,
+    originalGross: r.original_gross === null ? null : num(r.original_gross),
+    originalDueDate: r.original_due_date,
   };
 }
 
@@ -122,6 +126,8 @@ function filteredQuery(
   if (f.expenseCategories.length > 0) q = q.in("expense_category_id", f.expenseCategories);
   if (f.natures.length > 0) q = q.in("nature", f.natures);
   if (f.accounts.length > 0) q = q.in("account_id", f.accounts);
+  // is_changed: coluna gerada (locked ou liquidado com valor diferente); o PostgREST não compara colunas entre si.
+  if (f.onlyChanged) q = q.eq("is_changed", true);
   return q;
 }
 

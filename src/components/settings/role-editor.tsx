@@ -163,7 +163,7 @@ export function RoleEditor({ role }: { role: RoleDetail }) {
               key={key}
               id={`setting-${key}`}
               label={PERMISSION_LABELS.settings[key]}
-              checked={permissions.settings[key]}
+              checked={permissions.settings[key] ?? false}
               onChange={(c) =>
                 setPermissions((p) => ({ ...p, settings: { ...p.settings, [key]: c } }))
               }

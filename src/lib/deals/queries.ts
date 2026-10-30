@@ -346,6 +346,8 @@ export type DealItemRow = {
   unitPrice: number;
   discount: number;
   total: number;
+  serviceCategoryId: string | null;
+  serviceCategoryName: string | null;
 };
 
 export type DealDetail = {
@@ -382,6 +384,7 @@ export type DealDetail = {
   mrrStart: string | null;
   contractMonths: number | null;
   contractValue: number;
+  serviceCategoryId: string | null;
   items: DealItemRow[];
   schedule: { month: string; setup: number; mrr: number }[];
   ownerId: string;
@@ -411,7 +414,7 @@ export async function getDeal(id: string): Promise<DealDetail | null> {
   const { data, error } = await supabase
     .from("deals")
     .select(
-      "id, company_id, title, status, pipeline_id, stage_id, lost_reason_id, lost_note, lead_id, person_id, organization_id, estimated_value, expected_close_date, stage_entered_at, won_at, lost_at, setup_total, setup_installments, setup_first_due, mrr, mrr_start, contract_months, contract_value, owner_id, custom_fields, created_at, company:companies(name, slug), pipeline:pipelines(name, stages(id, name, position, probability, required_fields, archived_at)), reason:lost_reasons(name)",
+      "id, company_id, title, status, pipeline_id, stage_id, lost_reason_id, lost_note, lead_id, person_id, organization_id, estimated_value, expected_close_date, stage_entered_at, won_at, lost_at, setup_total, setup_installments, setup_first_due, mrr, mrr_start, contract_months, contract_value, service_category_id, owner_id, custom_fields, created_at, company:companies(name, slug), pipeline:pipelines(name, stages(id, name, position, probability, required_fields, archived_at)), reason:lost_reasons(name)",
     )
     .eq("id", id)
     .is("deleted_at", null)
@@ -422,7 +425,7 @@ export async function getDeal(id: string): Promise<DealDetail | null> {
     supabase.from("record_labels").select("label_id").eq("entity", "deals").eq("record_id", id),
     supabase
       .from("deal_items")
-      .select("id, product_id, kind, quantity, unit_price, discount, total, position, product:products(name, active)")
+      .select("id, product_id, kind, quantity, unit_price, discount, total, position, service_category_id, product:products(name, active), category:service_categories(name)")
       .eq("deal_id", id)
       .order("position")
       .order("created_at"),
@@ -480,6 +483,7 @@ export async function getDeal(id: string): Promise<DealDetail | null> {
     mrrStart: month(data.mrr_start),
     contractMonths: data.contract_months,
     contractValue: num(data.contract_value),
+    serviceCategoryId: data.service_category_id,
     items: (items.data ?? []).map((i) => {
       const product = one(i.product as Rel<{ name: string; active: boolean }>);
       return {
@@ -492,6 +496,8 @@ export async function getDeal(id: string): Promise<DealDetail | null> {
         unitPrice: num(i.unit_price),
         discount: num(i.discount),
         total: num(i.total),
+        serviceCategoryId: i.service_category_id,
+        serviceCategoryName: one(i.category as Rel<{ name: string }>)?.name ?? null,
       };
     }),
     schedule: (schedule.data ?? []).map((s) => ({ month: s.month.slice(0, 7), setup: num(s.setup), mrr: num(s.mrr) })),
@@ -606,14 +612,14 @@ export async function listActiveLostReasons(companyId: string): Promise<{ id: st
   return data ?? [];
 }
 
-export type ProductOption = { id: string; name: string; kind: "setup" | "recurring"; defaultPrice: number };
+export type ProductOption = { id: string; name: string; kind: "setup" | "recurring"; defaultPrice: number; serviceCategoryId: string | null };
 
 /** Produtos ativos da empresa para o seletor de itens (inativos nunca aparecem). */
 export async function listActiveProducts(companyId: string): Promise<ProductOption[]> {
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("products")
-    .select("id, name, kind, default_price")
+    .select("id, name, kind, default_price, service_category_id")
     .eq("company_id", companyId)
     .eq("active", true)
     .order("name");
@@ -623,5 +629,6 @@ export async function listActiveProducts(companyId: string): Promise<ProductOpti
     name: p.name,
     kind: p.kind as "setup" | "recurring",
     defaultPrice: num(p.default_price),
+    serviceCategoryId: p.service_category_id,
   }));
 }

@@ -20,7 +20,7 @@ export default async function ProductsSettingsPage({
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("products")
-    .select("id, name, kind, default_price, active")
+    .select("id, name, kind, default_price, active, service_category_id, category:service_categories(name)")
     .eq("company_id", selected.id)
     .order("name");
   if (error) fail("configurações", "produtos", error);
@@ -30,6 +30,8 @@ export default async function ProductsSettingsPage({
     kind: p.kind as ProductRow["kind"],
     defaultPrice: Number(p.default_price),
     active: p.active,
+    serviceCategoryId: p.service_category_id,
+    serviceCategoryName: (Array.isArray(p.category) ? p.category[0] : p.category)?.name ?? null,
   }));
   return (
     <div className="flex flex-col gap-4">

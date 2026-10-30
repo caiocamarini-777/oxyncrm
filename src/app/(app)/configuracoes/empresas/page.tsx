@@ -15,7 +15,7 @@ export default async function CompaniesSettingsPage({
   const [{ data: companies }, { data: memberships }] = await Promise.all([
     supabase
       .from("companies")
-      .select("id, name, slug, legal_name, cnpj, archived_at")
+      .select("id, name, slug, legal_name, cnpj, archived_at, finance_enabled")
       .order("name"),
     supabase.from("memberships").select("company_id"),
   ]);
@@ -30,6 +30,7 @@ export default async function CompaniesSettingsPage({
     legalName: c.legal_name,
     cnpj: c.cnpj,
     archived: c.archived_at !== null,
+    financeEnabled: c.finance_enabled,
     members: counts.get(c.id) ?? 0,
   }));
   return <CompaniesTable companies={items} openNew={novo === "1"} />;

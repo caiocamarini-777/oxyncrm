@@ -123,8 +123,8 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
       }
       details={
         <div className="flex flex-col gap-4">
-          <DealForm key={formKey} deal={deal} defs={defs} owners={owners} canEdit={permissions.edit} />
-          <DealItems deal={deal} products={products} canEdit={permissions.edit} />
+          <DealForm key={formKey} deal={deal} defs={defs} owners={owners} canEdit={permissions.edit} canCreateCategory={profile.isSuperAdmin} />
+          <DealItems deal={deal} products={products} canEdit={permissions.edit} canCreateCategory={profile.isSuperAdmin} />
           <ContractForm deal={deal} canEdit={permissions.edit} />
           <Card>
             <CardHeader>

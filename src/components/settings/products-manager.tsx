@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ServiceCategorySelect } from "@/components/records/service-category-select";
 import { createProduct, setProductActive, updateProduct } from "@/lib/products/actions";
 import { PRODUCT_KIND_LABELS, PRODUCT_KINDS } from "@/lib/products/schema";
 import { formatMoney } from "@/lib/records/format";
@@ -16,6 +17,8 @@ export type ProductRow = {
   kind: (typeof PRODUCT_KINDS)[number];
   defaultPrice: number;
   active: boolean;
+  serviceCategoryId: string | null;
+  serviceCategoryName: string | null;
 };
 
 const SELECT_CLASS = "h-9 rounded-md border border-input bg-background px-3 text-sm";
@@ -30,6 +33,7 @@ export function ProductsManager({ companyId, products }: { companyId: string; pr
   const [name, setName] = useState("");
   const [kind, setKind] = useState<string>("setup");
   const [price, setPrice] = useState("");
+  const [categoryId, setCategoryId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -38,13 +42,14 @@ export function ProductsManager({ companyId, products }: { companyId: string; pr
     e.preventDefault();
     setErrors({});
     startTransition(async () => {
-      const result = await createProduct(companyId, { name, kind: kind as ProductRow["kind"], defaultPrice: price });
+      const result = await createProduct(companyId, { name, kind: kind as ProductRow["kind"], defaultPrice: price, serviceCategoryId: categoryId });
       if (!result.ok) {
         setErrors(result.fieldErrors ?? { name: result.error });
         return;
       }
       setName("");
       setPrice("");
+      setCategoryId(null);
       router.refresh();
     });
   }
@@ -79,6 +84,10 @@ export function ProductsManager({ companyId, products }: { companyId: string; pr
           <Label htmlFor="product-price">Preço padrão</Label>
           <Input id="product-price" inputMode="decimal" placeholder="0,00" value={price} aria-invalid={Boolean(errors.defaultPrice)} onChange={(e) => setPrice(e.target.value)} className="w-36" />
         </div>
+        <div className="flex w-56 flex-col gap-1.5">
+          <Label htmlFor="product-category">Categoria de serviço</Label>
+          <ServiceCategorySelect id="product-category" companyId={companyId} value={categoryId} onChange={setCategoryId} allowCreate />
+        </div>
         <Button type="submit" disabled={pending}>
           Adicionar produto
         </Button>
@@ -105,6 +114,7 @@ export function ProductsManager({ companyId, products }: { companyId: string; pr
                 <th className="px-3 py-2 font-medium">Nome</th>
                 <th className="px-3 py-2 font-medium">Tipo</th>
                 <th className="px-3 py-2 font-medium">Preço padrão</th>
+                <th className="px-3 py-2 font-medium">Categoria</th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -112,12 +122,13 @@ export function ProductsManager({ companyId, products }: { companyId: string; pr
             <tbody className="divide-y">
               {products.map((p) =>
                 editingId === p.id ? (
-                  <ProductEditRow key={p.id} product={p} onDone={() => setEditingId(null)} />
+                  <ProductEditRow key={p.id} companyId={companyId} product={p} onDone={() => setEditingId(null)} />
                 ) : (
                   <tr key={p.id} data-testid="product-row" data-active={p.active}>
                     <td className={"px-3 py-2 " + (p.active ? "font-medium" : "text-muted-foreground")}>{p.name}</td>
                     <td className="px-3 py-2">{PRODUCT_KIND_LABELS[p.kind]}</td>
                     <td className="px-3 py-2">{formatMoney(p.defaultPrice)}</td>
+                    <td className="px-3 py-2">{p.serviceCategoryName ?? "-"}</td>
                     <td className="px-3 py-2">{p.active ? "Ativo" : <Badge variant="outline">Inativo</Badge>}</td>
                     <td className="flex justify-end gap-1 px-3 py-2">
                       <Button variant="outline" size="sm" aria-label={`Editar ${p.name}`} onClick={() => setEditingId(p.id)}>
@@ -138,18 +149,19 @@ export function ProductsManager({ companyId, products }: { companyId: string; pr
   );
 }
 
-function ProductEditRow({ product, onDone }: { product: ProductRow; onDone: () => void }) {
+function ProductEditRow({ companyId, product, onDone }: { companyId: string; product: ProductRow; onDone: () => void }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [name, setName] = useState(product.name);
   const [kind, setKind] = useState<string>(product.kind);
   const [price, setPrice] = useState(priceText(product.defaultPrice));
+  const [categoryId, setCategoryId] = useState<string | null>(product.serviceCategoryId);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   function save() {
     setErrors({});
     startTransition(async () => {
-      const result = await updateProduct(product.id, { name, kind: kind as ProductRow["kind"], defaultPrice: price });
+      const result = await updateProduct(product.id, { name, kind: kind as ProductRow["kind"], defaultPrice: price, serviceCategoryId: categoryId });
       if (!result.ok) {
         setErrors(result.fieldErrors ?? { name: result.error });
         return;
@@ -175,6 +187,9 @@ function ProductEditRow({ product, onDone }: { product: ProductRow; onDone: () =
       </td>
       <td className="px-3 py-2">
         <Input aria-label={`Preço de ${product.name}`} inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
+      </td>
+      <td className="px-3 py-2">
+        <ServiceCategorySelect ariaLabel={`Categoria de ${product.name}`} companyId={companyId} value={categoryId} onChange={setCategoryId} allowCreate />
       </td>
       <td className="px-3 py-2" colSpan={2}>
         <div className="flex flex-wrap items-center gap-2">

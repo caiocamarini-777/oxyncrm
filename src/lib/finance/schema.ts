@@ -120,11 +120,6 @@ const monthStart = (required: string) =>
     .regex(/^\d{4}-(0[1-9]|1[0-2])(-01)?$/, required)
     .transform((s) => `${s.slice(0, 7)}-01`);
 
-const optMonthStart = z.preprocess(
-  (v) => (blank(v) ? null : v),
-  monthStart("Informe um mês válido.").nullable(),
-);
-
 export const END_RULES = ["ends", "auto_renew", "renew_adjust", "confirm"] as const;
 export const ADJUST_KINDS = ["none", "percent", "index"] as const;
 export const ADJUST_INDEXES = ["IPCA", "IGP-M", "INPC"] as const;
@@ -207,25 +202,47 @@ export const contractLineSchema = z
   });
 export type ContractLineInput = z.input<typeof contractLineSchema>;
 
-export const recurringExpenseSchema = z.object({
-  description: z.string().trim().min(1, "Informe a descrição.").max(200, "Use no máximo 200 caracteres."),
-  payee: optText(200),
-  expenseCategoryId: z.string({ message: "Escolha a categoria da despesa." }).uuid("Escolha a categoria da despesa."),
-  nature: z.enum(ENTRY_NATURES, { message: "Escolha a natureza da despesa." }),
-  amount: money,
-  frequency: z.enum(["monthly", "quarterly", "yearly"], { message: "Escolha a frequência." }).default("monthly"),
-  dueDay: z.preprocess(
-    (v) => (typeof v === "string" ? Number(v.trim()) : v),
-    z.number({ message: "O dia de vencimento vai de 1 a 31." }).int("O dia de vencimento vai de 1 a 31.").min(1, "O dia de vencimento vai de 1 a 31.").max(31, "O dia de vencimento vai de 1 a 31."),
-  ),
-  startMonth: monthStart("Informe o mês inicial."),
-  endMonth: optMonthStart,
-  installments: optInt(1, 360, "As parcelas vão de 1 a 360."),
-  adjustRate: pct(0).transform((v) => v ?? 0),
-  adjustMonth: optInt(1, 12, "O mês de reajuste vai de 1 a 12."),
-  accountId: optionalUuid,
-});
-export type RecurringExpenseInput = z.input<typeof recurringExpenseSchema>;
+/** Item recorrente de entrada ou saída; início e fim são obrigatórios. */
+export const recurringItemSchema = z
+  .object({
+    direction: z.enum(ENTRY_DIRECTIONS, { message: "Escolha entrada ou saída." }).default("out"),
+    description: z.string().trim().min(1, "Informe a descrição.").max(200, "Use no máximo 200 caracteres."),
+    payee: optText(200),
+    organizationId: optionalUuid,
+    incomeCategoryId: optionalUuid,
+    serviceCategoryId: optionalUuid,
+    expenseCategoryId: z.preprocess((v) => (blank(v) ? null : v), z.string().uuid("Escolha a categoria da despesa.").nullable()),
+    nature: z.preprocess((v) => (blank(v) ? null : v), z.enum(ENTRY_NATURES, { message: "Escolha a natureza da despesa." }).nullable()),
+    amount: money,
+    frequency: z.enum(["monthly", "quarterly", "yearly"], { message: "Escolha a frequência." }).default("monthly"),
+    dueDay: z.preprocess(
+      (v) => (typeof v === "string" ? Number(v.trim()) : v),
+      z.number({ message: "O dia de vencimento vai de 1 a 31." }).int("O dia de vencimento vai de 1 a 31.").min(1, "O dia de vencimento vai de 1 a 31.").max(31, "O dia de vencimento vai de 1 a 31."),
+    ),
+    startMonth: monthStart("Informe o mês inicial."),
+    endMonth: z.preprocess((v) => (blank(v) ? undefined : v), monthStart("Informe o fim.")),
+    installments: optInt(1, 360, "As parcelas vão de 1 a 360."),
+    adjustRate: pct(0).transform((v) => v ?? 0),
+    adjustMonth: optInt(1, 12, "O mês de reajuste vai de 1 a 12."),
+    accountId: optionalUuid,
+  })
+  .superRefine((v, ctx) => {
+    if (v.endMonth < v.startMonth)
+      ctx.addIssue({ code: "custom", path: ["endMonth"], message: "O fim não pode ser antes do início." });
+    if (v.direction === "out") {
+      if (!v.expenseCategoryId)
+        ctx.addIssue({ code: "custom", path: ["expenseCategoryId"], message: "Escolha a categoria da despesa." });
+      if (!v.nature) ctx.addIssue({ code: "custom", path: ["nature"], message: "Escolha a natureza da despesa." });
+    } else if (!v.incomeCategoryId && !v.serviceCategoryId) {
+      ctx.addIssue({ code: "custom", path: ["incomeCategoryId"], message: "Escolha a categoria da receita." });
+    }
+  })
+  .transform((v) =>
+    v.direction === "out"
+      ? { ...v, incomeCategoryId: null, serviceCategoryId: null }
+      : { ...v, expenseCategoryId: null, nature: null },
+  );
+export type RecurringItemInput = z.input<typeof recurringItemSchema>;
 
 const name80 = z.string().trim().min(1, "Informe o nome.").max(80, "Use no máximo 80 caracteres.");
 

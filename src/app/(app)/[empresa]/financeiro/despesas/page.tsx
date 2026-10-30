@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { todaySaoPaulo } from "@/lib/finance/dates";
 import { getFinanceAccess } from "@/lib/finance/permissions";
-import { listFinanceLookups, listRecurringExpenses } from "@/lib/finance/queries";
+import { listFinanceLookups, listRecurringItems } from "@/lib/finance/queries";
 
 export const instant = false;
 
@@ -16,7 +16,7 @@ export default async function FinanceExpensesPage({ params }: { params: Promise<
 
   const [access, expenses, lookups] = await Promise.all([
     getFinanceAccess(company.id),
-    listRecurringExpenses(company.id),
+    listRecurringItems(company.id),
     listFinanceLookups(company.id),
   ]);
 
@@ -26,6 +26,7 @@ export default async function FinanceExpensesPage({ params }: { params: Promise<
       expenses={expenses}
       categories={lookups.expenseCategories}
       accounts={lookups.accounts}
+      lookups={{ incomeCategories: lookups.incomeCategories, serviceCategories: lookups.serviceCategories, clients: lookups.clients }}
       canManage={access.manage}
       startDefault={todaySaoPaulo().slice(0, 7)}
     />

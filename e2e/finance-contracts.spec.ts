@@ -16,6 +16,7 @@ const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao
 const start = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 1));
 const startIso = start.toISOString().slice(0, 10);
 const startYm = startIso.slice(0, 7);
+const endYm = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 11, 1)).toISOString().slice(0, 7);
 const lastDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
 const day10 = `10/${startIso.slice(5, 7)}/${startIso.slice(0, 4)}`;
 
@@ -133,14 +134,15 @@ test("2) contrato pendente: falta de dados, ativação e lançamento no mês; de
 
   // 5) despesa recorrente "Aluguel"
   await page.goto(`/${slug}/financeiro/despesas`);
-  await page.getByRole("button", { name: "Nova despesa" }).click();
+  await page.getByRole("button", { name: "Novo item" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Descrição").fill("Aluguel");
   await dialog.getByLabel("Categoria").selectOption({ label: "Escritório E2E" });
   await dialog.getByLabel("Natureza").selectOption({ label: "Fixa" });
   await dialog.getByLabel("Valor", { exact: true }).fill("4.674,11");
   await dialog.getByLabel("Dia de vencimento").fill("1");
-  await dialog.getByLabel("Mês inicial").fill(startYm);
+  await dialog.getByLabel("Início", { exact: true }).fill(startYm);
+  await dialog.getByLabel("Fim", { exact: true }).fill(endYm);
   await dialog.getByRole("button", { name: "Salvar" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("cell", { name: "Aluguel" })).toBeVisible();

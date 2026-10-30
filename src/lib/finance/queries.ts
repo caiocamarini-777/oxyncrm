@@ -2,6 +2,7 @@ import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 import type { EntryRow, Snapshot } from "./calc";
 import type { FinanceFilters } from "./filters";
+import { contractVigencia } from "./months";
 
 const PAGE = 1000;
 
@@ -236,6 +237,7 @@ export type ContractSummary = {
   organizationName: string | null;
   sourceChanged: boolean;
   dealId: string | null;
+  vigencia: { start: string; end: string } | null;
 };
 
 type OrgJoin = { id: string; name: string } | { id: string; name: string }[] | null;
@@ -250,7 +252,7 @@ export async function listContracts(
   const [list, pending] = await Promise.all([
     supabase
       .from("fin_contracts")
-      .select("id, title, status, organization_id, source_changed, deal_id, organizations(id, name)")
+      .select("id, title, status, organization_id, source_changed, deal_id, organizations(id, name), fin_contract_lines(kind, first_month, installments, months)")
       .eq("company_id", companyId)
       .in("status", statuses)
       .order("created_at", { ascending: false })
@@ -269,6 +271,9 @@ export async function listContracts(
       organizationName: orgOf(c.organizations as OrgJoin)?.name ?? null,
       sourceChanged: c.source_changed,
       dealId: c.deal_id,
+      vigencia: contractVigencia(
+        (c.fin_contract_lines ?? []).map((l) => ({ kind: l.kind, firstMonth: l.first_month, installments: l.installments, months: l.months })),
+      ),
     })),
   };
 }
@@ -305,6 +310,7 @@ export type ContractDetail = {
   sourceChanged: boolean;
   dealId: string | null;
   notes: string | null;
+  vigencia: { start: string; end: string } | null;
   lines: ContractLineRow[];
   entries: EntryRow[];
 };
@@ -344,6 +350,9 @@ export async function getContract(companyId: string, id: string): Promise<Contra
     sourceChanged: d.source_changed,
     dealId: d.deal_id,
     notes: d.notes,
+    vigencia: contractVigencia(
+      (lines.data ?? []).map((l) => ({ kind: l.kind, firstMonth: l.first_month, installments: l.installments, months: l.months })),
+    ),
     lines: (lines.data ?? []).map((l) => ({
       id: l.id,
       kind: l.kind as ContractLineRow["kind"],
@@ -375,12 +384,16 @@ export async function listOrganizations(companyId: string): Promise<{ id: string
   return data ?? [];
 }
 
-export type RecurringExpenseRow = {
+export type RecurringItemRow = {
   id: string;
+  direction: "in" | "out";
   description: string;
   payee: string | null;
-  expenseCategoryId: string;
-  nature: "fixed" | "variable" | "non_recurring";
+  organizationId: string | null;
+  incomeCategoryId: string | null;
+  serviceCategoryId: string | null;
+  expenseCategoryId: string | null;
+  nature: "fixed" | "variable" | "non_recurring" | null;
   amount: number;
   frequency: "monthly" | "quarterly" | "yearly";
   dueDay: number;
@@ -393,7 +406,7 @@ export type RecurringExpenseRow = {
   active: boolean;
 };
 
-export async function listRecurringExpenses(companyId: string): Promise<RecurringExpenseRow[]> {
+export async function listRecurringItems(companyId: string): Promise<RecurringItemRow[]> {
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from("fin_recurring_expenses")
@@ -404,12 +417,16 @@ export async function listRecurringExpenses(companyId: string): Promise<Recurrin
   if (error) fail("despesas recorrentes", error);
   return (data ?? []).map((r) => ({
     id: r.id,
+    direction: r.direction as RecurringItemRow["direction"],
     description: r.description,
     payee: r.payee,
+    organizationId: r.organization_id,
+    incomeCategoryId: r.income_category_id,
+    serviceCategoryId: r.service_category_id,
     expenseCategoryId: r.expense_category_id,
-    nature: r.nature as RecurringExpenseRow["nature"],
+    nature: r.nature as RecurringItemRow["nature"],
     amount: num(r.amount),
-    frequency: r.frequency as RecurringExpenseRow["frequency"],
+    frequency: r.frequency as RecurringItemRow["frequency"],
     dueDay: r.due_day,
     startMonth: r.start_month,
     endMonth: r.end_month,

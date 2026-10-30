@@ -95,7 +95,7 @@ test("admin com a empresa ativada vê menu e abas, inclusive Configurações", a
   const res = await page.goto(`/${slug}/financeiro`);
   expect(res?.status()).toBe(200);
   const tabs = page.getByRole("navigation", { name: "Financeiro" });
-  for (const t of ["Mês", "Projeção", "Clientes", "Serviços", "Custos", "Lançamentos", "Contratos", "Despesas", "Vendas", "Configurações"]) {
+  for (const t of ["Mês", "Projeção", "Clientes", "Serviços", "Custos", "Lançamentos", "Contratos", "Recorrentes", "Vendas", "Configurações"]) {
     await expect(tabs.getByRole("link", { name: t, exact: true })).toBeVisible();
   }
 });

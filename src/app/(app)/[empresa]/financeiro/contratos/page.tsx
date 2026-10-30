@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { getFinanceAccess } from "@/lib/finance/permissions";
 import { CONTRACT_STATUS_LABEL } from "@/lib/finance/labels";
+import { vigenciaLabel } from "@/lib/finance/months";
 import { listContracts, type ContractStatus } from "@/lib/finance/queries";
 import { cn } from "cn";
 
@@ -61,6 +62,7 @@ export default async function FinanceContractsPage({
               <tr>
                 <th className="px-3 py-2">Contrato</th>
                 <th className="px-3 py-2">Cliente</th>
+                <th className="px-3 py-2">Vigência</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -72,6 +74,7 @@ export default async function FinanceContractsPage({
                     <Link href={`${base}/${c.id}`} className="font-medium underline-offset-2 hover:underline">{c.title}</Link>
                   </td>
                   <td className="px-3 py-2">{c.organizationName ?? "—"}</td>
+                  <td className="px-3 py-2">{vigenciaLabel(c.vigencia)}</td>
                   <td className="px-3 py-2">{CONTRACT_STATUS_LABEL[c.status]}</td>
                   <td className="px-3 py-2">{c.sourceChanged ? <Badge variant="outline">Negócio mudou</Badge> : null}</td>
                 </tr>

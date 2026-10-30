@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createRecurringExpense, setRecurringExpenseActive, updateRecurringExpense } from "@/lib/finance/expenses-actions";
+import { createRecurringItem, setRecurringItemActive, updateRecurringItem } from "@/lib/finance/expenses-actions";
 import { FREQUENCY_LABEL, toInput } from "@/lib/finance/labels";
-import type { RecurringExpenseRow } from "@/lib/finance/queries";
+import { formatMonth } from "@/lib/finance/months";
+import type { RecurringItemRow } from "@/lib/finance/queries";
 import { createExpenseCategory } from "@/lib/finance/settings-actions";
 import { formatMoney } from "@/lib/records/format";
 
@@ -24,6 +25,12 @@ const NEW = "__new__";
 
 type Category = { id: string; name: string; defaultNature: "fixed" | "variable" | "non_recurring" };
 type Account = { id: string; name: string };
+type Named = { id: string; name: string };
+export type RecurringLookups = {
+  incomeCategories: Named[];
+  serviceCategories: Named[];
+  clients: Named[];
+};
 
 export function ExpenseCategorySelect({
   companyId,
@@ -107,6 +114,7 @@ function ExpenseDialog({
   companyId,
   categories,
   accounts,
+  lookups,
   canManage,
   expense,
   open,
@@ -116,13 +124,20 @@ function ExpenseDialog({
   companyId: string;
   categories: Category[];
   accounts: Account[];
+  lookups: RecurringLookups;
   canManage: boolean;
-  expense?: RecurringExpenseRow;
+  expense?: RecurringItemRow;
   open: boolean;
   onOpenChange: (o: boolean) => void;
   startDefault: string;
 }) {
   const router = useRouter();
+  const [direction, setDirection] = useState<"in" | "out">(expense?.direction ?? "out");
+  const [organizationId, setOrganizationId] = useState(expense?.organizationId ?? "");
+  // Entrada: "s:<serviço>" ou "i:<categoria de receita>".
+  const [incomeCat, setIncomeCat] = useState(
+    expense?.serviceCategoryId ? `s:${expense.serviceCategoryId}` : expense?.incomeCategoryId ? `i:${expense.incomeCategoryId}` : "",
+  );
   const [description, setDescription] = useState(expense?.description ?? "");
   const [payee, setPayee] = useState(expense?.payee ?? "");
   const [categoryId, setCategoryId] = useState(expense?.expenseCategoryId ?? "");
@@ -147,10 +162,14 @@ function ExpenseDialog({
     setErrors({});
     setFormError(null);
     const input = {
+      direction,
       description,
       payee,
-      expenseCategoryId: categoryId,
-      nature: nature as "fixed",
+      organizationId: organizationId || null,
+      incomeCategoryId: direction === "in" && incomeCat.startsWith("i:") ? incomeCat.slice(2) : null,
+      serviceCategoryId: direction === "in" && incomeCat.startsWith("s:") ? incomeCat.slice(2) : null,
+      expenseCategoryId: direction === "out" ? categoryId : null,
+      nature: direction === "out" ? (nature as "fixed") : null,
       amount,
       frequency: frequency as "monthly",
       dueDay,
@@ -161,14 +180,14 @@ function ExpenseDialog({
       adjustMonth,
       accountId: accountId || null,
     };
-    const r = expense ? await updateRecurringExpense(expense.id, input) : await createRecurringExpense(companyId, input);
+    const r = expense ? await updateRecurringItem(expense.id, input) : await createRecurringItem(companyId, input);
     setBusy(false);
     if (!r.ok) {
       setErrors(r.fieldErrors ?? {});
       setFormError(r.error);
       return;
     }
-    toast.success(expense ? "Despesa atualizada." : "Despesa criada.");
+    toast.success(expense ? "Item atualizado." : "Item criado.");
     onOpenChange(false);
     router.refresh();
   }
@@ -178,8 +197,24 @@ function ExpenseDialog({
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
           <DialogHeader>
-            <DialogTitle>{expense ? "Editar despesa recorrente" : "Nova despesa recorrente"}</DialogTitle>
+            <DialogTitle>{expense ? "Editar item recorrente" : "Novo item recorrente"}</DialogTitle>
           </DialogHeader>
+          <div className="flex gap-2" role="radiogroup" aria-label="Sentido">
+            {(["in", "out"] as const).map((d) => (
+              <Button
+                key={d}
+                type="button"
+                role="radio"
+                aria-checked={direction === d}
+                variant={direction === d ? "default" : "outline"}
+                size="sm"
+                disabled={!!expense}
+                onClick={() => setDirection(d)}
+              >
+                {d === "in" ? "Entrada" : "Saída"}
+              </Button>
+            ))}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1">
               <Label htmlFor="exp-description">Descrição</Label>
@@ -190,32 +225,65 @@ function ExpenseDialog({
               <Label htmlFor="exp-payee">Favorecido</Label>
               <Input id="exp-payee" value={payee} maxLength={200} onChange={(e) => setPayee(e.target.value)} />
             </div>
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="exp-category">Categoria</Label>
-              <ExpenseCategorySelect
-                id="exp-category"
-                companyId={companyId}
-                categories={categories}
-                value={categoryId}
-                canCreate={canManage}
-                defaultNature={nature}
-                onChange={(id, c) => {
-                  setCategoryId(id);
-                  if (c && !nature) setNature(c.defaultNature);
-                }}
-              />
-              {err("expenseCategoryId")}
-            </div>
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="exp-nature">Natureza</Label>
-              <select id="exp-nature" className={selectClass} value={nature} onChange={(e) => setNature(e.target.value)}>
-                <option value="">Escolha…</option>
-                {NATURES.map((n) => (
-                  <option key={n.id} value={n.id}>{n.name}</option>
-                ))}
-              </select>
-              {err("nature")}
-            </div>
+            {direction === "out" ? (
+              <>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="exp-category">Categoria</Label>
+                <ExpenseCategorySelect
+                  id="exp-category"
+                  companyId={companyId}
+                  categories={categories}
+                  value={categoryId}
+                  canCreate={canManage}
+                  defaultNature={nature}
+                  onChange={(id, c) => {
+                    setCategoryId(id);
+                    if (c && !nature) setNature(c.defaultNature);
+                  }}
+                />
+                {err("expenseCategoryId")}
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="exp-nature">Natureza</Label>
+                <select id="exp-nature" className={selectClass} value={nature} onChange={(e) => setNature(e.target.value)}>
+                  <option value="">Escolha…</option>
+                  {NATURES.map((n) => (
+                    <option key={n.id} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+                {err("nature")}
+              </div>
+              </>
+            ) : (
+              <>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="exp-income-cat">Categoria</Label>
+                  <select id="exp-income-cat" className={selectClass} value={incomeCat} onChange={(e) => setIncomeCat(e.target.value)}>
+                    <option value="">Escolha…</option>
+                    <optgroup label="Serviços">
+                      {lookups.serviceCategories.map((c) => (
+                        <option key={c.id} value={`s:${c.id}`}>{c.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Receitas">
+                      {lookups.incomeCategories.map((c) => (
+                        <option key={c.id} value={`i:${c.id}`}>{c.name}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  {err("incomeCategoryId")}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="exp-client">Cliente</Label>
+                  <select id="exp-client" className={selectClass} value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}>
+                    <option value="">Nenhum</option>
+                    {lookups.clients.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
             <div className="flex flex-col gap-1">
               <Label htmlFor="exp-amount">Valor</Label>
               <Input id="exp-amount" inputMode="decimal" placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} />
@@ -244,12 +312,12 @@ function ExpenseDialog({
               </select>
             </div>
             <div className="flex flex-col gap-1">
-              <Label htmlFor="exp-start">Mês inicial</Label>
+              <Label htmlFor="exp-start">Início</Label>
               <Input id="exp-start" type="month" value={startMonth} onChange={(e) => setStartMonth(e.target.value)} />
               {err("startMonth")}
             </div>
             <div className="flex flex-col gap-1">
-              <Label htmlFor="exp-end">Mês final (opcional)</Label>
+              <Label htmlFor="exp-end">Fim</Label>
               <Input id="exp-end" type="month" value={endMonth} onChange={(e) => setEndMonth(e.target.value)} />
               {err("endMonth")}
             </div>
@@ -288,24 +356,33 @@ export function ExpensesManager({
   expenses,
   categories,
   accounts,
+  lookups,
   canManage,
   startDefault,
 }: {
   companyId: string;
-  expenses: RecurringExpenseRow[];
+  expenses: RecurringItemRow[];
   categories: Category[];
   accounts: Account[];
+  lookups: RecurringLookups;
   canManage: boolean;
   startDefault: string;
 }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<RecurringExpenseRow | null>(null);
-  const catName = (id: string) => categories.find((c) => c.id === id)?.name ?? "—";
-  const natureName = (n: string) => NATURES.find((x) => x.id === n)?.name ?? n;
+  const [editing, setEditing] = useState<RecurringItemRow | null>(null);
+  const categoryOf = (e: RecurringItemRow) => {
+    if (e.direction === "out") return categories.find((c) => c.id === e.expenseCategoryId)?.name ?? "—";
+    return (
+      lookups.serviceCategories.find((c) => c.id === e.serviceCategoryId)?.name ??
+      lookups.incomeCategories.find((c) => c.id === e.incomeCategoryId)?.name ??
+      "—"
+    );
+  };
+  const natureName = (n: string | null) => (n ? (NATURES.find((x) => x.id === n)?.name ?? n) : "—");
 
-  async function toggle(e: RecurringExpenseRow) {
-    const r = await setRecurringExpenseActive(e.id, !e.active);
+  async function toggle(e: RecurringItemRow) {
+    const r = await setRecurringItemActive(e.id, !e.active);
     if (!r.ok) return toast.error(r.error);
     router.refresh();
   }
@@ -314,20 +391,23 @@ export function ExpensesManager({
     <div className="flex flex-col gap-3">
       {canManage ? (
         <div>
-          <Button type="button" size="sm" onClick={() => setCreating(true)}>Nova despesa</Button>
+          <Button type="button" size="sm" onClick={() => setCreating(true)}>Novo item</Button>
         </div>
       ) : null}
       {expenses.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nenhuma despesa recorrente cadastrada.</p>
+        <p className="text-sm text-muted-foreground">Nenhum item recorrente cadastrado.</p>
       ) : (
         <div className="overflow-x-auto rounded-xl border">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
               <tr>
                 <th className="px-3 py-2">Descrição</th>
+                <th className="px-3 py-2">Sentido</th>
                 <th className="px-3 py-2">Categoria</th>
                 <th className="px-3 py-2">Natureza</th>
                 <th className="px-3 py-2">Frequência</th>
+                <th className="px-3 py-2">Início</th>
+                <th className="px-3 py-2">Fim</th>
                 <th className="px-3 py-2">Dia</th>
                 <th className="px-3 py-2 text-right">Valor</th>
                 <th className="px-3 py-2">Situação</th>
@@ -338,9 +418,14 @@ export function ExpensesManager({
               {expenses.map((e) => (
                 <tr key={e.id} className="border-t">
                   <td className="px-3 py-2 font-medium">{e.description}</td>
-                  <td className="px-3 py-2">{catName(e.expenseCategoryId)}</td>
+                  <td className="px-3 py-2">{e.direction === "in" ? "Entrada" : "Saída"}</td>
+                  <td className="px-3 py-2">{categoryOf(e)}</td>
                   <td className="px-3 py-2">{natureName(e.nature)}</td>
                   <td className="px-3 py-2">{FREQUENCY_LABEL[e.frequency]}</td>
+                  <td className="px-3 py-2">{formatMonth(e.startMonth)}</td>
+                  <td className="px-3 py-2">
+                    {e.endMonth ? formatMonth(e.endMonth) : <Badge variant="outline">Defina o fim</Badge>}
+                  </td>
                   <td className="px-3 py-2">{e.dueDay}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatMoney(e.amount)}</td>
                   <td className="px-3 py-2">
@@ -359,7 +444,7 @@ export function ExpensesManager({
         </div>
       )}
       {creating ? (
-        <ExpenseDialog companyId={companyId} categories={categories} accounts={accounts} canManage={canManage} open onOpenChange={setCreating} startDefault={startDefault} />
+        <ExpenseDialog companyId={companyId} categories={categories} accounts={accounts} lookups={lookups} canManage={canManage} open onOpenChange={setCreating} startDefault={startDefault} />
       ) : null}
       {editing ? (
         <ExpenseDialog
@@ -367,6 +452,7 @@ export function ExpensesManager({
           companyId={companyId}
           categories={categories}
           accounts={accounts}
+          lookups={lookups}
           canManage={canManage}
           expense={editing}
           open

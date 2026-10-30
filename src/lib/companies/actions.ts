@@ -79,17 +79,3 @@ export async function setCompanyArchived(id: string, archived: boolean): Promise
   revalidatePath("/", "layout");
   return { ok: true, data: undefined };
 }
-
-export async function setCompanyFinanceEnabled(id: string, enabled: boolean): Promise<ActionResult> {
-  await requireSuperAdmin();
-  const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from("companies")
-    .update({ finance_enabled: enabled })
-    .eq("id", id)
-    .select("id");
-  if (error) return dbFailure(error);
-  if (!data || data.length === 0) return { ok: false, error: "Empresa não encontrada." };
-  revalidatePath("/", "layout");
-  return { ok: true, data: undefined };
-}

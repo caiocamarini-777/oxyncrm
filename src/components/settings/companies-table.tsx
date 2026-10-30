@@ -23,12 +23,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Switch } from "@/components/ui/switch";
-import { setCompanyArchived, setCompanyFinanceEnabled } from "@/lib/companies/actions";
+import { setCompanyArchived } from "@/lib/companies/actions";
 import { formatCnpj } from "@/lib/companies/cnpj";
 import { CompanyForm, type CompanyRow } from "./company-form";
 
-export type CompanyListItem = CompanyRow & { members: number; archived: boolean; financeEnabled: boolean };
+export type CompanyListItem = CompanyRow & { members: number; archived: boolean };
 
 export function CompaniesTable({
   companies,
@@ -47,14 +46,6 @@ export function CompaniesTable({
     startTransition(async () => {
       const result = await setCompanyArchived(c.id, archived);
       setArchiving(null);
-      if (result.ok) router.refresh();
-      else toast.error(result.error);
-    });
-  }
-
-  function toggleFinance(c: CompanyListItem, enabled: boolean) {
-    startTransition(async () => {
-      const result = await setCompanyFinanceEnabled(c.id, enabled);
       if (result.ok) router.refresh();
       else toast.error(result.error);
     });
@@ -81,7 +72,6 @@ export function CompaniesTable({
             <TableHead>Slug</TableHead>
             <TableHead>CNPJ</TableHead>
             <TableHead>Pessoas com acesso</TableHead>
-            <TableHead>Financeiro ativo</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Ações</TableHead>
           </TableRow>
@@ -93,14 +83,6 @@ export function CompaniesTable({
               <TableCell>{c.slug}</TableCell>
               <TableCell>{c.cnpj ? formatCnpj(c.cnpj) : ""}</TableCell>
               <TableCell>{c.members}</TableCell>
-              <TableCell>
-                <Switch
-                  aria-label={`Financeiro ativo em ${c.name}`}
-                  checked={c.financeEnabled}
-                  disabled={pending}
-                  onCheckedChange={(v) => toggleFinance(c, v)}
-                />
-              </TableCell>
               <TableCell>
                 <Badge variant={c.archived ? "secondary" : "default"}>
                   {c.archived ? "Arquivada" : "Ativa"}

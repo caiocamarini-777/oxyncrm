@@ -1,5 +1,5 @@
 begin;
-select plan(21);
+select plan(23);
 
 create function pg_temp.as_user(u uuid) returns void language plpgsql as $$
 begin
@@ -106,13 +106,17 @@ alter table fin_recurring_expenses drop constraint fin_recurring_expenses_end_mo
 insert into fin_recurring_expenses (id, company_id, description, expense_category_id, nature, amount, due_day, start_month) values
   ('00000000-0000-4000-8000-000000000e09', '00000000-0000-4000-8000-0000000000d1', 'tst-Legado', '00000000-0000-4000-8000-0000000000b1',
    'fixed', 300, 5, public.fin_current_month());
-alter table fin_recurring_expenses add constraint fin_recurring_expenses_end_month_required check (end_month is not null) not valid;
+alter table fin_recurring_expenses add constraint fin_recurring_expenses_end_month_required check (end_month is not null or not active) not valid;
 select is((select count(*)::int from fin_entries where recurring_expense_id = '00000000-0000-4000-8000-000000000e09'), 36,
   'item legado sem fim gera até o horizonte');
 select lives_ok($q$select public.fin_regenerate_recurring('00000000-0000-4000-8000-000000000e09')$q$,
   'item legado sem fim continua regenerando');
 select throws_ok($q$update fin_recurring_expenses set amount = 350 where id = '00000000-0000-4000-8000-000000000e09'$q$,
   '23514', null, 'alterar item legado sem informar o fim é rejeitado');
+select lives_ok($q$update fin_recurring_expenses set active = false where id = '00000000-0000-4000-8000-000000000e09'$q$,
+  'item legado sem fim pode ser desativado');
+select throws_ok($q$update fin_recurring_expenses set active = true where id = '00000000-0000-4000-8000-000000000e09'$q$,
+  '23514', null, 'reativar item sem fim é rejeitado');
 select lives_ok($q$update fin_recurring_expenses set amount = 350, end_month = (public.fin_current_month() + interval '5 months')::date
   where id = '00000000-0000-4000-8000-000000000e09'$q$, 'alterar item legado informando o fim é aceito');
 

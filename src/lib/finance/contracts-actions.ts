@@ -5,6 +5,7 @@ import { z } from "zod";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
+import { contractColumns } from "./contract-columns";
 import { diffLineIds } from "./line-diff";
 import { contractLineSchema, contractSchema, type ContractInput, type ContractLineInput } from "./schema";
 
@@ -23,22 +24,6 @@ function dbFailure(err: { code?: string; message?: string; details?: string }): 
     return { ok: false, error: detail ? `Faltam: ${detail}` : "Faltam dados para ativar o contrato." };
   }
   return { ok: false, error: translateDbError(err) };
-}
-
-function contractColumns(v: ReturnType<typeof contractSchema.parse>) {
-  return {
-    title: v.title,
-    organization_id: v.organizationId,
-    due_day: v.dueDay,
-    retention_rate: v.retentionRate,
-    account_id: v.accountId,
-    end_rule: v.endRule,
-    renewal_months: v.endRule === "ends" ? null : v.renewalMonths,
-    adjust_kind: v.adjustKind,
-    adjust_index: v.adjustKind === "index" ? v.adjustIndex : null,
-    adjust_rate: v.adjustKind === "percent" ? v.adjustRate : 0,
-    notes: v.notes,
-  };
 }
 
 function parseContract(input: ContractInput) {

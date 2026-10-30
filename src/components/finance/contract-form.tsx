@@ -282,7 +282,7 @@ export function ContractForm({
           ) : null}
           {adjustKind !== "none" ? (
             <div className="flex flex-col gap-1">
-              <Label htmlFor="contract-adjust-rate">{adjustKind === "index" ? "Spread (%)" : "Reajuste (%)"}</Label>
+              <Label htmlFor="contract-adjust-rate">{adjustKind === "index" ? "Estimativa do índice (%)" : "Reajuste (%)"}</Label>
               <Input id="contract-adjust-rate" inputMode="decimal" value={adjustRate} disabled={off} onChange={(e) => setAdjustRate(e.target.value)} />
               {err("adjustRate")}
             </div>

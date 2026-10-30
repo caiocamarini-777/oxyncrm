@@ -156,9 +156,11 @@ test("3) editar linha de contrato ativo mantém o mês liquidado e não deixa re
   const cat = await a.from("service_categories").select("id").eq("company_id", companyId).limit(1).single();
   if (account.error || cat.error) throw account.error ?? cat.error;
   const thisMonth = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7);
+  const org = await a.from("organizations").select("id").eq("company_id", companyId).limit(1).single();
+  if (org.error) throw org.error;
   const c = await a
     .from("fin_contracts")
-    .insert({ company_id: companyId, title: `Ativo E2E ${stamp}`, status: "draft", due_day: 5, account_id: account.data.id, end_rule: "ends" })
+    .insert({ company_id: companyId, title: `Ativo E2E ${stamp}`, status: "draft", due_day: 5, account_id: account.data.id, end_rule: "ends", organization_id: org.data.id })
     .select("id")
     .single();
   if (c.error) throw c.error;
@@ -168,7 +170,13 @@ test("3) editar linha de contrato ativo mantém o mês liquidado e não deixa re
     .select("id")
     .single();
   if (l.error) throw l.error;
-  const act = await a.from("fin_contracts").update({ status: "active" }).eq("id", c.data.id);
+  // Rascunho → ativo só pela RPC (valida os dados); ela exige a sessão de quem gerencia o Financeiro.
+  const s = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const si = await s.auth.signInWithPassword({ email: adminEmail, password });
+  if (si.error) throw si.error;
+  const act = await s.rpc("fin_activate_contract", { p_contract: c.data.id });
   if (act.error) throw act.error;
 
   const entries = async () => {

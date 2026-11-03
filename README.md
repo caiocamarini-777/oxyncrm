@@ -124,7 +124,7 @@ Só uma execução por job de cada vez: cada fatia toma uma concessão de 120 s,
 
 Atividades com lembrete geram uma notificação (função `generate_activity_reminders`, agendada no pg_cron a cada minuto). O sino na barra superior mostra as não lidas em tempo real (Supabase Realtime) e abre um aviso com o botão "Abrir".
 
-O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota uma vez por dia (12h UTC), o limite do plano Hobby da Vercel; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Para o e-mail sair perto do horário do lembrete, volte para `*/5 * * * *` no plano Pro, ou agende a rota via pg_cron + pg_net com o header Bearer.
+O e-mail do lembrete sai pela rota `GET /api/cron/lembretes`, que exige `Authorization: Bearer $CRON_SECRET` e envia só notificações dos últimos 60 minutos ainda sem e-mail. O `vercel.json` agenda a rota a cada 5 minutos; na Vercel, defina `CRON_SECRET` nas variáveis do projeto (a Vercel envia o cabeçalho sozinha). Atenção: o cron de 5 em 5 minutos exige Vercel Pro; no Hobby, agendar a rota via pg_cron + pg_net com o header Bearer.
 
 Configuração:
 

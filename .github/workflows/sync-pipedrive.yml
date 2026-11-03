@@ -1,0 +1,36 @@
+name: Sincronização Pipedrive
+
+# Todo dia às 9h (Brasília, UTC-3): traz do Pipedrive, que segue como origem até a migração, o que mudou.
+# Também roda à mão em Actions > Sincronização Pipedrive > Run workflow.
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-pipedrive
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # secrets do ambiente "producao" (banco real), separados dos secrets do CI
+    environment: producao
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Negócios, leads, pessoas, organizações, atividades e notas
+        run: pnpm sync:pipedrive
+      - name: Histórico de etapas
+        run: pnpm import:pipedrive-etapas

@@ -34,6 +34,8 @@ export const ImportMappings = z.object({
   users: z.record(z.string(), uuid),
   fallbackOwnerId: uuid,
   leadLabelCompany: z.record(z.string(), uuid),
+  /** etiquetas de lead ignoradas (empresa removida do CRM): leads com elas e contatos só deles são pulados */
+  ignoreLeadLabels: z.array(z.string()).optional(),
   defaultCompanyId: uuid,
   customFields: z.record(
     z.string(),

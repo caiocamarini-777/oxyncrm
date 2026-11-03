@@ -1,5 +1,6 @@
 // Sincronização diária com o Pipedrive (origem dos dados até a migração): pnpm sync:pipedrive
-// Cria uma importação nova com os mapeamentos da última importação concluída e a roda até o fim. Registros que já
+// Cria uma importação nova com os mapeamentos da última importação concluída e a roda até o fim. Funis e etiquetas de
+// lead de empresas apagadas do CRM são ignorados, assim como os contatos ligados só a eles. Registros que já
 // vieram do Pipedrive são atualizados (o vínculo fica em external_ids); os novos são criados. Nada é apagado.
 // Depois rode pnpm import:pipedrive-etapas para refazer o histórico de etapas.
 // O token vem de PIPEDRIVE_API_TOKEN e nunca é impresso.
@@ -7,6 +8,8 @@ import { loadEnv } from "./load-env";
 import { createAdminClient } from "../src/lib/supabase/admin";
 import { createPipedriveClient } from "../src/lib/import/pipedrive/client";
 import { runImportToEnd } from "../src/lib/import/engine";
+import { pruneMissingCompanies } from "../src/lib/import/mapping";
+import { ImportMappings } from "../src/lib/import/pipedrive/types";
 import { createSupabaseStore } from "../src/lib/import/store";
 
 loadEnv();
@@ -27,9 +30,15 @@ async function main() {
   if (error) throw new Error(`Não foi possível ler as importações: ${error.message}`);
   if (!last) throw new Error("Nenhuma importação concluída para copiar os mapeamentos. Faça a primeira pelo assistente.");
 
+  // empresas apagadas do CRM: o funil e as etiquetas de lead delas passam a ser ignorados
+  const { data: companies, error: companiesError } = await admin.from("companies").select("id");
+  if (companiesError) throw new Error(`Não foi possível ler as empresas: ${companiesError.message}`);
+  const { mappings, removed } = pruneMissingCompanies(ImportMappings.parse(last.mappings), new Set(companies.map((c) => c.id)));
+  if (removed.length) console.log(`Ignorando ${removed.length} empresa(s) que não existe(m) mais no CRM.`);
+
   const { data: job, error: insertError } = await admin
     .from("import_jobs")
-    .insert({ source: "pipedrive", status: "running", mappings: last.mappings, created_by: last.created_by })
+    .insert({ source: "pipedrive", status: "running", mappings, created_by: last.created_by })
     .select("id")
     .single();
   if (insertError || !job) throw new Error(`Não foi possível criar a importação: ${insertError?.message}`);

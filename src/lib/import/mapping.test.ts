@@ -8,6 +8,7 @@ import {
   dueAt,
   durationMinutes,
   leadCompany,
+  leadIgnored,
   mapActivity,
   mapDeal,
   mapLead,
@@ -15,6 +16,7 @@ import {
   mapOrganization,
   mapProduct,
   mapPerson,
+  pruneMissingCompanies,
   toIso,
   type MapCtx,
   type MapResult,
@@ -270,6 +272,23 @@ describe("outros mapeadores", () => {
 });
 
 describe("empresas", () => {
+  it("pruneMissingCompanies ignora funil e etiquetas de empresa apagada", () => {
+    const { mappings: m, removed } = pruneMissingCompanies(mappings, new Set([C2]));
+    expect(removed).toEqual([C1]);
+    expect([...m.ignorePipelines].sort()).toEqual(["1", "9"]);
+    expect(m.leadLabelCompany).toEqual({ L2: C2 });
+    expect(m.ignoreLeadLabels).toEqual(["L1"]);
+    expect(leadIgnored({ label_ids: ["L1"] }, m)).toBe(true);
+    expect(leadIgnored({ label_ids: ["L2"] }, m)).toBe(false);
+    expect(() => pruneMissingCompanies(mappings, new Set([C1]))).toThrow("empresa padrão");
+  });
+
+  it("companiesForContact não usa lead de etiqueta ignorada", () => {
+    const m = { ...mappings, ignoreLeadLabels: ["L1"] };
+    const ctx = { mappings: m, contactLinks: { p1: [{ type: "lead", labelIds: ["L1"] }] } } as unknown as MapCtx;
+    expect(companiesForContact("p1", ctx)).toEqual([C2]);
+  });
+
   it("leadCompany pela etiqueta, senão default", () => {
     expect(leadCompany({ label_ids: ["X", "L1"] }, mappings)).toBe(C1);
     expect(leadCompany({ label_ids: [] }, mappings)).toBe(C2);

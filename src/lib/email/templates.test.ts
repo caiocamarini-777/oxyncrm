@@ -32,4 +32,13 @@ describe("templates de e-mail", () => {
     expect(m.text).toContain(link);
     expect(m.html).toContain(link.replace(/&/g, "&amp;"));
   });
+  it("usa o logo da Oxyn servido pelo mesmo endereço do link", () => {
+    const m = recoveryEmail({ link: "https://crm.oxyngroup.com.br/auth/confirm?token_hash=x&type=recovery" });
+    expect(m.html).toContain('src="https://crm.oxyngroup.com.br/email/logo-oxyn-branco.png"');
+    expect(m.html).toContain("Segurança da conta");
+  });
+  it("lembrete escapa o assunto também no texto oculto de pré-visualização", () => {
+    const m = reminderEmail({ fullName: "Ana", subject: "<script>", dueAt: null, link });
+    expect(m.html).not.toContain("<script>");
+  });
 });

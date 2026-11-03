@@ -297,6 +297,38 @@ function applyCustom(item: PdItem, ctx: MapCtx): { custom: Row; natives: Natives
 
 // ---- empresas ------------------------------------------------------------------------------------------------
 
+/** Lead com etiqueta ignorada (empresa removida do CRM): não é importado. */
+export function leadIgnored(lead: PdItem, m: ImportMappings): boolean {
+  const ignored = m.ignoreLeadLabels ?? [];
+  const ids = Array.isArray(lead.label_ids) ? lead.label_ids : [];
+  return ids.some((id) => ignored.includes(String(id)));
+}
+
+/**
+ * Tira dos mapeamentos as empresas que não existem mais no CRM: o funil delas passa a ser ignorado e as etiquetas
+ * de lead delas, também. A empresa padrão precisa existir.
+ */
+export function pruneMissingCompanies(m: ImportMappings, existing: Set<string>): { mappings: ImportMappings; removed: string[] } {
+  if (!existing.has(m.defaultCompanyId)) throw new Error("A empresa padrão da importação não existe mais.");
+  const removed = new Set<string>();
+  const ignorePipelines = [...m.ignorePipelines];
+  for (const [id, p] of Object.entries(m.pipelines)) {
+    if (existing.has(p.companyId)) continue;
+    removed.add(p.companyId);
+    if (!ignorePipelines.includes(id)) ignorePipelines.push(id);
+  }
+  const leadLabelCompany: Record<string, string> = {};
+  const ignoreLeadLabels = [...(m.ignoreLeadLabels ?? [])];
+  for (const [label, company] of Object.entries(m.leadLabelCompany)) {
+    if (existing.has(company)) leadLabelCompany[label] = company;
+    else {
+      removed.add(company);
+      if (!ignoreLeadLabels.includes(label)) ignoreLeadLabels.push(label);
+    }
+  }
+  return { mappings: { ...m, ignorePipelines, leadLabelCompany, ignoreLeadLabels }, removed: [...removed] };
+}
+
 export function leadCompany(lead: PdItem, m: ImportMappings): string {
   const ids = Array.isArray(lead.label_ids) ? lead.label_ids : [];
   for (const id of ids) {
@@ -312,7 +344,7 @@ export function companiesForContact(contactId: string, ctx: MapCtx): string[] {
     if (l.type === "deal") {
       const p = ctx.mappings.pipelines[String(l.pipelineId)];
       if (p && !ctx.mappings.ignorePipelines.includes(String(l.pipelineId))) set.add(p.companyId);
-    } else {
+    } else if (!leadIgnored({ label_ids: l.labelIds }, ctx.mappings)) {
       set.add(leadCompany({ label_ids: l.labelIds }, ctx.mappings));
     }
   }

@@ -4,6 +4,7 @@ import { PipedriveAuthError } from "./pipedrive/client";
 import { ImportMappings, type PdFieldDef, type PdItem, type PdPage, type PdPageEntity } from "./pipedrive/types";
 import {
   leadCompany,
+  leadIgnored,
   mapActivity,
   mapDeal,
   mapLead,
@@ -52,6 +53,10 @@ export type ImportCache = {
   ignoredDeals: Record<string, 1>;
   /** id do lead -> empresa */
   leads: Record<string, number>;
+  /** leads com etiqueta ignorada: atividades e anotações deles são puladas */
+  ignoredLeads?: Record<string, 1>;
+  /** "person:12" / "org:5" vistos em negócios ou leads ignorados: sem outra empresa, o contato é pulado */
+  ignoredContacts?: Record<string, 1>;
   /** "person:12" / "org:5" -> empresas vistas pelos negócios e leads do contato (a primeira é a principal) */
   contacts: Record<string, number[]>;
   /** id do usuário do Pipedrive dono de negócios ou leads -> empresas desses registros */
@@ -253,7 +258,8 @@ function companyIdx(cache: ImportCache, id: string): number {
 
 function contactCompanies(cache: ImportCache, key: string, fallback: string): string[] {
   const idx = cache.contacts[key];
-  return idx?.length ? idx.map((i) => cache.companies[i]) : [fallback];
+  if (idx?.length) return idx.map((i) => cache.companies[i]);
+  return cache.ignoredContacts?.[key] ? [] : [fallback];
 }
 
 /**
@@ -265,7 +271,7 @@ function personCompanies(cache: ImportCache, item: PdItem, fallback: string): st
   const key = `person:${refId(item.id)}`;
   const org = refId(item.org_id);
   const idx = uniq([...(cache.contacts[key] ?? []), ...(org ? (cache.contacts[`org:${org}`] ?? []) : [])]);
-  if (!idx.length) return [fallback];
+  if (!idx.length) return cache.ignoredContacts?.[key] ? [] : [fallback];
   cache.contacts[key] = idx;
   return idx.map((i) => cache.companies[i]);
 }
@@ -279,6 +285,7 @@ function recordCompanies(item: PdItem, cache: ImportCache, fallback: string): st
   if (deal && cache.ignoredDeals?.[deal]) return null;
   if (deal && cache.deals[deal] !== undefined) return [cache.companies[cache.deals[deal]]];
   const lead = refId(item.lead_id);
+  if (lead && cache.ignoredLeads?.[lead]) return null;
   if (lead && cache.leads[lead] !== undefined) return [cache.companies[cache.leads[lead]]];
   const person = refId(item.person_id);
   if (person) return contactCompanies(cache, `person:${person}`, fallback);
@@ -317,6 +324,9 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
     if (!list.includes(ci)) list.push(ci);
   };
   const link = (kind: string, id: string | null, ci: number) => id && add(cache.contacts, `${kind}:${id}`, ci);
+  const skip = (kind: string, id: string | null) => {
+    if (id) (cache.ignoredContacts ??= {})[`${kind}:${id}`] = 1;
+  };
   for (const item of page.items) {
     const id = refId(item.id);
     if (!id) continue;
@@ -331,6 +341,8 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
       const pm = p ? m.pipelines[p] : undefined;
       if (!p || !pm || m.ignorePipelines.includes(p)) {
         cache.ignoredDeals[id] = 1;
+        skip("person", refId(item.person_id));
+        skip("org", refId(item.org_id));
         continue;
       }
       const ci = companyIdx(cache, pm.companyId);
@@ -339,6 +351,10 @@ async function indexPage(env: ImportEnv, cursor: ImportCursor, client: ImportSou
       link("org", refId(item.org_id), ci);
       const owner = refId(item.owner_id ?? item.user_id);
       if (owner) add(cache.owners, owner, ci);
+    } else if (leadIgnored(item, m)) {
+      (cache.ignoredLeads ??= {})[id] = 1;
+      skip("person", refId(item.person_id));
+      skip("org", refId(item.organization_id ?? item.org_id));
     } else {
       const ci = companyIdx(cache, leadCompany(item, m));
       cache.leads[id] = ci;
@@ -540,6 +556,7 @@ function mapItem(step: Step, item: PdItem, env: ImportEnv, base: MapCtx, cache: 
       return personCompanies(cache, item, fallback).map((c) => mapPerson(item, ctxFor(c, "persons")));
     case "leads":
     case "archived_leads":
+      if (leadIgnored(item, m)) return null;
       return [mapLead(item, { ...ctxFor(leadCompany(item, m), "leads"), archived: step === "archived_leads" })];
     case "deals": {
       const p = refId(item.pipeline_id);

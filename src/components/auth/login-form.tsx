@@ -12,6 +12,7 @@ const ERRORS: Record<string, string> = {
   inativo: "Seu acesso foi desativado. Fale com o administrador.",
   link: "Este link expirou ou já foi usado. Peça um novo.",
   google: "Este e-mail não tem convite para o Oxyn CRM.",
+  google_falha: "Não foi possível entrar com o Google. Tente de novo ou use e-mail e senha.",
 };
 
 export function LoginForm({ next, erro }: { next: string | null; erro: string | null }) {
@@ -45,7 +46,7 @@ export function LoginForm({ next, erro }: { next: string | null; erro: string | 
       provider: "google",
       options: { redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback` },
     });
-    if (err) setError(ERRORS.google);
+    if (err) setError(ERRORS.google_falha);
   }
 
   return (

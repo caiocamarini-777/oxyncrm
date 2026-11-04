@@ -2,7 +2,8 @@ import "server-only";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createServerClient } from "@/lib/supabase/server";
 import type { RecordEntity } from "@/lib/records/types";
-import { describeEvent } from "./describe";
+import { getRecordEmailEvents } from "@/lib/gmail/queries";
+import { describeEvent, emailTimelineItem, sortByAtDesc } from "./describe";
 
 export type TimelineItem = {
   kind: string;
@@ -21,7 +22,7 @@ function fail(what: string, error: { message: string; code?: string }): never {
 export async function getTimeline(entity: RecordEntity, recordId: string): Promise<TimelineItem[]> {
   const supabase = await createServerClient();
   const profile = await getCurrentProfile();
-  const [events, notes] = await Promise.all([
+  const [events, notes, emails] = await Promise.all([
     supabase
       .from("timeline_events")
       .select("id, kind, actor_id, data, created_at")
@@ -36,6 +37,11 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
       .eq("entity", entity)
       .eq("record_id", recordId)
       .is("deleted_at", null),
+    // Se a parte de e-mail falhar, o card segue sem os e-mails na linha do tempo.
+    getRecordEmailEvents(entity, recordId, 200).catch((e: unknown) => {
+      console.error("[timeline] e-mails:", e);
+      return [] as Awaited<ReturnType<typeof getRecordEmailEvents>>;
+    }),
   ]);
   if (events.error) fail("eventos", events.error);
   if (notes.error) fail("anotações", notes.error);
@@ -114,5 +120,6 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     }
     items.push({ kind: e.kind, at: e.created_at, actorName, text: describeEvent({ kind: e.kind, entity, data }, names) });
   }
-  return items;
+  for (const m of emails) items.push(emailTimelineItem(m));
+  return sortByAtDesc(items);
 }

@@ -5,6 +5,7 @@ import { PersonOrganizationLink } from "@/components/persons/person-organization
 import { RecordHeader } from "@/components/records/record-header";
 import { RecordLayout } from "@/components/records/record-layout";
 import { NoteComposer } from "@/components/records/note-composer";
+import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
 import { ActivityTab } from "@/components/activities/activity-tab";
@@ -81,6 +82,7 @@ export default async function PersonPage({ params }: { params: Promise<{ empresa
         <RecordTabs
           notes={<NoteComposer entity="persons" recordId={person.id} />}
           activity={<ActivityTab data={activity} />}
+          email={<RecordEmail entity="persons" recordId={person.id} />}
           timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }

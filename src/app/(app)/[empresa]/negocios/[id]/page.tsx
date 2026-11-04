@@ -9,6 +9,7 @@ import { StageBar } from "@/components/deals/stage-bar";
 import { NoteComposer } from "@/components/records/note-composer";
 import { RecordHeader } from "@/components/records/record-header";
 import { RecordLayout } from "@/components/records/record-layout";
+import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
 import { ActivityTab } from "@/components/activities/activity-tab";
@@ -140,6 +141,7 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
         <RecordTabs
           notes={<NoteComposer entity="deals" recordId={deal.id} />}
           activity={<ActivityTab data={activity} />}
+          email={<RecordEmail entity="deals" recordId={deal.id} />}
           timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }

@@ -124,6 +124,31 @@ export function describeEvent(event: EventLike, names: Record<string, string>): 
   }
 }
 
+/** Item da linha do tempo para uma mensagem de e-mail vinculada ao registro. */
+export function emailTimelineItem(m: {
+  direction: "in" | "out";
+  fromEmail: string;
+  fromName: string | null;
+  subject: string;
+  sentAt: string;
+}): { kind: "email_in" | "email_out"; at: string; actorName: string; text: string } {
+  const subject = m.subject.trim() || "(sem assunto)";
+  return {
+    kind: m.direction === "out" ? "email_out" : "email_in",
+    at: m.sentAt,
+    actorName: m.fromName?.trim() || m.fromEmail || "Alguém",
+    text: `${m.direction === "out" ? "E-mail enviado" : "E-mail recebido"}: ${subject}`,
+  };
+}
+
+/** Une listas já ordenadas ou não e devolve da mais recente para a mais antiga (empate mantém a ordem). */
+export function sortByAtDesc<T extends { at: string }>(items: T[]): T[] {
+  return items
+    .map((item, i) => ({ item, i, t: Date.parse(item.at) || 0 }))
+    .sort((a, b) => b.t - a.t || a.i - b.i)
+    .map((x) => x.item);
+}
+
 export type NoteChunk = { type: "text" | "link"; value: string };
 
 /** Separa URLs http(s) do resto; o restante fica como texto puro (React escapa). */

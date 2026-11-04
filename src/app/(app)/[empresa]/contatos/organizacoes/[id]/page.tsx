@@ -3,6 +3,7 @@ import { OrganizationEditPanel } from "@/components/organizations/organization-e
 import { OrganizationPersons } from "@/components/organizations/organization-persons";
 import { RecordHeader } from "@/components/records/record-header";
 import { NoteComposer } from "@/components/records/note-composer";
+import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { Timeline } from "@/components/records/timeline";
 import { ActivityTab } from "@/components/activities/activity-tab";
@@ -76,6 +77,7 @@ export default async function OrganizationPage({
         <RecordTabs
           notes={<NoteComposer entity="organizations" recordId={organization.id} />}
           activity={<ActivityTab data={activity} />}
+          email={<RecordEmail entity="organizations" recordId={organization.id} />}
           timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }

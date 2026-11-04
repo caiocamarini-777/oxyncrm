@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeEvent, joinList, linkify } from "./describe";
+import { describeEvent, emailTimelineItem, joinList, linkify, sortByAtDesc } from "./describe";
 
 const names = { u1: "Ana", u2: "Bruno", r1: "Sem orçamento" };
 
@@ -82,5 +82,35 @@ describe("describeEvent com nomes de atividade (como monta timeline/queries)", (
     expect(describeEvent({ kind: "activity_completed", entity: "deals", data: { activity_id: "zz" } }, {})).toBe(
       "Concluiu atividade: atividade",
     );
+  });
+});
+
+describe("emailTimelineItem", () => {
+  const base = { fromEmail: "ana@x.com", fromName: "Ana", subject: "Proposta", sentAt: "2026-05-01T12:00:00Z" };
+  it("recebido usa o nome do remetente", () => {
+    expect(emailTimelineItem({ ...base, direction: "in" })).toEqual({
+      kind: "email_in",
+      at: "2026-05-01T12:00:00Z",
+      actorName: "Ana",
+      text: "E-mail recebido: Proposta",
+    });
+  });
+  it("enviado, sem nome cai no e-mail e sem assunto avisa", () => {
+    expect(emailTimelineItem({ ...base, direction: "out", fromName: null, subject: " " })).toMatchObject({
+      kind: "email_out",
+      actorName: "ana@x.com",
+      text: "E-mail enviado: (sem assunto)",
+    });
+  });
+});
+
+describe("sortByAtDesc", () => {
+  it("mais recente primeiro, empate mantém a ordem", () => {
+    const out = sortByAtDesc([
+      { at: "2026-01-01T00:00:00Z", id: "a" },
+      { at: "2026-03-01T00:00:00+00:00", id: "b" },
+      { at: "2026-03-01T00:00:00Z", id: "c" },
+    ]);
+    expect(out.map((x) => x.id)).toEqual(["b", "c", "a"]);
   });
 });

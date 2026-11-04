@@ -51,6 +51,9 @@ const clientWith = (err: Error | null): SyncClient =>
     getMessage: async () => {
       throw new Error("não usado");
     },
+    getThread: async () => {
+      throw new Error("não usado");
+    },
     listHistory: async () => {
       if (err) throw err;
       return { history: [], historyId: "2" };

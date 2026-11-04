@@ -54,8 +54,10 @@ class FakeGmail implements SyncClient {
   history: { ids: string[] }[] = [];
   historyError: Error | null = null;
   profileHistoryId = "100";
-  calls = { metadata: 0, full: 0, list: [] as { q?: string; pageToken?: string }[], history: [] as string[] };
+  calls = { metadata: 0, full: 0, thread: [] as string[], list: [] as { q?: string; pageToken?: string }[], history: [] as string[] };
   failIds = new Set<string>();
+  /** Erro permanente do Gmail (400) só dessa mensagem. */
+  poisonIds = new Set<string>();
   fatalOn: Error | null = null;
 
   add(r: Row) {
@@ -78,9 +80,17 @@ class FakeGmail implements SyncClient {
     const r = this.rows.get(id)!;
     if (r.gone) throw new GmailApiError(404, "not found");
     if (this.failIds.has(id)) throw new GmailApiError(500, "boom");
+    if (this.poisonIds.has(id)) throw new GmailApiError(400, "invalid");
     if (format === "metadata") this.calls.metadata++;
     else this.calls.full++;
     return msg(id, r.threadId, r.from, r.to, { labelIds: r.labelIds ?? ["INBOX"] }, format === "full");
+  }
+  async getThread(id: string, format: "metadata" | "full") {
+    this.calls.thread.push(`${id}:${format}`);
+    const messages = [...this.rows.values()]
+      .filter((r) => r.threadId === id && !r.gone)
+      .map((r) => msg(r.id, r.threadId, r.from, r.to, { labelIds: r.labelIds ?? ["INBOX"] }, format === "full"));
+    return { id, messages };
   }
   async listHistory(opts: { startHistoryId: string; pageToken?: string }) {
     this.calls.history.push(opts.startHistoryId);
@@ -102,6 +112,7 @@ class FakeStore implements SyncStore {
   links = new Map<string, { origin: string; unlinked_at: string | null }>();
   patches: AccountPatch[] = [];
   storeCalls = 0;
+  failStore = false;
 
   async updateAccount(_id: string, patch: AccountPatch) {
     this.patches.push(patch);
@@ -113,6 +124,7 @@ class FakeStore implements SyncStore {
     return new Set(ids.filter((i) => this.threads.has(i)));
   }
   async storeMessage(account: SyncAccount, p: Parameters<SyncStore["storeMessage"]>[1], links: Parameters<SyncStore["storeMessage"]>[2]) {
+    if (this.failStore) throw new Error("Falha ao gravar a mensagem: db fora");
     this.storeCalls++;
     const t = this.threads.get(p.threadId) ?? { id: `thr-${p.threadId}`, subject: p.subject, last: null };
     if (!t.last || p.sentAt > t.last) t.last = p.sentAt;
@@ -167,7 +179,7 @@ describe("primeira carga", () => {
     expect(r).toMatchObject({ processed: 2, stored: 1, linked: 3, errors: 0, phase: "backfill", complete: true });
     expect([...store.messages.keys()]).toEqual(["m1"]);
     expect(store.messages.get("m1")).toMatchObject({ direction: "in", html: "<p>corpo</p>" });
-    expect(gmail.calls.full).toBe(1); // m2 não vai para full
+    expect(gmail.calls.thread).toEqual(["t1:full"]); // m2 não casa: nem conversa nem full
     expect(store.patches).toContainEqual(expect.objectContaining({ backfill_done: true, backfill_page_token: null }));
   });
 
@@ -223,11 +235,84 @@ describe("primeira carga", () => {
     gmail.failIds.add("bad");
     gmail.pages = [{ ids: ["bad", "ok"] }, { ids: [] }];
     const r = await run(account());
-    expect(r).toMatchObject({ stored: 1, errors: 1, complete: false });
+    expect(r).toMatchObject({ stored: 1, errors: 1, skipped: 0, complete: false }); // 500 é transitório
     expect(r.lastError).toContain("bad");
     expect(store.patches.some((p) => p.backfill_done)).toBe(false);
     expect(store.patches.some((p) => p.backfill_page_token)).toBe(false);
     expect(store.patches.at(-1)?.last_error).toContain("bad");
+  });
+});
+
+describe("mensagem envenenada", () => {
+  it("erro permanente de uma mensagem: registra o id, pula e avança o cursor", async () => {
+    gmail.add({ id: "bad", threadId: "tb", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "ok", threadId: "to", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.poisonIds.add("bad");
+    gmail.pages = [{ ids: ["bad", "ok"] }];
+    const r = await run(account());
+    expect(r).toMatchObject({ stored: 1, errors: 0, skipped: 1, complete: true });
+    expect(r.lastError).toContain("bad");
+    expect([...store.messages.keys()]).toEqual(["ok"]);
+    expect(store.patches).toContainEqual(expect.objectContaining({ backfill_done: true }));
+    expect(store.patches.at(-1)?.last_error).toContain("bad");
+  });
+
+  it("incremental: history_id avança mesmo com a mensagem ignorada", async () => {
+    gmail.add({ id: "bad", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.poisonIds.add("bad");
+    gmail.history = [{ ids: ["bad"] }];
+    const r = await run(account({ backfill_done: true, history_id: "100" }));
+    expect(r).toMatchObject({ skipped: 1, errors: 0, complete: true });
+    expect(store.patches).toContainEqual({ history_id: "200" });
+  });
+
+  it("falha ao gravar no banco continua impedindo o avanço", async () => {
+    gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.history = [{ ids: ["m1"] }];
+    store.failStore = true;
+    const r = await run(account({ backfill_done: true, history_id: "100" }));
+    expect(r).toMatchObject({ errors: 1, skipped: 0, complete: false });
+    expect(store.patches.some((p) => p.history_id)).toBe(false);
+  });
+});
+
+describe("conversa que passa a casar", () => {
+  it("busca a conversa inteira e grava todas as mensagens, sem rascunho/spam/lixo", async () => {
+    gmail.add({ id: "old1", threadId: "t1", from: "alguem@desconhecido.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "old2", threadId: "t1", from: "ana@oxyn.com", to: "alguem@desconhecido.com" });
+    gmail.add({ id: "draft", threadId: "t1", from: "ana@oxyn.com", to: "x@y.com", labelIds: ["DRAFT"] });
+    gmail.add({ id: "junk", threadId: "t1", from: "spam@y.com", to: "ana@oxyn.com", labelIds: ["SPAM"] });
+    gmail.add({ id: "new", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.history = [{ ids: ["new"] }];
+    const r = await run(account({ backfill_done: true, history_id: "100" }));
+    expect(gmail.calls.thread).toEqual(["t1:full"]);
+    expect([...store.messages.keys()].sort()).toEqual(["new", "old1", "old2"]);
+    expect(r).toMatchObject({ stored: 3, linked: 3, errors: 0, complete: true });
+    expect(store.links.size).toBe(3); // vínculos da mensagem que casou, uma vez
+  });
+
+  it("não busca a mesma conversa duas vezes no lote", async () => {
+    gmail.add({ id: "old", threadId: "t1", from: "alguem@desconhecido.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "n1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "n2", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.history = [{ ids: ["n1", "n2"] }];
+    const r = await run(account({ backfill_done: true, history_id: "100" }));
+    expect(gmail.calls.thread).toEqual(["t1:full"]);
+    expect(gmail.calls.full).toBe(0);
+    expect(r.stored).toBe(3);
+    expect(store.storeCalls).toBe(3);
+  });
+
+  it("conversa já salva: continua gravando só a mensagem nova", async () => {
+    gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.pages = [{ ids: ["m1"] }];
+    await run(account());
+    gmail.add({ id: "m2", threadId: "t1", from: "ana@oxyn.com", to: "outro@semvinculo.com" });
+    gmail.history = [{ ids: ["m2"] }];
+    gmail.calls.thread.length = 0;
+    await run(account({ backfill_done: true, history_id: "100" }));
+    expect(gmail.calls.thread).toEqual([]);
+    expect(store.messages.has("m2")).toBe(true);
   });
 });
 
@@ -262,9 +347,9 @@ describe("incremental", () => {
 
   it("conversa já salva: grava mesmo sem vínculo na mensagem", async () => {
     gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
-    gmail.add({ id: "m2", threadId: "t1", from: "ana@oxyn.com", to: "outro@semvinculo.com" });
     gmail.pages = [{ ids: ["m1"] }];
     await run(account());
+    gmail.add({ id: "m2", threadId: "t1", from: "ana@oxyn.com", to: "outro@semvinculo.com" });
     gmail.history = [{ ids: ["m2"] }];
     const r = await run(ready());
     expect(r.stored).toBe(1);

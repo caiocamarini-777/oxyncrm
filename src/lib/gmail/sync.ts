@@ -1,6 +1,6 @@
 import { GmailApiError, type GmailClient, GmailAuthError, GmailHistoryExpiredError, GmailRateLimitError } from "./client";
-import { type ContactIndex, matchMessage } from "./matcher";
-import { parseGmailMessage } from "./parse";
+import { type ContactIndex, type EmailLinkTarget, matchMessage } from "./matcher";
+import { parseGmailMessage, type ParsedMessage } from "./parse";
 import {
   backfillQuery,
   chunk,
@@ -20,7 +20,7 @@ import type { SyncStore } from "./store";
 export const CONCURRENCY = 8;
 const PAGE_SIZE = 100;
 
-export type SyncClient = Pick<GmailClient, "getProfile" | "listMessages" | "getMessage" | "listHistory">;
+export type SyncClient = Pick<GmailClient, "getProfile" | "listMessages" | "getMessage" | "getThread" | "listHistory">;
 
 export type SyncDeps = {
   client: SyncClient;
@@ -37,11 +37,13 @@ export type SyncResult = {
   stored: number;
   linked: number;
   errors: number;
+  /** Mensagens ignoradas por erro permanente (veja `isPoison`); não impedem o avanço do cursor. */
+  skipped: number;
   /** `recovery`: o histórico expirou e a caixa foi relida dos últimos 7 dias. */
   phase: "backfill" | "incremental" | "recovery";
-  /** Falso quando parou no orçamento de tempo ou numa mensagem com erro; a próxima execução continua. */
+  /** Falso quando parou no orçamento de tempo ou num erro transitório/de banco; a próxima execução continua. */
   complete: boolean;
-  /** Primeiro erro de mensagem, para `last_error`. */
+  /** Primeiro erro (ou mensagem ignorada), para `last_error`. */
   lastError: string | null;
 };
 
@@ -49,41 +51,104 @@ type Ref = { id: string; threadId: string };
 
 const isFatal = (e: unknown) => e instanceof GmailAuthError || e instanceof GmailRateLimitError;
 
+/** Falha ao gravar no banco: infraestrutura, nunca vira "mensagem ignorada". */
+class StoreError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "erro ao gravar");
+    this.name = "StoreError";
+  }
+}
+
+/** Timeout, falha de rede (fetch lança TypeError) e 5xx/408 do Gmail: voltam a ser tentados na próxima execução. */
+const isTransient = (e: unknown) =>
+  e instanceof TypeError ||
+  (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) ||
+  (e instanceof GmailApiError && (e.status >= 500 || e.status === 408));
+
+/**
+ * Mensagem envenenada: o erro é só dela (4xx do Gmail, corpo que não dá para ler) e repetir não adianta.
+ * Em vez de travar a caixa para sempre, o erro vai para `last_error` com o id e o lote avança sem ela.
+ * Autenticação, limite de uso, timeout/rede/5xx e falhas de banco continuam impedindo o avanço.
+ */
+const isPoison = (e: unknown) => !isFatal(e) && !isTransient(e) && !(e instanceof StoreError);
+
+const isNotFound = (e: unknown) => e instanceof GmailApiError && e.status === 404;
+
+function unionLinks(all: EmailLinkTarget[][]): EmailLinkTarget[] {
+  const seen = new Map<string, EmailLinkTarget>();
+  for (const l of all.flat()) seen.set(`${l.entity}:${l.recordId}`, l);
+  return [...seen.values()];
+}
+
 /**
  * Sincroniza uma caixa.
  * - Primeira carga (`backfill_done = false`): grava o `history_id` do perfil se for nulo, pagina `messages.list`
  *   (12 meses, ou 7 dias na recuperação) guardando o cursor a cada página, e marca `backfill_done` no fim.
  * - Incremental: `history.list` a partir do `history_id`, que só avança no fim de um lote sem erros.
  *   `GmailHistoryExpiredError` reinicia a carga com os últimos 7 dias.
- * `GmailAuthError` e `GmailRateLimitError` sobem para quem chamou (o cron decide); erro de uma mensagem só é contado.
+ * `GmailAuthError` e `GmailRateLimitError` sobem para quem chamou (o cron decide); erro de uma mensagem é contado (transitório/banco) ou ignorado (`isPoison`).
  */
 export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promise<SyncResult> {
   const { client, store } = deps;
   const now = deps.now ?? Date.now;
   const account: SyncAccount = { ...accountIn };
-  const result: SyncResult = { processed: 0, stored: 0, linked: 0, errors: 0, phase: "incremental", complete: true, lastError: null };
+  const result: SyncResult = { processed: 0, stored: 0, linked: 0, errors: 0, skipped: 0, phase: "incremental", complete: true, lastError: null };
 
   let indexPromise: Promise<ContactIndex> | null = null;
   const getIndex = () => (indexPromise ??= deps.loadIndex());
   const expired = () => now() >= deps.deadline;
   const stamp = () => new Date(now()).toISOString();
 
+  // Mensagens já gravadas nesta execução (inclui as que vieram junto de uma conversa inteira).
+  const handled = new Set<string>();
+
+  async function save(parsed: ParsedMessage, links: EmailLinkTarget[]) {
+    try {
+      const r = await store.storeMessage(account, parsed, links);
+      handled.add(parsed.gmailId);
+      result.stored++;
+      result.linked += r.linksInserted;
+    } catch (e) {
+      throw new StoreError(e);
+    }
+  }
+
+  /**
+   * Conversa que passa a casar agora (não estava salva): busca a conversa inteira e grava todas as mensagens
+   * dela, menos rascunho/spam/lixo. Os vínculos são a união dos de todas as mensagens, gravados uma vez.
+   */
+  async function storeWholeThread(ref: Ref, index: ContactIndex) {
+    let thread;
+    try {
+      thread = await client.getThread(ref.threadId, "full");
+    } catch (e) {
+      if (isNotFound(e)) return; // apagada entre a listagem e a leitura
+      throw e;
+    }
+    const parsed = (thread.messages ?? []).filter((m) => !skipByLabels(m.labelIds)).map(parseGmailMessage);
+    const links = unionLinks(parsed.map((p) => matchMessage(messageAddresses(p), account.email, index)));
+    for (const [i, p] of parsed.entries()) await save(p, i === 0 ? links : []);
+  }
+
   async function processOne(ref: Ref, index: ContactIndex, storedThreads: Set<string>) {
+    if (handled.has(ref.id)) return;
     let meta;
     try {
       meta = await client.getMessage(ref.id, "metadata");
     } catch (e) {
-      if (e instanceof GmailApiError && e.status === 404) return; // apagada entre a listagem e a leitura
+      if (isNotFound(e)) return; // apagada entre a listagem e a leitura
       throw e;
     }
     if (skipByLabels(meta.labelIds)) return;
     const links = matchMessage(messageAddresses(parseGmailMessage(meta)), account.email, index);
-    if (!needsFull(links, storedThreads.has(ref.threadId))) return;
-    const parsed = parseGmailMessage(await client.getMessage(ref.id, "full"));
-    const r = await store.storeMessage(account, parsed, links);
+    const threadStored = storedThreads.has(ref.threadId);
+    if (!needsFull(links, threadStored)) return;
+    if (!threadStored) {
+      await storeWholeThread(ref, index);
+    } else {
+      await save(parseGmailMessage(await client.getMessage(ref.id, "full")), links);
+    }
     storedThreads.add(ref.threadId);
-    result.stored++;
-    result.linked += r.linksInserted;
   }
 
   /** Processa as mensagens em blocos de CONCURRENCY. Falso se parou no orçamento de tempo. */
@@ -105,9 +170,16 @@ export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promi
               await processOne(ref, index, storedThreads);
             } catch (e) {
               if (isFatal(e)) throw e;
-              result.errors++;
-              result.lastError ??= `${ref.id}: ${e instanceof Error ? e.message : "erro"}`.slice(0, 500);
-              console.error("gmail: falha ao processar mensagem", account.id, ref.id, e instanceof Error ? e.message : "erro");
+              const why = e instanceof Error ? e.message : "erro";
+              if (isPoison(e)) {
+                result.skipped++;
+                result.lastError ??= `${ref.id} ignorada: ${why}`.slice(0, 500);
+                console.error("gmail: mensagem ignorada", account.id, ref.id, why);
+              } else {
+                result.errors++;
+                result.lastError ??= `${ref.id}: ${why}`.slice(0, 500);
+                console.error("gmail: falha ao processar mensagem", account.id, ref.id, why);
+              }
             }
           }
         }),

@@ -10,8 +10,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-/** Fases entregues; E-mail (fase 5) continua desativado. */
-export const DELIVERED_PHASES = [1, 2, 3, 4, 6];
+/** Fases entregues (a fase 5, E-mail, entrou com o módulo ao vivo). */
+export const DELIVERED_PHASES = [1, 2, 3, 4, 5, 6];
 
 export type NavItem = {
   key: string;

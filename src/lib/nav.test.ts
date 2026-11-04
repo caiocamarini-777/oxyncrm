@@ -12,9 +12,10 @@ import {
 const get = (key: string) => NAV_ITEMS.find((i) => i.key === key)!;
 
 describe("nav", () => {
-  it("fases entregues pulam a 5", () => expect(DELIVERED_PHASES).toEqual([1, 2, 3, 4, 6]));
-  it("itens de fases futuras ficam desabilitados", () => {
-    expect(isNavItemEnabled(get("email"), true)).toBe(false);
+  it("todas as fases até a 6 estão entregues", () => expect(DELIVERED_PHASES).toEqual([1, 2, 3, 4, 5, 6]));
+  it("o item E-mail (fase 5) fica habilitado", () => {
+    expect(isNavItemEnabled(get("email"), false)).toBe(true);
+    expect(isNavItemEnabled(get("email"), true)).toBe(true);
   });
   it("itens até a fase 4 ficam habilitados", () => {
     expect(isNavItemEnabled(get("negocios"), false)).toBe(true);

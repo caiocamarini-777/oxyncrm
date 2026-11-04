@@ -10,6 +10,15 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
   const next = safeNext(searchParams.get("next"));
 
+  // Erro devolvido pelo Supabase/Google (antes de haver usuário): registra o motivo real.
+  const oauthError = searchParams.get("error");
+  if (oauthError) {
+    console.error(
+      `Login Google falhou: ${oauthError} (${searchParams.get("error_code") ?? "-"}): ${searchParams.get("error_description") ?? ""}`,
+    );
+    redirect("/entrar?erro=google_falha");
+  }
+
   if (code) {
     const supabase = await createServerClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
@@ -29,6 +38,7 @@ export async function GET(request: NextRequest) {
       }
       redirect(next);
     }
+    if (error) console.error(`Login Google falhou na troca do código: ${error.code ?? "-"}: ${error.message}`);
   }
-  redirect("/entrar?erro=google");
+  redirect("/entrar?erro=google_falha");
 }

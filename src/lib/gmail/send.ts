@@ -17,11 +17,12 @@ import {
   sendEmailSchema,
   type SendEmailInput,
 } from "./compose";
+import { linkThreadToRecord } from "./link-actions";
 import { LIVE_ERROR_TEXT } from "./live";
 import { gmailConfig } from "./oauth";
 import { buildMime, toBase64Url } from "./mime";
 import { parseGmailMessage } from "./parse";
-import { storeMessage } from "./store";
+import { storeMessage, threadIsStored } from "./store";
 import type { SyncAccount } from "./sync-core";
 
 const DENIED = { ok: false, error: "Você não tem permissão para esta ação." } as const;
@@ -104,8 +105,12 @@ async function createSentActivity(opts: {
 /**
  * Envia um e-mail pela caixa do usuário (Gmail `messages.send`).
  *
- * Ordem: valida, confere dono da caixa e registro, envia, lê a mensagem enviada (full) e a GRAVA
- * (service role) e só então vincula ao registro com o cliente do usuário (RPC `email_link_thread`).
+ * Ordem: valida, confere dono da caixa e registro, envia e grava (service role):
+ * - conversa já salva no CRM: grava só a mensagem enviada e vincula ao registro, se veio um, com o cliente
+ *   do usuário (RPC `email_link_thread`);
+ * - conversa ainda não salva, com registro: grava a conversa inteira e vincula (`linkThreadToRecord`), para
+ *   não ficar só a resposta sem as mensagens anteriores;
+ * - conversa ainda não salva, sem registro: não grava nada (a sincronização a salva se casar com um contato).
  * Depois do envio nada mais falha a ação: o e-mail já saiu, então problemas de gravação, vínculo ou
  * atividade viram `warning`.
  */
@@ -140,7 +145,7 @@ export async function sendEmail(input: SendEmailInput): Promise<ActionResult<Sen
   let subject = d.subject;
   let headers: { inReplyTo?: string; references?: string } = {};
 
-  let sentId: string;
+  let sent: { id: string; threadId: string };
   try {
     if (d.replyToGmailMessageId) {
       const original = await gmail.getMessage(d.replyToGmailMessageId, "metadata");
@@ -161,31 +166,56 @@ export async function sendEmail(input: SendEmailInput): Promise<ActionResult<Sen
         ...headers,
       }),
     );
-    sentId = (await gmail.send(raw, gmailThreadId)).id;
+    sent = await gmail.send(raw, gmailThreadId);
   } catch (e) {
     return { ok: false, error: sendErrorText(e) };
   }
 
+  const NOT_STORED = "O e-mail foi enviado, mas não foi possível registrá-lo no CRM agora. Ele entra na próxima sincronização.";
   const warnings: string[] = [];
-  let threadId: string | null = null;
-  try {
-    const sent = await gmail.getMessage(sentId, "full");
-    const admin = createAdminClient();
-    await storeMessage(admin, account, parseGmailMessage(sent), []);
+  const admin = createAdminClient();
+  const storedThreadId = async (): Promise<string | null> => {
     const stored = await admin
       .from("email_threads")
       .select("id")
       .eq("account_id", account.id)
       .eq("gmail_thread_id", sent.threadId)
       .maybeSingle();
-    threadId = (stored.data as { id: string } | null)?.id ?? null;
+    return (stored.data as { id: string } | null)?.id ?? null;
+  };
+
+  let threadId: string | null = null;
+  let alreadyStored: boolean | null = null;
+  try {
+    alreadyStored = await threadIsStored(admin, account.id, sent.threadId);
   } catch (e) {
-    console.error("[email] gravar e-mail enviado:", e instanceof Error ? e.message : e);
+    console.error("[email] consultar conversa do e-mail enviado:", e instanceof Error ? e.message : e);
   }
 
-  if (!threadId) {
-    warnings.push("O e-mail foi enviado, mas não foi possível registrá-lo no CRM agora. Ele entra na próxima sincronização.");
+  if (alreadyStored === null) {
+    warnings.push(NOT_STORED);
+  } else if (alreadyStored) {
+    try {
+      await storeMessage(admin, account, parseGmailMessage(await gmail.getMessage(sent.id, "full")), []);
+      threadId = await storedThreadId();
+    } catch (e) {
+      console.error("[email] gravar e-mail enviado:", e instanceof Error ? e.message : e);
+    }
+    if (!threadId) warnings.push(NOT_STORED);
   } else if (d.record) {
+    // Grava a conversa inteira (com a mensagem enviada) e cria o vínculo manual.
+    const linked = await linkThreadToRecord(account.id, sent.threadId, d.record.entity, d.record.id);
+    if (linked.ok) {
+      threadId = linked.data.threadId;
+    } else {
+      // A conversa pode ter sido gravada e só o vínculo recusado.
+      threadId = await storedThreadId().catch(() => null);
+      warnings.push(threadId ? `O e-mail foi enviado, mas não foi vinculado ao registro: ${linked.error}` : NOT_STORED);
+    }
+  }
+
+  // Só a conversa que já estava salva chega aqui sem vínculo tentado (`linkThreadToRecord` já vincula).
+  if (threadId && d.record && alreadyStored) {
     // Resposta numa conversa já vinculada ao registro: a gravação basta (a RPC também reativaria vínculo desfeito).
     const existing = await supabase
       .from("email_links")

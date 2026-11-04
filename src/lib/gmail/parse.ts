@@ -46,6 +46,17 @@ export type ParsedMessage = {
 
 /** HTML maior que isso não é guardado (o texto fica). */
 export const MAX_HTML_BYTES = 512 * 1024;
+/** Texto maior que isso é cortado nesse tamanho (em bytes UTF-8, sem partir um caractere). */
+export const MAX_TEXT_BYTES = 512 * 1024;
+
+/** Corta `s` em no máximo `max` bytes UTF-8, sem deixar um caractere pela metade. */
+export function truncateUtf8(s: string, max: number): string {
+  const bytes = Buffer.from(s, "utf8");
+  if (bytes.length <= max) return s;
+  let end = max;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--; // recua até o início de um caractere
+  return bytes.subarray(0, end).toString("utf8");
+}
 
 function header(part: GmailMessagePart | undefined, name: string): string {
   const n = name.toLowerCase();
@@ -93,6 +104,7 @@ export function parseGmailMessage(msg: GmailMessage): ParsedMessage {
 
   let html = acc.html;
   if (html !== null && Buffer.byteLength(html, "utf8") > MAX_HTML_BYTES) html = null;
+  const text = acc.text === null ? null : truncateUtf8(acc.text, MAX_TEXT_BYTES);
 
   const from = parseAddressList(header(payload, "from"))[0] ?? { email: "", name: null };
   const ms = Number(msg.internalDate);
@@ -108,7 +120,7 @@ export function parseGmailMessage(msg: GmailMessage): ParsedMessage {
     sentAt: new Date(Number.isFinite(ms) ? ms : 0).toISOString(),
     snippet: msg.snippet ?? "",
     html,
-    text: acc.text,
+    text,
     attachments: acc.attachments,
     historyId: msg.historyId ?? null,
   };

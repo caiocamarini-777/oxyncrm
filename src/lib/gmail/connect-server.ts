@@ -31,13 +31,13 @@ export async function saveMailbox(opts: {
   const email = opts.email.trim().toLowerCase();
   const { tokens, tokenKey } = opts;
 
-  const found = await db.from("email_accounts").select("id, user_id").eq("email", email).maybeSingle();
+  const found = await db.from("email_accounts").select("id, user_id, company_id").eq("email", email).maybeSingle();
   if (found.error) {
     console.error("gmail: falha ao buscar a caixa:", found.error.message);
     return { ok: false, reason: "falha" };
   }
-  const existing = found.data as { id: string; user_id: string } | null;
-  const decision = decideMailbox(existing, opts.userId, !!tokens.refreshToken);
+  const existing = found.data as { id: string; user_id: string; company_id: string } | null;
+  const decision = decideMailbox(existing, opts.userId, opts.companyId, !!tokens.refreshToken);
   if (decision.kind === "reject") return { ok: false, reason: decision.reason };
 
   const access = {
@@ -71,7 +71,7 @@ export async function saveMailbox(opts: {
     return { ok: true };
   }
 
-  // Mesma pessoa reconectando: troca os tokens, a empresa e limpa o estado de erro.
+  // Mesma pessoa reconectando na mesma empresa: troca os tokens e limpa o estado de erro.
   const secrets = tokens.refreshToken
     ? await db
         .from("email_account_secrets")
@@ -91,8 +91,9 @@ export async function saveMailbox(opts: {
 
   const up = await db
     .from("email_accounts")
-    .update({ company_id: opts.companyId, status: "active", last_error: null })
-    .eq("id", decision.accountId);
+    .update({ status: "active", last_error: null })
+    .eq("id", decision.accountId)
+    .eq("company_id", opts.companyId);
   if (up.error) {
     console.error("gmail: falha ao atualizar a caixa:", up.error.message);
     return { ok: false, reason: "falha" };

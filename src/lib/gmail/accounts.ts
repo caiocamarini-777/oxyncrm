@@ -32,11 +32,18 @@ export async function markReconnect(accountId: string, msg: string): Promise<voi
   if (error) console.error("gmail: falha ao marcar reconexão:", error.message);
 }
 
+type AccessToken = { accessToken: string; expiresAt: number };
+
 /**
  * Access token vigente da caixa. Renova se faltar menos de 60 s (ou com `forceRefresh`) e grava o
  * novo token cifrado. `invalid_grant` marca a conta como `reconnect` e relança GmailAuthError.
  */
 export async function loadAccountToken(accountId: string, opts: { forceRefresh?: boolean } = {}): Promise<string> {
+  return (await loadAccessToken(accountId, opts)).accessToken;
+}
+
+/** Como `loadAccountToken`, devolvendo também o vencimento (ms desde 1970). */
+async function loadAccessToken(accountId: string, opts: { forceRefresh?: boolean } = {}): Promise<AccessToken> {
   const key = requireKey();
   const db = createAdminClient();
   const { data, error } = await db
@@ -49,7 +56,7 @@ export async function loadAccountToken(accountId: string, opts: { forceRefresh?:
   if (!data) throw new Error("Caixa sem tokens guardados");
 
   if (!opts.forceRefresh && data.access_token_enc && !needsRefresh(data.access_expires_at)) {
-    return decryptToken(data.access_token_enc, key);
+    return { accessToken: decryptToken(data.access_token_enc, key), expiresAt: new Date(data.access_expires_at!).getTime() };
   }
 
   let fresh: { accessToken: string; expiresAt: Date };
@@ -64,9 +71,41 @@ export async function loadAccountToken(accountId: string, opts: { forceRefresh?:
     .update({ access_token_enc: encryptToken(fresh.accessToken, key), access_expires_at: fresh.expiresAt.toISOString() })
     .eq("account_id", accountId);
   if (upErr) console.error("gmail: falha ao gravar o novo access token:", upErr.message);
-  return fresh.accessToken;
+  return { accessToken: fresh.accessToken, expiresAt: fresh.expiresAt.getTime() };
 }
 
-export function clientForAccount(accountId: string): GmailClient {
-  return new GmailClient((opts) => loadAccountToken(accountId, opts));
+/**
+ * Cliente do Gmail da caixa. O access token fica em memória (neste cliente) até 60 s antes de vencer, e
+ * chamadas simultâneas compartilham uma única leitura/renovação. Depois de um 401, só renova de novo se o
+ * token recusado ainda é o guardado (outra chamada pode já ter renovado).
+ */
+export function clientForAccount(accountId: string, now: () => number = Date.now): GmailClient {
+  let cached: AccessToken | null = null;
+  let pending: { force: boolean; promise: Promise<AccessToken> } | null = null;
+
+  const load = (force: boolean): Promise<AccessToken> => {
+    // Uma renovação forçada não pode reaproveitar uma leitura comum em andamento (traria o token recusado).
+    if (pending && (pending.force || !force)) return pending.promise;
+    const promise = loadAccessToken(accountId, { forceRefresh: force })
+      .then((t) => {
+        // Uma leitura comum que termina depois de uma renovação não volta ao token mais velho.
+        if (!cached || t.expiresAt >= cached.expiresAt) cached = t;
+        return t;
+      })
+      .finally(() => {
+        if (pending?.promise === promise) pending = null;
+      });
+    pending = { force, promise };
+    return promise;
+  };
+
+  return new GmailClient(async (opts) => {
+    if (opts?.forceRefresh) {
+      if (cached && opts.rejected && cached.accessToken !== opts.rejected && !needsRefresh(new Date(cached.expiresAt), now()))
+        return cached.accessToken;
+      return (await load(true)).accessToken;
+    }
+    if (cached && !needsRefresh(new Date(cached.expiresAt), now())) return cached.accessToken;
+    return (await load(false)).accessToken;
+  });
 }

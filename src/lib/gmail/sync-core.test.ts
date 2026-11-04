@@ -10,6 +10,8 @@ import {
   directionOf,
   encodeCursor,
   groupByThread,
+  historyRefs,
+  latestHistoryId,
   messageAddresses,
   needsFull,
   recoveryAfter,
@@ -133,5 +135,22 @@ describe("lotes", () => {
       { id: "3", threadId: "x" },
     ]);
     expect(g.map((x) => x.map((r) => r.id))).toEqual([["1", "3"], ["2"]]);
+  });
+});
+
+describe("historyRefs / latestHistoryId", () => {
+  const ref = (id: string) => ({ id, threadId: `t${id}` });
+  it("pega as novas e as que saíram do spam ou da lixeira", () => {
+    const refs = historyRefs([
+      { id: "10", messagesAdded: [{ message: ref("a") }] },
+      { id: "11", labelsRemoved: [{ message: ref("b"), labelIds: ["SPAM"] }] },
+      { id: "12", labelsRemoved: [{ message: ref("c"), labelIds: ["UNREAD"] }, { message: ref("d"), labelIds: ["TRASH"] }] },
+      { id: "13" },
+    ]);
+    expect(refs.map((r) => r.id)).toEqual(["a", "b", "d"]);
+  });
+  it("maior id numérico, sem perder precisão; null sem registros", () => {
+    expect(latestHistoryId([{ id: "9007199254740993" }, { id: "9007199254740995" }, { id: "12" }])).toBe("9007199254740995");
+    expect(latestHistoryId([])).toBeNull();
   });
 });

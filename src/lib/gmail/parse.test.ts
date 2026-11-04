@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type GmailMessage, type GmailMessagePart, MAX_HTML_BYTES, parseGmailMessage } from "./parse";
+import {
+  type GmailMessage,
+  type GmailMessagePart,
+  MAX_HTML_BYTES,
+  MAX_TEXT_BYTES,
+  parseGmailMessage,
+  truncateUtf8,
+} from "./parse";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64url");
 const h = (name: string, value: string) => ({ name, value });
@@ -135,6 +142,15 @@ describe("parseGmailMessage", () => {
     const p = parseGmailMessage(msg(payload));
     expect(p.html).toBeNull();
     expect(p.text).toBe("resumo");
+  });
+
+  it("texto acima de 512 KB é cortado no limite, sem partir caractere", () => {
+    const payload: GmailMessagePart = { mimeType: "text/plain", headers, ...leaf("text/plain", "é".repeat(MAX_TEXT_BYTES)) };
+    const p = parseGmailMessage(msg(payload));
+    expect(Buffer.byteLength(p.text!, "utf8")).toBe(MAX_TEXT_BYTES);
+    expect(p.text!.endsWith("é")).toBe(true);
+    expect(truncateUtf8("aé", 2)).toBe("a");
+    expect(truncateUtf8("abc", 5)).toBe("abc");
   });
 
   it("respeita o charset da parte", () => {

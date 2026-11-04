@@ -1,3 +1,4 @@
+import type { HistoryRecord } from "./client";
 import type { EmailLinkTarget } from "./matcher";
 import type { ParsedMessage } from "./parse";
 
@@ -11,6 +12,8 @@ export type SyncAccount = {
   history_id: string | null;
   backfill_page_token: string | null;
   backfill_done: boolean;
+  /** Tentativas com erro 5xx por mensagem (`{gmailId: n}`). Ausente = nenhuma. */
+  sync_failures?: Record<string, number> | null;
 };
 
 export type MessageRow = {
@@ -70,7 +73,42 @@ export function decodeCursor(raw: string | null, now: Date): { after: string; pa
   return { after: backfillAfter(now), pageToken: raw || null };
 }
 
+// Histórico ----------------------------------------------------------------------
+
+/** Rótulos cuja retirada faz a mensagem ser reavaliada (saiu do spam ou da lixeira). */
+const RESCUE_LABELS = new Set(["SPAM", "TRASH"]);
+
+/**
+ * Mensagens a avaliar num trecho do histórico: as novas (`messagesAdded`) e as que saíram do spam ou da
+ * lixeira (`labelsRemoved` com SPAM/TRASH). Outras retiradas de rótulo (lida, arquivada...) não importam.
+ */
+export function historyRefs(records: HistoryRecord[]): { id: string; threadId: string }[] {
+  const refs: { id: string; threadId: string }[] = [];
+  for (const rec of records) {
+    for (const m of rec.messagesAdded ?? []) refs.push({ id: m.message.id, threadId: m.message.threadId });
+    for (const m of rec.labelsRemoved ?? []) {
+      if ((m.labelIds ?? []).some((l) => RESCUE_LABELS.has(l))) refs.push({ id: m.message.id, threadId: m.message.threadId });
+    }
+  }
+  return refs;
+}
+
+/** Maior `id` dos registros (historyIds são números grandes em texto); null se não houver nenhum. */
+export function latestHistoryId(records: HistoryRecord[]): string | null {
+  let best: bigint | null = null;
+  for (const rec of records) {
+    if (!rec.id || !/^\d+$/.test(rec.id)) continue;
+    const v = BigInt(rec.id);
+    if (best === null || v > best) best = v;
+  }
+  return best === null ? null : best.toString();
+}
+
 // Decisões por mensagem ---------------------------------------------------------
+
+/** Tentativas com erro 5xx antes de pular a mensagem. */
+export const MAX_MESSAGE_ATTEMPTS = 3;
+
 
 const SKIP_LABELS = new Set(["SPAM", "TRASH", "DRAFT", "CHAT"]);
 

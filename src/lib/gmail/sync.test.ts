@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { GmailApiError, GmailAuthError, GmailHistoryExpiredError, GmailRateLimitError } from "./client";
+import {
+  GmailApiError,
+  GmailAuthError,
+  GmailHistoryExpiredError,
+  GmailNetworkError,
+  GmailRateLimitError,
+} from "./client";
 import type { ContactIndex } from "./matcher";
 import type { GmailMessage } from "./parse";
 import type { AccountPatch, SyncStore } from "./store";
@@ -58,6 +64,10 @@ class FakeGmail implements SyncClient {
   failIds = new Set<string>();
   /** Erro permanente do Gmail (400) só dessa mensagem. */
   poisonIds = new Set<string>();
+  /** Falha de rede ao ler essa mensagem. */
+  networkIds = new Set<string>();
+  /** Bug de leitura (TypeError que não é de rede). */
+  typeErrorIds = new Set<string>();
   fatalOn: Error | null = null;
 
   add(r: Row) {
@@ -81,6 +91,8 @@ class FakeGmail implements SyncClient {
     if (r.gone) throw new GmailApiError(404, "not found");
     if (this.failIds.has(id)) throw new GmailApiError(500, "boom");
     if (this.poisonIds.has(id)) throw new GmailApiError(400, "invalid");
+    if (this.networkIds.has(id)) throw new GmailNetworkError("fetch failed");
+    if (this.typeErrorIds.has(id)) throw new TypeError("Cannot read properties of undefined");
     if (format === "metadata") this.calls.metadata++;
     else this.calls.full++;
     return msg(id, r.threadId, r.from, r.to, { labelIds: r.labelIds ?? ["INBOX"] }, format === "full");
@@ -92,13 +104,14 @@ class FakeGmail implements SyncClient {
       .map((r) => msg(r.id, r.threadId, r.from, r.to, { labelIds: r.labelIds ?? ["INBOX"] }, format === "full"));
     return { id, messages };
   }
-  async listHistory(opts: { startHistoryId: string; pageToken?: string }) {
+  async listHistory(opts: { startHistoryId: string; pageToken?: string }): ReturnType<SyncClient["listHistory"]> {
     this.calls.history.push(opts.startHistoryId);
     if (this.historyError) throw this.historyError;
     const i = opts.pageToken ? Number(opts.pageToken) : 0;
     const page = this.history[i] ?? { ids: [] };
     return {
-      history: page.ids.map((id) => ({ messagesAdded: [{ message: this.ref(id) }] })),
+      // historyId de cada registro: 100 + 10 por página + posição (a página 0 termina em 11x).
+      history: page.ids.map((id, j) => ({ id: String(110 + i * 10 + j), messagesAdded: [{ message: this.ref(id) }] })),
       historyId: "200",
       nextPageToken: i + 1 < this.history.length ? String(i + 1) : undefined,
     };
@@ -276,6 +289,65 @@ describe("mensagem envenenada", () => {
   });
 });
 
+describe("tentativas por mensagem (5xx)", () => {
+  const ready = (over: Partial<SyncAccount> = {}) => account({ backfill_done: true, history_id: "100", ...over });
+
+  it("primeira falha 5xx: conta a tentativa e não avança", async () => {
+    gmail.add({ id: "bad", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.failIds.add("bad");
+    gmail.history = [{ ids: ["bad"] }];
+    const r = await run(ready());
+    expect(r).toMatchObject({ errors: 1, skipped: 0, complete: false });
+    expect(store.patches.at(-1)).toMatchObject({ sync_failures: { bad: 1 } });
+    expect(store.patches.some((p) => p.history_id)).toBe(false);
+  });
+
+  it("terceira falha 5xx: pula, registra em last_error, avança e limpa o contador", async () => {
+    gmail.add({ id: "bad", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.failIds.add("bad");
+    gmail.history = [{ ids: ["bad"] }];
+    const r = await run(ready({ sync_failures: { bad: 2 } }));
+    expect(r).toMatchObject({ errors: 0, skipped: 1, complete: true });
+    expect(r.lastError).toMatch(/bad ignorada.*3 tentativas/);
+    expect(store.patches).toContainEqual({ history_id: "200", sync_failures: {} });
+  });
+
+  it("já com 3 tentativas: pula sem chamar o Gmail", async () => {
+    gmail.add({ id: "bad", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.failIds.add("bad");
+    gmail.history = [{ ids: ["bad"] }];
+    const r = await run(ready({ sync_failures: { bad: 3 } }));
+    expect(r).toMatchObject({ skipped: 1, complete: true });
+    expect(gmail.calls.metadata).toBe(0);
+  });
+
+  it("sucesso depois de falhar: o contador some", async () => {
+    gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "bad", threadId: "t2", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.failIds.add("bad");
+    gmail.history = [{ ids: ["m1", "bad"] }];
+    await run(ready({ sync_failures: { m1: 1 } }));
+    expect(store.patches.at(-1)).toMatchObject({ sync_failures: { bad: 1 } });
+  });
+
+  it("falha de rede não conta contra a mensagem e trava", async () => {
+    gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.networkIds.add("m1");
+    gmail.history = [{ ids: ["m1"] }];
+    const r = await run(ready({ sync_failures: {} }));
+    expect(r).toMatchObject({ errors: 1, skipped: 0, complete: false });
+    expect(store.patches.some((p) => p.sync_failures)).toBe(false);
+  });
+
+  it("TypeError que não é de rede é erro da mensagem: pula", async () => {
+    gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.typeErrorIds.add("m1");
+    gmail.history = [{ ids: ["m1"] }];
+    const r = await run(ready());
+    expect(r).toMatchObject({ errors: 0, skipped: 1, complete: true });
+  });
+});
+
 describe("conversa que passa a casar", () => {
   it("busca a conversa inteira e grava todas as mensagens, sem rascunho/spam/lixo", async () => {
     gmail.add({ id: "old1", threadId: "t1", from: "alguem@desconhecido.com", to: "ana@oxyn.com" });
@@ -319,13 +391,51 @@ describe("conversa que passa a casar", () => {
 describe("incremental", () => {
   const ready = (over: Partial<SyncAccount> = {}) => account({ backfill_done: true, history_id: "100", ...over });
 
-  it("lê o histórico desde o history_id e só avança ao fim do lote", async () => {
+  it("lê o histórico desde o history_id e avança a cada página", async () => {
     gmail.add({ id: "n1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
     gmail.history = [{ ids: ["n1"] }, { ids: ["n1"] }]; // repetida entre páginas
     const r = await run(ready());
     expect(gmail.calls.history).toEqual(["100", "100"]);
     expect(r).toMatchObject({ processed: 1, stored: 1, phase: "incremental", complete: true });
-    expect(store.patches).toContainEqual({ history_id: "200" });
+    // página do meio: maior id dos registros dela; última: o historyId atual da caixa
+    expect(store.patches.filter((p) => p.history_id)).toEqual([{ history_id: "110" }, { history_id: "200" }]);
+  });
+
+  it("erro numa página: guarda o avanço das páginas anteriores", async () => {
+    gmail.add({ id: "n1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "n2", threadId: "t2", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "bad", threadId: "t3", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.failIds.add("bad");
+    gmail.history = [{ ids: ["n1", "n2"] }, { ids: ["bad"] }];
+    const r = await run(ready());
+    expect(r).toMatchObject({ stored: 2, errors: 1, complete: false });
+    expect(store.patches.filter((p) => p.history_id)).toEqual([{ history_id: "111" }]);
+  });
+
+  it("sem tempo entre páginas: para e guarda o que concluiu", async () => {
+    for (const id of ["n1", "n2"]) gmail.add({ id, threadId: `t${id}`, from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.history = [{ ids: ["n1"] }, { ids: ["n2"] }];
+    let calls = 0;
+    const tick = () => (calls++ < 2 ? NOW.getTime() : NOW.getTime() + 61_000);
+    const r = await syncAccount(ready(), { client: gmail, store, loadIndex: async () => index, deadline, now: tick });
+    expect(r.complete).toBe(false);
+    expect(store.patches.filter((p) => p.history_id)).toEqual([{ history_id: "110" }]);
+    expect(store.messages.has("n2")).toBe(false);
+  });
+
+  it("mensagem que sai do spam entra; outras retiradas de rótulo não", async () => {
+    gmail.add({ id: "m1", threadId: "t1", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.add({ id: "m2", threadId: "t2", from: "maria@acme.com", to: "ana@oxyn.com" });
+    gmail.listHistory = async () => ({
+      history: [
+        { id: "150", labelsRemoved: [{ message: gmail.ref("m1"), labelIds: ["SPAM"] }] },
+        { id: "151", labelsRemoved: [{ message: gmail.ref("m2"), labelIds: ["UNREAD"] }] },
+      ],
+      historyId: "200",
+    });
+    const r = await run(ready());
+    expect(r).toMatchObject({ processed: 1, stored: 1, complete: true });
+    expect([...store.messages.keys()]).toEqual(["m1"]);
   });
 
   it("erro numa mensagem: history_id não avança", async () => {

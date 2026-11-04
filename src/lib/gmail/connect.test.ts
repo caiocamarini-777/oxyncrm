@@ -4,6 +4,7 @@ import {
   decideMailbox,
   gmailErrorMessage,
   GMAIL_ERROR_MESSAGES,
+  hasRequiredScopes,
   parseOauthCookie,
   profileRedirectPath,
   serializeOauthCookie,
@@ -78,17 +79,37 @@ describe("profileRedirectPath", () => {
 
 describe("decideMailbox", () => {
   it("caixa de outro usuário é recusada, mesmo com refresh token", () => {
-    expect(decideMailbox({ id: "a", user_id: "outro" }, "eu", true)).toEqual({
+    expect(decideMailbox({ id: "a", user_id: "outro", company_id: "c1" }, "eu", "c1", true)).toEqual({
       kind: "reject",
       reason: "caixa_de_outro_usuario",
     });
   });
-  it("do mesmo usuário atualiza, com ou sem refresh token", () => {
-    expect(decideMailbox({ id: "a", user_id: "eu" }, "eu", true)).toEqual({ kind: "update", accountId: "a" });
-    expect(decideMailbox({ id: "a", user_id: "eu" }, "eu", false)).toEqual({ kind: "update", accountId: "a" });
+  it("do mesmo usuário e empresa atualiza, com ou sem refresh token", () => {
+    const mine = { id: "a", user_id: "eu", company_id: "c1" };
+    expect(decideMailbox(mine, "eu", "c1", true)).toEqual({ kind: "update", accountId: "a" });
+    expect(decideMailbox(mine, "eu", "c1", false)).toEqual({ kind: "update", accountId: "a" });
+  });
+  it("do mesmo usuário em outra empresa é recusada (desconectar antes)", () => {
+    expect(decideMailbox({ id: "a", user_id: "eu", company_id: "c1" }, "eu", "c2", true)).toEqual({
+      kind: "reject",
+      reason: "caixa_em_outra_empresa",
+    });
+    expect(gmailErrorMessage("caixa_em_outra_empresa")).toMatch(/outra empresa/);
   });
   it("conta nova sem refresh token é erro; com, cria", () => {
-    expect(decideMailbox(null, "eu", false)).toEqual({ kind: "reject", reason: "sem_refresh_token" });
-    expect(decideMailbox(null, "eu", true)).toEqual({ kind: "create" });
+    expect(decideMailbox(null, "eu", "c1", false)).toEqual({ kind: "reject", reason: "sem_refresh_token" });
+    expect(decideMailbox(null, "eu", "c1", true)).toEqual({ kind: "create" });
+  });
+});
+
+describe("hasRequiredScopes", () => {
+  const read = "https://www.googleapis.com/auth/gmail.readonly";
+  const send = "https://www.googleapis.com/auth/gmail.send";
+  it("exige ler e enviar", () => {
+    expect(hasRequiredScopes(["openid", "email", read, send])).toBe(true);
+    expect(hasRequiredScopes(["openid", "email", read])).toBe(false);
+    expect(hasRequiredScopes([send])).toBe(false);
+    expect(hasRequiredScopes([])).toBe(false);
+    expect(gmailErrorMessage("escopos_incompletos")).toMatch(/ler e enviar/);
   });
 });

@@ -10,6 +10,7 @@ export type AccountPatch = Partial<{
   backfill_done: boolean;
   last_synced_at: string;
   last_error: string | null;
+  sync_failures: Record<string, number>;
 }>;
 
 /** Acesso ao banco da sincronização (o `syncAccount` só enxerga esta interface). */

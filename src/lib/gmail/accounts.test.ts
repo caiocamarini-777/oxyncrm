@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 type Secret = { refresh_token_enc: string; access_token_enc: string | null; access_expires_at: string | null };
 const state = vi.hoisted(() => ({
   secret: null as unknown,
+  reads: 0,
   updates: [] as { table: string; values: Record<string, unknown> }[],
 }));
 
@@ -12,7 +13,14 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => ({
       select: () => ({
-        eq: () => ({ maybeSingle: () => ({ overrideTypes: async () => ({ data: state.secret, error: null }) }) }),
+        eq: () => ({
+          maybeSingle: () => ({
+            overrideTypes: async () => {
+              state.reads++;
+              return { data: state.secret, error: null };
+            },
+          }),
+        }),
       }),
       update: (values: Record<string, unknown>) => ({
         eq: async () => {
@@ -38,6 +46,7 @@ const KEY = Buffer.alloc(32, 7).toString("base64");
 
 beforeEach(() => {
   state.secret = null;
+  state.reads = 0;
   state.updates = [];
   refresh.mockReset();
   vi.stubEnv("GOOGLE_CLIENT_ID", "cid");
@@ -117,5 +126,72 @@ describe("markReconnect / clientForAccount", () => {
   });
   it("clientForAccount devolve um GmailClient", () => {
     expect(clientForAccount("acc").getProfile).toBeTypeOf("function");
+  });
+});
+
+describe("clientForAccount: token em memória", () => {
+  const profile = () =>
+    new Response(JSON.stringify({ emailAddress: "a@b.com", historyId: "1" }), { status: 200 });
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => profile());
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  const auth = (i: number) => ((fetchMock.mock.calls[i][1] as RequestInit).headers as Record<string, string>).Authorization;
+
+  it("chamadas simultâneas renovam uma vez só e as seguintes usam a memória", async () => {
+    state.secret = { refresh_token_enc: encryptToken("RT", KEY), access_token_enc: null, access_expires_at: null };
+    refresh.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { accessToken: "AT-novo", expiresAt: new Date(Date.now() + 3600_000) };
+    });
+    const client = clientForAccount("acc");
+    await Promise.all([client.getProfile(), client.getProfile(), client.getProfile()]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(state.reads).toBe(1);
+    await client.getProfile();
+    expect(state.reads).toBe(1);
+    expect(auth(3)).toBe("Bearer AT-novo");
+  });
+
+  it("renova de novo quando falta menos de 60 s", async () => {
+    let now = Date.now();
+    state.secret = {
+      refresh_token_enc: encryptToken("RT", KEY),
+      access_token_enc: encryptToken("AT-1", KEY),
+      access_expires_at: new Date(now + 10 * 60_000).toISOString(),
+    };
+    const client = clientForAccount("acc", () => now);
+    await client.getProfile();
+    expect(state.reads).toBe(1);
+    now += 9 * 60_000 + 30_000; // faltam 30 s
+    refresh.mockResolvedValueOnce({ accessToken: "AT-2", expiresAt: new Date(now + 3600_000) });
+    // no banco também está perto de vencer (o banco confere com o relógio real)
+    state.secret = { ...(state.secret as object), access_expires_at: new Date(Date.now() + 10_000).toISOString() };
+    await client.getProfile();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(auth(1)).toBe("Bearer AT-2");
+  });
+
+  it("401 em várias chamadas ao mesmo tempo renova uma vez", async () => {
+    state.secret = {
+      refresh_token_enc: encryptToken("RT", KEY),
+      access_token_enc: encryptToken("AT-velho", KEY),
+      access_expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    };
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) =>
+      (init.headers as Record<string, string>).Authorization === "Bearer AT-velho"
+        ? new Response(JSON.stringify({ error: {} }), { status: 401 })
+        : profile(),
+    );
+    refresh.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { accessToken: "AT-novo", expiresAt: new Date(Date.now() + 3600_000) };
+    });
+    const client = clientForAccount("acc");
+    const r = await Promise.all([client.getProfile(), client.getProfile(), client.getProfile()]);
+    expect(r.every((p) => p.emailAddress === "a@b.com")).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

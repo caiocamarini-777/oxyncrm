@@ -4,6 +4,7 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { exchangeCode, GmailClient } from "@/lib/gmail/client";
 import {
   callbackRedirectUri,
+  hasRequiredScopes,
   OAUTH_COOKIE,
   OAUTH_COOKIE_PATH,
   parseOauthCookie,
@@ -14,7 +15,10 @@ import {
 import { saveMailbox, userCanUseCompany } from "@/lib/gmail/connect-server";
 import { gmailConfig } from "@/lib/gmail/oauth";
 
-/** Volta do Google: confere o `state`, troca o code, descobre o e-mail da caixa e grava a conta. */
+/**
+ * Volta do Google: confere o `state`, troca o code, confere os escopos concedidos (ler e enviar), descobre
+ * o e-mail da caixa e grava a conta.
+ */
 export async function GET(request: Request) {
   await connection();
   const url = new URL(request.url);
@@ -49,6 +53,8 @@ export async function GET(request: Request) {
 
   try {
     const tokens = await exchangeCode(code, callbackRedirectUri(process.env.NEXT_PUBLIC_SITE_URL, url.origin));
+    // Sem revogar: revogar derrubaria também a autorização de uma conexão anterior que funciona.
+    if (!hasRequiredScopes(tokens.scopes)) return finish({ ok: false, reason: "escopos_incompletos" });
     const gmailProfile = await new GmailClient(async () => tokens.accessToken).getProfile();
     if (!gmailProfile.emailAddress) return finish({ ok: false, reason: "falha" });
     const result = await saveMailbox({

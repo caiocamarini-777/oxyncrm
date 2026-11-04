@@ -28,7 +28,7 @@ Cada vendedor conecta a própria caixa Google Workspace. Os e-mails trocados com
 
 | Tabela | Campos |
 |---|---|
-| `email_accounts` | id, user_id → profiles, company_id → companies, email (único global, minúsculo), status (`active`, `reconnect`), visibility (`shared`, `private`), history_id text, backfill_page_token text, backfill_done bool, last_synced_at, last_error, created_at |
+| `email_accounts` | id, user_id → profiles, company_id → companies, email (único global, minúsculo), status (`active`, `reconnect`), visibility (`shared`, `private`), history_id text, backfill_page_token text, backfill_done bool, last_synced_at (última sincronização concluída), last_error, sync_failures jsonb (`{gmailId: tentativas}`), sync_lock_until (lease do cron), created_at |
 | `email_account_secrets` | account_id (pk, cascade), refresh_token_enc, access_token_enc, access_expires_at |
 | `email_threads` | id, account_id (cascade), company_id, gmail_thread_id, subject, last_message_at; único (account_id, gmail_thread_id) |
 | `email_messages` | id, thread_id (cascade), account_id, gmail_message_id, rfc_message_id, from_email, from_name, to jsonb, cc jsonb (lista de `{email, name}`), sent_at, snippet, body_html, body_text, attachments jsonb (`{filename, mimeType, size}`), direction (`in`, `out`); único (account_id, gmail_message_id) |
@@ -52,21 +52,25 @@ Cada vendedor conecta a própria caixa Google Workspace. Os e-mails trocados com
 1. Em `/perfil`, seção "E-mail", o usuário clica em "Conectar Gmail" e escolhe a empresa.
 2. `GET /api/google/conectar?empresa=<id>` confere que a pessoa tem acesso à empresa, grava um cookie httpOnly com `state` aleatório e a empresa, e redireciona para o Google.
 3. `GET /api/google/callback` confere o `state`, troca o code por tokens e lê o e-mail com `users.getProfile`.
+   - Sem os escopos `gmail.readonly` e `gmail.send` concedidos, recusa (`escopos_incompletos`).
    - Se a caixa já está ligada a outra pessoa, recusa.
-   - Se é do próprio usuário, atualiza os tokens e volta o status para `active`.
+   - Se é do próprio usuário em outra empresa, recusa (`caixa_em_outra_empresa`): para mudar de empresa, desconecta antes.
+   - Se é do próprio usuário na mesma empresa, atualiza os tokens e volta o status para `active`.
    - Senão, cria a conta e os segredos.
    - Volta para `/perfil?gmail=ok` (ou `?gmail=erro&motivo=...`).
 4. Desconectar revoga o token no Google (melhor esforço) e apaga a conta. A cascata apaga as conversas salvas daquela caixa.
 
 ### Sincronizar (cron a cada 5 min)
 
-- **Ordem e orçamento:** contas `active`, das sincronizadas há mais tempo para as mais recentes. Orçamento de 240 s por execução, com no máximo 8 chamadas simultâneas ao Gmail.
-- **Token:** o access token é renovado quando falta menos de 1 min para expirar. `invalid_grant` muda a conta para `reconnect` e grava `last_error`.
+- **Ordem e orçamento:** contas `active`, das sincronizadas há mais tempo para as mais recentes. Orçamento de 240 s por execução, com no máximo 8 chamadas simultâneas ao Gmail. Cada caixa é reivindicada com um lease de 5 min (`sync_lock_until`), solto no fim, para execuções sobrepostas não pegarem a mesma caixa.
+- **Dono sem acesso:** caixa de dono inativo, ou sem vínculo com a empresa da caixa (e sem ser admin geral), não sincroniza e vira `reconnect` com "Dono sem acesso à empresa".
+- **Token:** o access token é renovado quando falta menos de 1 min para expirar e fica em memória no cliente até lá; chamadas simultâneas compartilham uma renovação. `invalid_grant` muda a conta para `reconnect` e grava `last_error`.
 - **Primeira carga** (`backfill_done = false`):
   - No primeiro passo, grava `history_id` de `getProfile`.
   - Pagina `messages.list` com `q = "after:<hoje-12 meses> -in:chats -in:spam -in:trash"`, guardando `backfill_page_token` a cada página.
   - Cada mensagem passa pelo processamento abaixo. Ao acabar as páginas, marca `backfill_done`.
-- **Incremental:** `history.list(startHistoryId, historyTypes=messageAdded)` paginado, e no fim atualiza `history_id`. Com 404 (histórico expirado), volta a primeira carga para os últimos 7 dias.
+- **Incremental:** `history.list(startHistoryId, historyTypes=messageAdded,labelRemoved)` página a página; ao fim de cada página sem erro grava o maior `history[].id` dela (na última, o `historyId` da resposta). De `labelRemoved` só entram as mensagens que saíram do spam ou da lixeira. Com 404 (histórico expirado), volta a primeira carga para os últimos 7 dias.
+  - Limitação conhecida: `labelAdded` não é lido, então mensagem já salva que vai para o spam ou a lixeira continua no CRM.
 - **Processar uma mensagem:**
   1. Lê com `format=metadata` (From, To, Cc, Subject, Date, Message-ID).
   2. Calcula os vínculos com o casador.
@@ -130,7 +134,8 @@ Recebe os endereços da mensagem (menos o da própria caixa), os contatos da emp
 
 - **Token revogado:** a caixa fica com status `reconnect`, com aviso em `/perfil` e no módulo E-mail.
 - **Limite do Gmail (429/403 rateLimitExceeded):** a conta para nesta execução e retoma na próxima.
-- **Falha em uma mensagem:** registra o erro e segue. A mensagem volta na próxima carga, porque o `history_id` só avança ao fim do lote.
+- **Falha em uma mensagem:** registra o erro e segue. A página não avança e a mensagem volta na próxima execução. Erro 5xx conta em `sync_failures`; na 3ª tentativa a mensagem é pulada e registrada em `last_error`. Erro que é só da mensagem (4xx, conteúdo ilegível) pula na hora; rede e banco nunca pulam.
+- **Texto do e-mail:** guardado até 512 KB (o resto é cortado), como o limite do HTML.
 - **Cron:** responde com contadores por conta (`processed`, `stored`, `linked`, `errors`).
 
 ## Testes

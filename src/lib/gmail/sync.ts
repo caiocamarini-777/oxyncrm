@@ -1,4 +1,11 @@
-import { GmailApiError, type GmailClient, GmailAuthError, GmailHistoryExpiredError, GmailRateLimitError } from "./client";
+import {
+  GmailApiError,
+  type GmailClient,
+  GmailAuthError,
+  GmailHistoryExpiredError,
+  GmailNetworkError,
+  GmailRateLimitError,
+} from "./client";
 import { type ContactIndex, type EmailLinkTarget, matchMessage } from "./matcher";
 import { parseGmailMessage, type ParsedMessage } from "./parse";
 import {
@@ -8,13 +15,16 @@ import {
   dedupeRefs,
   encodeCursor,
   groupByThread,
+  historyRefs,
+  latestHistoryId,
+  MAX_MESSAGE_ATTEMPTS,
   messageAddresses,
   needsFull,
   recoveryAfter,
   skipByLabels,
   type SyncAccount,
 } from "./sync-core";
-import type { SyncStore } from "./store";
+import type { AccountPatch, SyncStore } from "./store";
 
 /** Máximo de mensagens processadas ao mesmo tempo por caixa. */
 export const CONCURRENCY = 8;
@@ -37,7 +47,7 @@ export type SyncResult = {
   stored: number;
   linked: number;
   errors: number;
-  /** Mensagens ignoradas por erro permanente (veja `isPoison`); não impedem o avanço do cursor. */
+  /** Mensagens ignoradas por erro permanente (veja `isPoison`) ou por 5xx repetido; não impedem o avanço do cursor. */
   skipped: number;
   /** `recovery`: o histórico expirou e a caixa foi relida dos últimos 7 dias. */
   phase: "backfill" | "incremental" | "recovery";
@@ -59,16 +69,20 @@ class StoreError extends Error {
   }
 }
 
-/** Timeout, falha de rede (fetch lança TypeError) e 5xx/408 do Gmail: voltam a ser tentados na próxima execução. */
+/** 5xx/408 do Gmail: o erro pode ser da mensagem; conta por id e, depois de 3, ela é pulada. */
+const isServerError = (e: unknown) => e instanceof GmailApiError && (e.status >= 500 || e.status === 408);
+
+/** Rede (`GmailNetworkError`), timeout e 5xx/408: voltam a ser tentados na próxima execução. */
 const isTransient = (e: unknown) =>
-  e instanceof TypeError ||
+  e instanceof GmailNetworkError ||
   (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) ||
-  (e instanceof GmailApiError && (e.status >= 500 || e.status === 408));
+  isServerError(e);
 
 /**
- * Mensagem envenenada: o erro é só dela (4xx do Gmail, corpo que não dá para ler) e repetir não adianta.
- * Em vez de travar a caixa para sempre, o erro vai para `last_error` com o id e o lote avança sem ela.
- * Autenticação, limite de uso, timeout/rede/5xx e falhas de banco continuam impedindo o avanço.
+ * Mensagem envenenada: o erro é só dela (4xx do Gmail, corpo que não dá para ler, bug de leitura) e repetir
+ * não adianta. Em vez de travar a caixa para sempre, o erro vai para `last_error` com o id e o lote avança
+ * sem ela. Autenticação, limite de uso, rede/timeout e falhas de banco continuam impedindo o avanço; 5xx
+ * impede até a 3ª tentativa da mesma mensagem (contadas em `sync_failures`).
  */
 const isPoison = (e: unknown) => !isFatal(e) && !isTransient(e) && !(e instanceof StoreError);
 
@@ -84,8 +98,10 @@ function unionLinks(all: EmailLinkTarget[][]): EmailLinkTarget[] {
  * Sincroniza uma caixa.
  * - Primeira carga (`backfill_done = false`): grava o `history_id` do perfil se for nulo, pagina `messages.list`
  *   (12 meses, ou 7 dias na recuperação) guardando o cursor a cada página, e marca `backfill_done` no fim.
- * - Incremental: `history.list` a partir do `history_id`, que só avança no fim de um lote sem erros.
- *   `GmailHistoryExpiredError` reinicia a carga com os últimos 7 dias.
+ * - Incremental: `history.list` a partir do `history_id`, página a página; ao fim de cada página sem erros
+ *   grava o maior `history[].id` dela (na última, o `historyId` da resposta). `GmailHistoryExpiredError`
+ *   reinicia a carga com os últimos 7 dias.
+ * - Erro 5xx numa mensagem conta em `sync_failures`; na 3ª ela é pulada e o cursor segue.
  * `GmailAuthError` e `GmailRateLimitError` sobem para quem chamou (o cron decide); erro de uma mensagem é contado (transitório/banco) ou ignorado (`isPoison`).
  */
 export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promise<SyncResult> {
@@ -101,6 +117,38 @@ export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promi
 
   // Mensagens já gravadas nesta execução (inclui as que vieram junto de uma conversa inteira).
   const handled = new Set<string>();
+
+  // Tentativas com 5xx por mensagem, gravadas junto com o cursor ou no fim da execução.
+  const failures: Record<string, number> = { ...(accountIn.sync_failures ?? {}) };
+  let failuresDirty = false;
+  const setFailures = (id: string, n: number | null) => {
+    if (n === null) {
+      if (!(id in failures)) return;
+      delete failures[id];
+    } else failures[id] = n;
+    failuresDirty = true;
+  };
+  const failuresPatch = (): AccountPatch => {
+    if (!failuresDirty) return {};
+    failuresDirty = false;
+    return { sync_failures: { ...failures } };
+  };
+
+  /**
+   * O cursor avançou depois destas mensagens: o contador delas não serve mais (gravadas ou puladas) e sai
+   * do mapa. Grava o patch do cursor com o mapa, se mudou.
+   */
+  async function advance(refs: Ref[], patch: AccountPatch) {
+    for (const r of refs) setFailures(r.id, null);
+    const full = { ...patch, ...failuresPatch() };
+    if (Object.keys(full).length > 0) await store.updateAccount(account.id, full);
+  }
+
+  function skip(ref: Ref, why: string) {
+    result.skipped++;
+    result.lastError ??= `${ref.id} ignorada: ${why}`.slice(0, 500);
+    console.error("gmail: mensagem ignorada", account.id, ref.id, why);
+  }
 
   async function save(parsed: ParsedMessage, links: EmailLinkTarget[]) {
     try {
@@ -166,16 +214,24 @@ export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promi
       const settled = await Promise.allSettled(
         groupByThread(todo).map(async (group) => {
           for (const ref of group) {
+            const tries = failures[ref.id] ?? 0;
+            if (tries >= MAX_MESSAGE_ATTEMPTS) {
+              skip(ref, `falhou ${tries} vezes no Gmail`);
+              continue;
+            }
             try {
               await processOne(ref, index, storedThreads);
+              setFailures(ref.id, null);
             } catch (e) {
               if (isFatal(e)) throw e;
               const why = e instanceof Error ? e.message : "erro";
               if (isPoison(e)) {
-                result.skipped++;
-                result.lastError ??= `${ref.id} ignorada: ${why}`.slice(0, 500);
-                console.error("gmail: mensagem ignorada", account.id, ref.id, why);
+                skip(ref, why);
+              } else if (isServerError(e) && tries + 1 >= MAX_MESSAGE_ATTEMPTS) {
+                setFailures(ref.id, tries + 1);
+                skip(ref, `${why} (${tries + 1} tentativas)`);
               } else {
+                if (isServerError(e)) setFailures(ref.id, tries + 1);
                 result.errors++;
                 result.lastError ??= `${ref.id}: ${why}`.slice(0, 500);
                 console.error("gmail: falha ao processar mensagem", account.id, ref.id, why);
@@ -221,37 +277,46 @@ export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promi
       if (!page.nextPageToken) {
         account.backfill_done = true;
         account.backfill_page_token = null;
-        await store.updateAccount(account.id, { backfill_done: true, backfill_page_token: null, last_synced_at: stamp() });
+        await advance(page.messages, { backfill_done: true, backfill_page_token: null, last_synced_at: stamp() });
         return;
       }
       cursor.pageToken = page.nextPageToken;
       account.backfill_page_token = encodeCursor(cursor.after, cursor.pageToken);
-      await store.updateAccount(account.id, { backfill_page_token: account.backfill_page_token, last_synced_at: stamp() });
+      await advance(page.messages, { backfill_page_token: account.backfill_page_token, last_synced_at: stamp() });
     }
   }
 
+  /**
+   * Página a página: cada página do `history.list` é processada e, sem erros, o `history_id` avança até o
+   * maior registro dela (na última página, até o `historyId` atual da caixa). Com erro ou sem tempo, para
+   * ali: a próxima execução recomeça da última página concluída, não do lote inteiro.
+   */
   async function incremental(): Promise<void> {
     const start = account.history_id!;
-    const refs: Ref[] = [];
-    let latest = start;
+    const seen = new Set<string>(); // o histórico repete a mesma mensagem entre páginas
     let pageToken: string | undefined;
     do {
+      if (expired()) {
+        result.complete = false;
+        return;
+      }
       const r = await client.listHistory({ startHistoryId: start, pageToken });
-      for (const rec of r.history) for (const m of rec.messagesAdded ?? []) refs.push({ id: m.message.id, threadId: m.message.threadId });
-      latest = r.historyId;
+      const refs = historyRefs(r.history).filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
+      const errorsBefore = result.errors;
+      const done = await processRefs(refs);
+      if (!done || result.errors > errorsBefore) {
+        result.complete = false; // history_id fica na última página concluída
+        return;
+      }
       pageToken = r.nextPageToken;
+      const latest = pageToken ? latestHistoryId(r.history) : r.historyId;
+      const patch: AccountPatch = {};
+      if (latest && latest !== account.history_id) {
+        account.history_id = latest;
+        patch.history_id = latest;
+      }
+      await advance(refs, patch);
     } while (pageToken);
-
-    const errorsBefore = result.errors;
-    const done = await processRefs(refs);
-    if (!done || result.errors > errorsBefore) {
-      result.complete = false; // history_id fica onde está: o lote inteiro volta na próxima execução
-      return;
-    }
-    if (latest !== account.history_id) {
-      account.history_id = latest;
-      await store.updateAccount(account.id, { history_id: latest });
-    }
   }
 
   /** Histórico expirado: novo ponto de partida e releitura dos últimos 7 dias. */
@@ -283,6 +348,6 @@ export async function syncAccount(accountIn: SyncAccount, deps: SyncDeps): Promi
     }
   }
 
-  await store.updateAccount(account.id, { last_synced_at: stamp(), last_error: result.lastError });
+  await store.updateAccount(account.id, { last_synced_at: stamp(), last_error: result.lastError, ...failuresPatch() });
   return result;
 }

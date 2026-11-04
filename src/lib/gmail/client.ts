@@ -30,6 +30,17 @@ export class GmailHistoryExpiredError extends Error {
   }
 }
 
+/**
+ * Falha de rede ao falar com o Google (o `fetch` lançou, ou a resposta 2xx veio sem JSON legível).
+ * É transitória: a sincronização tenta de novo na próxima execução, sem contar contra a mensagem.
+ */
+export class GmailNetworkError extends Error {
+  constructor(message = "Falha de rede ao falar com o Google") {
+    super(message);
+    this.name = "GmailNetworkError";
+  }
+}
+
 export class GmailApiError extends Error {
   constructor(
     public readonly status: number,
@@ -40,12 +51,14 @@ export class GmailApiError extends Error {
   }
 }
 
-export type TokenSet = { accessToken: string; refreshToken: string | null; expiresAt: Date };
+/** `scopes`: escopos concedidos (campo `scope` da resposta, separado por espaço); vazio se não veio. */
+export type TokenSet = { accessToken: string; refreshToken: string | null; expiresAt: Date; scopes: string[] };
 
 type TokenResponse = {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  scope?: string;
   error?: string;
   error_description?: string;
 };
@@ -64,8 +77,21 @@ async function readJson<T>(res: Response): Promise<T | null> {
   }
 }
 
+/**
+ * `fetch` que transforma falha de rede (o `fetch` lança `TypeError`) em `GmailNetworkError`. Timeout e
+ * cancelamento (`TimeoutError`/`AbortError`) sobem como vieram; qualquer outro erro também.
+ */
+async function http(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    if (e instanceof TypeError) throw new GmailNetworkError(e.message || undefined);
+    throw e;
+  }
+}
+
 async function postToken(params: Record<string, string>): Promise<TokenResponse> {
-  const res = await fetch(TOKEN_URL, {
+  const res = await http(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params).toString(),
@@ -96,7 +122,12 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<T
     redirect_uri: redirectUri,
     grant_type: "authorization_code",
   });
-  return { accessToken: body.access_token!, refreshToken: body.refresh_token ?? null, expiresAt: expiryOf(body) };
+  return {
+    accessToken: body.access_token!,
+    refreshToken: body.refresh_token ?? null,
+    expiresAt: expiryOf(body),
+    scopes: (body.scope ?? "").split(/\s+/).filter(Boolean),
+  };
 }
 
 /** Renova o access token. `invalid_grant` lança GmailAuthError. */
@@ -126,7 +157,12 @@ export async function revokeToken(token: string): Promise<boolean> {
 
 export type GmailProfile = { emailAddress: string; historyId: string; messagesTotal?: number; threadsTotal?: number };
 export type MessageRef = { id: string; threadId: string };
-export type HistoryRecord = { id?: string; messagesAdded?: { message: MessageRef }[] };
+/** Registro do `history.list`. `id` é o historyId do registro (crescente, não contíguo). */
+export type HistoryRecord = {
+  id: string;
+  messagesAdded?: { message: MessageRef }[];
+  labelsRemoved?: { message: MessageRef; labelIds?: string[] }[];
+};
 export type ThreadSummary = { id: string; snippet?: string; historyId?: string };
 export type GmailThread = { id: string; historyId?: string; messages?: GmailMessage[] };
 
@@ -158,12 +194,15 @@ function isRateLimit(status: number, body: ApiErrorBody | null): boolean {
   );
 }
 
+/** `rejected`: o token que o Gmail acabou de recusar (401). */
+export type TokenRequest = { forceRefresh?: boolean; rejected?: string };
+
 /**
  * Cliente REST do Gmail. `getAccessToken` devolve o token vigente; com `forceRefresh`
- * deve renovar mesmo que o token pareça válido (usado após um 401).
+ * deve renovar mesmo que o token pareça válido (usado após um 401, com o token recusado em `rejected`).
  */
 export class GmailClient {
-  constructor(private readonly getAccessToken: (opts?: { forceRefresh?: boolean }) => Promise<string>) {}
+  constructor(private readonly getAccessToken: (opts?: TokenRequest) => Promise<string>) {}
 
   private async request<T>(
     method: "GET" | "POST",
@@ -173,7 +212,7 @@ export class GmailClient {
     const url = buildUrl(path, opts.query);
     let token = await this.getAccessToken();
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(url, {
+      const res = await http(url, {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -181,10 +220,15 @@ export class GmailClient {
         },
         body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined,
       });
-      if (res.ok) return (await readJson<T>(res)) as T;
+      if (res.ok) {
+        // 2xx sem JSON legível (resposta cortada no meio): rede, não erro da mensagem.
+        const body = await readJson<T>(res);
+        if (body === null) throw new GmailNetworkError("Resposta incompleta do Gmail");
+        return body;
+      }
       if (res.status === 401) {
         if (attempt === 0) {
-          token = await this.getAccessToken({ forceRefresh: true });
+          token = await this.getAccessToken({ forceRefresh: true, rejected: token });
           continue;
         }
         throw new GmailAuthError("Gmail recusou o token renovado");
@@ -225,7 +269,8 @@ export class GmailClient {
       "GET",
       "/history",
       {
-        query: { startHistoryId: opts.startHistoryId, historyTypes: "messageAdded", pageToken: opts.pageToken },
+        // labelRemoved: mensagem que sai do spam ou da lixeira passa a ser avaliada (veja `historyRefs`).
+        query: { startHistoryId: opts.startHistoryId, historyTypes: ["messageAdded", "labelRemoved"], pageToken: opts.pageToken },
         historyCall: true,
       },
     );

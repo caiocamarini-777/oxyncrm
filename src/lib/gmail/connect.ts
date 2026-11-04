@@ -53,6 +53,8 @@ export const GMAIL_ERROR_MESSAGES = {
   state_invalido: "A conexão expirou ou não pôde ser confirmada. Tente conectar de novo.",
   acesso_negado: "Você cancelou a autorização no Google. Para conectar o Gmail, é preciso permitir o acesso.",
   caixa_de_outro_usuario: "Esta caixa já está conectada à conta de outra pessoa no CRM.",
+  caixa_em_outra_empresa: "Esta caixa já está ligada a outra empresa. Desconecte antes de mudar.",
+  escopos_incompletos: "Autorize ler e enviar e-mails para conectar a caixa.",
   sem_refresh_token:
     "O Google não liberou o acesso contínuo à caixa. Remova o acesso do Oxyn CRM em myaccount.google.com/permissions e conecte de novo.",
   nao_configurado: "Integração com o Gmail ainda não configurada.",
@@ -71,22 +73,37 @@ export function profileRedirectPath(result: { ok: true } | { ok: false; reason: 
   return result.ok ? "/perfil?gmail=ok" : `/perfil?gmail=erro&motivo=${result.reason}`;
 }
 
+/** Escopos sem os quais a caixa não funciona (ler e enviar). */
+export const REQUIRED_GMAIL_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
+];
+
+/** O usuário pode desmarcar escopos na tela do Google: sem ler e enviar, a caixa não é conectada. */
+export function hasRequiredScopes(granted: string[]): boolean {
+  return REQUIRED_GMAIL_SCOPES.every((s) => granted.includes(s));
+}
+
 export type MailboxDecision =
   | { kind: "create" }
   | { kind: "update"; accountId: string }
-  | { kind: "reject"; reason: "caixa_de_outro_usuario" | "sem_refresh_token" };
+  | { kind: "reject"; reason: "caixa_de_outro_usuario" | "caixa_em_outra_empresa" | "sem_refresh_token" };
 
 /**
- * Regra de caixa já ligada: de outro usuário recusa; do mesmo usuário atualiza (o refresh token
- * antigo continua valendo se o Google não mandou outro); nova exige refresh token.
+ * Regra de caixa já ligada: de outro usuário recusa; do mesmo usuário em outra empresa também recusa
+ * (mudar de empresa exige desconectar, para as conversas salvas não mudarem de empresa); do mesmo usuário
+ * e empresa atualiza (o refresh token antigo continua valendo se o Google não mandou outro); nova exige
+ * refresh token.
  */
 export function decideMailbox(
-  existing: { id: string; user_id: string } | null,
+  existing: { id: string; user_id: string; company_id: string } | null,
   userId: string,
+  companyId: string,
   hasRefreshToken: boolean,
 ): MailboxDecision {
   if (existing) {
     if (existing.user_id !== userId) return { kind: "reject", reason: "caixa_de_outro_usuario" };
+    if (existing.company_id !== companyId) return { kind: "reject", reason: "caixa_em_outra_empresa" };
     return { kind: "update", accountId: existing.id };
   }
   if (!hasRefreshToken) return { kind: "reject", reason: "sem_refresh_token" };

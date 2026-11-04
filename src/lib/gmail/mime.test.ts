@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMime, toBase64Url } from "./mime";
+import { buildMime, foldHeader, toBase64Url } from "./mime";
 
 const base = {
   from: "ana@oxyn.com",
@@ -46,11 +46,24 @@ describe("buildMime", () => {
     expect(decoded).toBe("Proposta – reunião");
   });
 
-  it("assunto longo é dividido em palavras de até 75 caracteres", () => {
+  it("assunto longo é dividido em palavras de até 75 caracteres, uma linha de até 78 cada", () => {
     const m = buildMime({ ...base, subject: "ç".repeat(200) });
     const words = m.match(/=\?UTF-8\?B\?[^?]+\?=/g)!;
     expect(words.length).toBeGreaterThan(1);
     for (const w of words) expect(w.length).toBeLessThanOrEqual(75);
+    const header = /Subject: [\s\S]*?\r\n(?! )/.exec(m)![0];
+    for (const line of header.split("\r\n").filter(Boolean)) expect(line.length).toBeLessThanOrEqual(78);
+    const decoded = words.map((w) => Buffer.from(w.slice(10, -2), "base64").toString("utf8")).join("");
+    expect(decoded).toBe("ç".repeat(200));
+  });
+
+  it("References longo é dobrado com CRLF e espaço e desdobra igual", () => {
+    const refs = Array.from({ length: 8 }, (_, i) => `<mensagem-${i}-abcdefghij@mail.gmail.com>`).join(" ");
+    const m = buildMime({ ...base, inReplyTo: "<a@b>", references: refs });
+    const header = /References: [\s\S]*?\r\n(?! )/.exec(m)![0].replace(/\r\n$/, "");
+    expect(header).toContain("\r\n ");
+    for (const line of header.split("\r\n")) expect(line.length).toBeLessThanOrEqual(78);
+    expect(header.replace(/\r\n/g, "")).toBe(`References: ${refs}`);
   });
 
   it("inclui Cc, In-Reply-To e References quando vêm", () => {
@@ -69,6 +82,15 @@ describe("buildMime", () => {
   it("quebra de linha no assunto não injeta cabeçalho", () => {
     const m = buildMime({ ...base, subject: "Oi\r\nBcc: espiao@x.com" });
     expect(m).not.toMatch(/\r\nBcc:/);
+  });
+});
+
+describe("foldHeader", () => {
+  it("não dobra o que cabe, não quebra antes de espaço vazio e mantém palavra longa inteira", () => {
+    expect(foldHeader("Subject", "Proposta")).toBe("Subject: Proposta");
+    const long = "x".repeat(100);
+    expect(foldHeader("References", `${long} <a@b>`)).toBe(`References: ${long}\r\n <a@b>`);
+    expect(foldHeader("Subject", `a${" ".repeat(90)}b`).split("\r\n").every((l) => l.trim() !== "")).toBe(true);
   });
 });
 

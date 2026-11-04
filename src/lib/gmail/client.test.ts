@@ -8,6 +8,7 @@ import {
   GmailAuthError,
   GmailClient,
   GmailHistoryExpiredError,
+  GmailNetworkError,
   GmailRateLimitError,
   refreshAccessToken,
   revokeToken,
@@ -51,6 +52,18 @@ describe("OAuth", () => {
       redirect_uri: "https://x.com/cb",
       grant_type: "authorization_code",
     });
+  });
+
+  it("exchangeCode devolve os escopos concedidos", async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { access_token: "at", scope: "openid  https://www.googleapis.com/auth/gmail.readonly email" }));
+    expect((await exchangeCode("c", "r")).scopes).toEqual(["openid", "https://www.googleapis.com/auth/gmail.readonly", "email"]);
+    fetchMock.mockResolvedValueOnce(json(200, { access_token: "at" }));
+    expect((await exchangeCode("c", "r")).scopes).toEqual([]);
+  });
+
+  it("falha de rede no token vira GmailNetworkError", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    await expect(refreshAccessToken("rt")).rejects.toBeInstanceOf(GmailNetworkError);
   });
 
   it("exchangeCode devolve refreshToken null quando o Google não envia", async () => {
@@ -120,7 +133,7 @@ describe("GmailClient", () => {
   });
 
   it("getMessage metadata pede os cabeçalhos; full não", async () => {
-    fetchMock.mockResolvedValue(json(200, { id: "m1" }));
+    fetchMock.mockImplementation(async () => json(200, { id: "m1" }));
     await client().getMessage("m1", "metadata");
     expect(urlOf(0).pathname).toBe("/gmail/v1/users/me/messages/m1");
     expect(urlOf(0).searchParams.get("format")).toBe("metadata");
@@ -138,7 +151,7 @@ describe("GmailClient", () => {
     expect(urlOf(1).searchParams.has("metadataHeaders")).toBe(false);
   });
 
-  it("listHistory pede messageAdded e devolve historyId", async () => {
+  it("listHistory pede messageAdded e labelRemoved e devolve historyId", async () => {
     fetchMock.mockResolvedValueOnce(
       json(200, { history: [{ messagesAdded: [{ message: { id: "m", threadId: "t" } }] }], historyId: "99" }),
     );
@@ -147,7 +160,7 @@ describe("GmailClient", () => {
     expect(r.history).toHaveLength(1);
     expect(urlOf(0).pathname).toBe("/gmail/v1/users/me/history");
     expect(urlOf(0).searchParams.get("startHistoryId")).toBe("50");
-    expect(urlOf(0).searchParams.get("historyTypes")).toBe("messageAdded");
+    expect(urlOf(0).searchParams.getAll("historyTypes")).toEqual(["messageAdded", "labelRemoved"]);
     expect(urlOf(0).searchParams.get("pageToken")).toBe("pp");
   });
 
@@ -198,7 +211,7 @@ describe("GmailClient", () => {
     const r = await client().getProfile();
     expect(r.emailAddress).toBe("a@b.com");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(getToken).toHaveBeenNthCalledWith(2, { forceRefresh: true });
+    expect(getToken).toHaveBeenNthCalledWith(2, { forceRefresh: true, rejected: "old" });
     expect((initOf(0).headers as Record<string, string>).Authorization).toBe("Bearer old");
     expect((initOf(1).headers as Record<string, string>).Authorization).toBe("Bearer fresh");
   });
@@ -207,6 +220,19 @@ describe("GmailClient", () => {
     fetchMock.mockResolvedValue(json(401, { error: {} }));
     await expect(client().getProfile()).rejects.toBeInstanceOf(GmailAuthError);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("falha de rede vira GmailNetworkError; timeout sobe como veio", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    await expect(client().getProfile()).rejects.toBeInstanceOf(GmailNetworkError);
+    const timeout = new DOMException("timeout", "TimeoutError");
+    fetchMock.mockRejectedValueOnce(timeout);
+    await expect(client().getProfile()).rejects.toBe(timeout);
+  });
+
+  it("resposta 2xx sem JSON legível é falha de rede, não dado vazio", async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"id":"m1","pay', { status: 200 }));
+    await expect(client().getMessage("m1", "full")).rejects.toBeInstanceOf(GmailNetworkError);
   });
 
   it("429 e 403 de limite lançam GmailRateLimitError; outro 403 não", async () => {

@@ -65,8 +65,8 @@ function ThreadItem({ thread, extra }: { thread: RecordThread; extra?: ReactNode
               {thread.isMine ? " (sua)" : ""}
             </p>
           )}
-          {thread.messages.map((m) => (
-            <MessageView key={m.id} message={m} subject={subject} />
+          {thread.messages.map((m, i) => (
+            <MessageView key={m.id} message={m} subject={subject} defaultOpen={i === thread.messages.length - 1} />
           ))}
           <div className="flex items-center justify-end gap-2">
             {extra}

@@ -38,6 +38,22 @@ describe("parseAddressList", () => {
   });
 });
 
+describe("parseAddressList: sintaxe de grupo", () => {
+  it("tira o prefixo do grupo", () => {
+    expect(parseAddressList("Equipe: a@b.com, c@d.com;").map((a) => a.email)).toEqual(["a@b.com", "c@d.com"]);
+  });
+  it("prefixo com nome e membro com nome", () => {
+    expect(parseAddressList("Equipe: Ana <A@B.com>, c@d.com;")).toEqual([
+      { email: "a@b.com", name: "Ana" },
+      { email: "c@d.com", name: null },
+    ]);
+    expect(parseAddressList('"Time de Vendas": a@b.com;')).toEqual([{ email: "a@b.com", name: null }]);
+  });
+  it("grupo vazio e destinatário normal depois do grupo", () => {
+    expect(parseAddressList("Lista:; x@y.com")).toEqual([{ email: "x@y.com", name: null }]);
+  });
+});
+
 describe("domainOf e domínios genéricos", () => {
   it("devolve o domínio em minúsculo", () => {
     expect(domainOf("Ana@Oxyn.COM")).toBe("oxyn.com");

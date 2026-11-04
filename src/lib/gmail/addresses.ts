@@ -85,11 +85,14 @@ function cleanName(raw: string): string | null {
   return n || null;
 }
 
+const GROUP_PREFIX = /^\s*(?:"(?:[^"\\]|\\.)*"|[^<>@",;:"]+):/;
+
 /** Lê um cabeçalho To/Cc/From: "Nome, Sobrenome" <a@b.com>, a@b.com, Nome <A@B.com>. E-mail sai em minúsculo. */
 export function parseAddressList(header: string): Address[] {
   const out: Address[] = [];
   for (const part of splitTopLevel(header ?? "")) {
-    const p = part.trim();
+    // Sintaxe de grupo ("Equipe: a@b.com, c@d.com;"): tira o prefixo "nome:" do primeiro membro.
+    const p = part.replace(GROUP_PREFIX, "").trim();
     if (!p) continue;
     const open = p.lastIndexOf("<");
     const close = p.lastIndexOf(">");

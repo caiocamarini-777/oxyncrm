@@ -1,6 +1,9 @@
 import type { Address } from "./addresses";
 
-/** Formas puras (sem acesso ao banco) das conversas mostradas nos cards. */
+/**
+ * Formas puras (sem acesso ao banco) das conversas mostradas nos cards.
+ * A lista leva só metadados e trecho; o corpo é buscado ao abrir a mensagem (`getEmailMessageBody`).
+ */
 
 export type ThreadMessageView = {
   id: string;
@@ -11,8 +14,9 @@ export type ThreadMessageView = {
   cc: Address[];
   sentAt: string;
   snippet: string;
-  bodyHtml: string | null;
-  bodyText: string | null;
+  /** Corpo já em mãos (caixa ao vivo). Nos cards fica ausente e é buscado ao abrir a mensagem. */
+  bodyHtml?: string | null;
+  bodyText?: string | null;
   attachments: { filename: string }[];
   direction: "in" | "out";
 };
@@ -50,8 +54,6 @@ export type MessageRow = {
   cc: unknown;
   sent_at: string;
   snippet: string;
-  body_html: string | null;
-  body_text: string | null;
   attachments: unknown;
   direction: "in" | "out";
 };
@@ -114,8 +116,6 @@ export function buildRecordThreads(input: {
       cc: addresses(m.cc),
       sentAt: m.sent_at,
       snippet: m.snippet,
-      bodyHtml: m.body_html,
-      bodyText: m.body_text,
       attachments: attachmentNames(m.attachments),
       direction: m.direction,
     }));
@@ -158,18 +158,99 @@ export function formatAddress(a: { email: string; name: string | null }): string
   return a.name ? `${a.name} <${a.email}>` : a.email;
 }
 
-export const EMAIL_CSP =
-  "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; font-src https: data:";
+/** CSP do iframe: sem scripts; imagens e fontes remotas só quando o usuário pede ("Mostrar imagens"). */
+export function emailCsp(showImages: boolean): string {
+  return showImages
+    ? "default-src 'none'; img-src https: data: cid:; style-src 'unsafe-inline'; font-src https: data:"
+    : "default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:";
+}
+
+/** CSP padrão (imagens remotas bloqueadas). */
+export const EMAIL_CSP = emailCsp(false);
+
+/** Texto de um valor de atributo como o navegador o interpretaria num URL: entidades decodificadas, sem controles/espaços. */
+function normalizeUrlValue(v: string): string {
+  return v
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, h: string) => safeChar(parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_m, d: string) => safeChar(parseInt(d, 10)))
+    .replace(/&colon;/gi, ":")
+    .replace(/&(tab|newline);/gi, "")
+    .split("")
+    .filter((c) => !isIgnoredInUrl(c.charCodeAt(0)))
+    .join("")
+    .toLowerCase();
+}
+
+/** Controles, espaços e caracteres invisíveis que o navegador ignora dentro do esquema de um URL. */
+function isIgnoredInUrl(code: number): boolean {
+  return (
+    code <= 0x20 ||
+    (code >= 0x7f && code <= 0x9f) ||
+    (code >= 0x200b && code <= 0x200f) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0xfeff
+  );
+}
+
+function safeChar(code: number): string {
+  return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+}
+
+const URL_ATTRS = new Set(["href", "src", "xlink:href", "action", "formaction", "background", "poster", "data", "srcset", "lowsrc", "dynsrc"]);
+
+function isDangerousUrl(attr: string, value: string): boolean {
+  const v = normalizeUrlValue(value);
+  if (v.startsWith("javascript:") || v.startsWith("vbscript:")) return true;
+  if (v.startsWith("data:")) return !(attr === "src" && v.startsWith("data:image/"));
+  return false;
+}
+
+const BLOCK_TAGS = /<\s*(script|iframe|object|frameset|frame)\b[\s\S]*?(?:<\s*\/\s*\1\s*>|$)/gi;
+const LONE_BLOCK_TAGS = /<\s*\/?\s*(script|iframe|object|embed|base|frame|frameset)\b[^>]*>/gi;
+const TAG = /<([a-zA-Z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+const ATTR = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+
+/**
+ * Tira do HTML do e-mail o que pode executar ou navegar: `<script>`/`<iframe>`/`<object>`/`<embed>`/`<base>`,
+ * atributos `on*` e `href`/`src` etc. com `javascript:`, `vbscript:` e `data:` (só `data:image` em `src` passa).
+ * É uma segunda barreira: o iframe já é sandbox e a CSP bloqueia scripts.
+ */
+export function sanitizeEmailHtml(html: string): string {
+  // uma tag aberta e nunca fechada no fim do HTML se juntaria ao que vem depois no documento
+  const noBlocks = html.replace(BLOCK_TAGS, "").replace(LONE_BLOCK_TAGS, "").replace(/<[a-zA-Z][^>]*$/, "");
+  return noBlocks.replace(TAG, (_whole, name: string, rest: string) => {
+    let attrs = "";
+    for (const m of rest.matchAll(ATTR)) {
+      const attr = m[1].toLowerCase();
+      const value = m[2] ?? m[3] ?? m[4];
+      if (attr.startsWith("on")) continue;
+      if (value !== undefined && URL_ATTRS.has(attr) && isDangerousUrl(attr, value)) continue;
+      attrs += value === undefined ? ` ${m[1]}` : ` ${m[1]}="${value.replace(/"/g, "&quot;")}"`;
+    }
+    const selfClose = /\/\s*$/.test(rest) && !attrs.endsWith("/") ? " /" : "";
+    return `<${name}${attrs}${selfClose}>`;
+  });
+}
+
+/** Há imagem ou fundo remoto (http/https ou //) no HTML? Decide se vale mostrar o botão "Mostrar imagens". */
+export function hasRemoteImages(html: string): boolean {
+  return (
+    /<(?:img|image|input|video)\b[^>]*\s(?:src|srcset|poster)\s*=\s*["']?\s*(?:https?:)?\/\//i.test(html) ||
+    /\sbackground\s*=\s*["']?\s*(?:https?:)?\/\//i.test(html) ||
+    /url\(\s*["']?\s*(?:https?:)?\/\//i.test(html)
+  );
+}
 
 /**
  * Documento do iframe: CSP sem scripts, links em nova aba e uma base de estilo.
- * O `<meta refresh>` do e-mail é removido para o conteúdo não redirecionar o quadro.
+ * O HTML do e-mail é sanitizado e o `<meta refresh>` removido para o conteúdo não redirecionar o quadro.
  */
-export function buildEmailSrcdoc(html: string): string {
-  const body = html.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh[^>]*>/gi, "");
+export function buildEmailSrcdoc(html: string, opts: { showImages?: boolean } = {}): string {
+  const body = sanitizeEmailHtml(html).replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh[^>]*>/gi, "");
   return (
     `<!doctype html><html><head><meta charset="utf-8">` +
-    `<meta http-equiv="Content-Security-Policy" content="${EMAIL_CSP}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${emailCsp(opts.showImages === true)}">` +
     `<base target="_blank">` +
     `<style>body{margin:0;padding:0;font-family:system-ui,sans-serif;font-size:14px;word-wrap:break-word}img{max-width:100%;height:auto}</style>` +
     `</head><body>${body}</body></html>`

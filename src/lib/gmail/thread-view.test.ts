@@ -4,6 +4,9 @@ import {
   buildRecordThreads,
   clampIframeHeight,
   EMAIL_CSP,
+  emailCsp,
+  hasRemoteImages,
+  sanitizeEmailHtml,
   threadParticipants,
   type MessageRow,
 } from "./thread-view";
@@ -18,8 +21,6 @@ const msg = (over: Partial<MessageRow>): MessageRow => ({
   cc: [],
   sent_at: "2026-01-01T10:00:00Z",
   snippet: "",
-  body_html: null,
-  body_text: null,
   attachments: [],
   direction: "in",
   ...over,
@@ -117,8 +118,14 @@ describe("buildEmailSrcdoc", () => {
     expect(doc).toContain("<p>Oi</p>");
     expect(doc.indexOf("Content-Security-Policy")).toBeLessThan(doc.indexOf("<p>Oi</p>"));
   });
-  it("CSP bloqueia scripts e carregamento fora de https/data", () => {
-    expect(EMAIL_CSP).toBe("default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; font-src https: data:");
+  it("CSP bloqueia scripts e imagens remotas por padrão", () => {
+    expect(EMAIL_CSP).toBe("default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:");
+    expect(buildEmailSrcdoc("<p>x</p>")).toContain(`content="${emailCsp(false)}"`);
+  });
+  it("Mostrar imagens libera https no img-src", () => {
+    const doc = buildEmailSrcdoc("<img src=\"https://x.com/a.png\">", { showImages: true });
+    expect(doc).toContain("img-src https: data: cid:");
+    expect(doc).not.toContain("img-src data: cid:;");
   });
   it("remove meta refresh do e-mail", () => {
     const doc = buildEmailSrcdoc(`<meta http-equiv="refresh" content="0;url=https://evil.com"><p>x</p>`);
@@ -133,5 +140,70 @@ describe("clampIframeHeight", () => {
     expect(clampIframeHeight(300.2)).toBe(301);
     expect(clampIframeHeight(5000)).toBe(800);
     expect(clampIframeHeight(NaN)).toBe(40);
+  });
+});
+
+describe("sanitizeEmailHtml", () => {
+  it("remove javascript:, vbscript: e data: de href, inclusive disfarçados", () => {
+    const out = sanitizeEmailHtml(
+      `<a href="javascript:alert(1)">a</a><a href='  JaVa\tScRiPt:alert(1)'>b</a><a href=vbscript:x>c</a>` +
+        `<a href="&#106;avascript:alert(1)">d</a><a href="&#x6A;avascript&colon;alert(1)">e</a><a href="data:text/html,<b>x</b>">f</a>`,
+    );
+    expect(out).not.toMatch(/javascript|vbscript|data:/i);
+    expect(out).toContain(">a</a>");
+    expect(out).toContain(">f</a>");
+  });
+  it("src aceita data:image mas não outros data:", () => {
+    expect(sanitizeEmailHtml(`<img src="data:image/png;base64,AAAA">`)).toContain('src="data:image/png;base64,AAAA"');
+    expect(sanitizeEmailHtml(`<img src="data:text/html;base64,AAAA">`)).not.toContain("data:");
+    expect(sanitizeEmailHtml(`<img src="javascript:alert(1)">`)).not.toContain("javascript");
+  });
+  it("href com data:image continua bloqueado", () => {
+    expect(sanitizeEmailHtml(`<a href="data:image/png;base64,AAAA">x</a>`)).not.toContain("data:");
+  });
+  it("remove atributos on*", () => {
+    const out = sanitizeEmailHtml(`<img src="https://x.com/a.png" onerror="alert(1)" ONLOAD=alert(2) onclick='x()'><p onmouseover="y">t</p>`);
+    expect(out).not.toMatch(/\bon\w+\s*=/i);
+    expect(out).toContain('src="https://x.com/a.png"');
+    expect(out).toContain(">t</p>");
+  });
+  it("atributo on* com > dentro do valor", () => {
+    const out = sanitizeEmailHtml(`<a title="a>b" onclick="x>y" href="https://ok.com">z</a>`);
+    expect(out).not.toContain("onclick");
+    expect(out).toContain('href="https://ok.com"');
+    expect(out).toContain('title="a>b"');
+  });
+  it("remove script, iframe, object, embed e base", () => {
+    const out = sanitizeEmailHtml(
+      `<p>a</p><script>alert(1)</script><iframe src="https://x.com"></iframe><object data="x"></object><embed src="x"><base href="https://evil.com"><p>b</p>`,
+    );
+    expect(out).not.toMatch(/<(script|iframe|object|embed|base)/i);
+    expect(out).toContain("<p>a</p>");
+    expect(out).toContain("<p>b</p>");
+  });
+  it("tag aberta sem fechar no fim é descartada", () => {
+    expect(sanitizeEmailHtml(`<p>a</p><img src=x onerror=alert(1)`)).toBe("<p>a</p>");
+  });
+  it("preserva links e imagens normais", () => {
+    expect(sanitizeEmailHtml(`<a href="https://a.com/x?y=1&amp;z=2" target="_blank">l</a><br/>`)).toBe(
+      `<a href="https://a.com/x?y=1&amp;z=2" target="_blank">l</a><br />`,
+    );
+  });
+  it("buildEmailSrcdoc aplica a sanitização", () => {
+    const doc = buildEmailSrcdoc(`<a href="javascript:alert(1)" onclick="x()">oi</a>`);
+    expect(doc).not.toMatch(/javascript:|onclick/);
+    expect(doc).toContain(">oi</a>");
+  });
+});
+
+describe("hasRemoteImages", () => {
+  it("detecta img, fundo e url() remotos", () => {
+    expect(hasRemoteImages(`<img src="https://x.com/a.png">`)).toBe(true);
+    expect(hasRemoteImages(`<img src='//x.com/a.png'>`)).toBe(true);
+    expect(hasRemoteImages(`<td background="http://x.com/a.png">`)).toBe(true);
+    expect(hasRemoteImages(`<div style="background:url('https://x.com/a.png')">`)).toBe(true);
+  });
+  it("sem imagem remota", () => {
+    expect(hasRemoteImages(`<p>oi</p><img src="data:image/png;base64,AA"><img src="cid:abc">`)).toBe(false);
   });
 });

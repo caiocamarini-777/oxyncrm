@@ -135,20 +135,33 @@ export async function getThreadLinks(accountId: string, gmailThreadId: string): 
   return out.sort((a, b) => order.get(a.linkId)! - order.get(b.linkId)!);
 }
 
-/** E-mails (minúsculos) entre os dados que já são contato (`persons.emails`) da empresa. */
+/**
+ * E-mails que já são contato (`persons.emails`) da empresa. A busca é em minúsculo (o trigger
+ * `normalize_person_contacts` grava os e-mails das pessoas em minúsculo); o conjunto devolvido traz
+ * o e-mail em minúsculo e também como veio, para quem consulta com qualquer caixa.
+ */
 export async function knownPersonEmails(companyId: string, emails: string[]): Promise<Set<string>> {
   const supabase = await createServerClient();
   const known = new Set<string>();
+  const byLower = new Map<string, string[]>();
+  for (const e of emails) {
+    const lower = e.trim().toLowerCase();
+    if (!lower) continue;
+    byLower.set(lower, [...(byLower.get(lower) ?? []), e]);
+  }
   await Promise.all(
-    emails.slice(0, 20).map(async (email) => {
+    [...byLower.entries()].slice(0, 20).map(async ([lower, originals]) => {
       const { data, error } = await supabase
         .from("persons")
         .select("id")
         .eq("company_id", companyId)
         .is("deleted_at", null)
-        .contains("emails", JSON.stringify([{ value: email }]))
+        .contains("emails", JSON.stringify([{ value: lower }]))
         .limit(1);
-      if (!error && data && data.length > 0) known.add(email);
+      if (!error && data && data.length > 0) {
+        known.add(lower);
+        for (const o of originals) known.add(o);
+      }
     }),
   );
   return known;

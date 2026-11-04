@@ -37,7 +37,11 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
       .eq("entity", entity)
       .eq("record_id", recordId)
       .is("deleted_at", null),
-    getRecordEmailEvents(entity, recordId, 200),
+    // Se a parte de e-mail falhar, o card segue sem os e-mails na linha do tempo.
+    getRecordEmailEvents(entity, recordId, 200).catch((e: unknown) => {
+      console.error("[timeline] e-mails:", e);
+      return [] as Awaited<ReturnType<typeof getRecordEmailEvents>>;
+    }),
   ]);
   if (events.error) fail("eventos", events.error);
   if (notes.error) fail("anotações", notes.error);

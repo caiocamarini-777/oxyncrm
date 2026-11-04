@@ -1,7 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC = ["/entrar", "/recuperar-senha", "/auth/confirm", "/auth/callback"];
+// /privacidade e /termos: páginas legais exigidas pela tela de consentimento do Google.
+const PUBLIC = ["/entrar", "/recuperar-senha", "/auth/confirm", "/auth/callback", "/privacidade", "/termos"];
 // Rotas que dispensam sessão porque se autenticam sozinhas. Só caminhos exatos, e cada handler
 // DEVE chamar isCronAuthorized (src/lib/notifications/cron-auth.ts) antes de qualquer trabalho.
 const SELF_AUTH = ["/api/cron/lembretes", "/api/cron/gmail"];

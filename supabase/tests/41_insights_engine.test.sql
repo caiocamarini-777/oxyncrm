@@ -1,5 +1,5 @@
 begin;
-select plan(31);
+select plan(33);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;
@@ -183,6 +183,13 @@ select is(pg_temp.total(pg_temp.d('leads', 'performance', 'scorecard', jsonb_bui
 select is(pg_temp.total(pg_temp.d('leads', 'performance', 'scorecard', jsonb_build_object('measure_by', 'count',
   'filter_by', jsonb_build_array(pg_temp.f('userId', 'isExactly', to_jsonb(pg_temp.u(11)::text))))),
   jsonb_build_object('user_ids', jsonb_build_array(pg_temp.u(13)))), 1::numeric, 'usuário do painel substitui o proprietário');
+
+select is(public.insights_apply_overrides(pg_temp.u(1), 'deals', 'revenue_forecast',
+  jsonb_build_array(pg_temp.f('expectedCloseDateOrWonTime', null, null, 'year')), '{"period":{"period":"month"}}')->0->>'period',
+  'year', 'previsão de receita mantém o próprio período com o filtro do painel');
+select is(public.insights_apply_overrides(pg_temp.u(1), 'deals', 'performance',
+  jsonb_build_array(pg_temp.f('addTime', null, null, 'year')), '{"period":{"period":"month"}}')->0->>'period',
+  'month', 'outros relatórios seguem o período do painel');
 
 -- 6. visibilidade e validação
 select is(pg_temp.total(pg_temp.d('leads', 'performance', 'scorecard', jsonb_build_object('measure_by', 'count', 'filter_by', '[]'::jsonb)), '{}', 13),

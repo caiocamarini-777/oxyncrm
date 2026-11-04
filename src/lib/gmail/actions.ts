@@ -66,6 +66,25 @@ export async function disconnectMailbox(accountId: string): Promise<ActionResult
   return { ok: true, data: undefined };
 }
 
+/**
+ * Desfaz o vínculo da conversa com o registro (a RPC confere dono da caixa ou edição do registro).
+ * O vínculo fica registrado com `unlinked_at`, então a sincronização automática não o recria.
+ * `path` é a página do card, para atualizar a aba e a linha do tempo.
+ */
+export async function unlinkEmailThread(linkId: string, path: string): Promise<ActionResult> {
+  if (!uuid.safeParse(linkId).success) return { ok: false, error: "Dados inválidos." };
+  const profile = await getCurrentProfile();
+  if (!profile) return DENIED;
+  const supabase = await createServerClient();
+  const { error } = await supabase.rpc("email_unlink_thread", { p_link: linkId });
+  if (error) {
+    if (error.message.includes("OXYN_EMAIL_FORBIDDEN")) return DENIED;
+    return { ok: false, error: translateDbError(error) };
+  }
+  if (path.startsWith("/") && !path.startsWith("//")) revalidatePath(path);
+  return { ok: true, data: undefined };
+}
+
 /** Qualquer falha aqui é ignorada: a caixa sai do CRM mesmo assim. */
 async function revokeBestEffort(accountId: string): Promise<void> {
   try {

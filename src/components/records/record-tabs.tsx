@@ -23,25 +23,28 @@ function DisabledTab({ label }: { label: string }) {
   );
 }
 
-type TabKey = "notes" | "activity";
+type TabKey = "notes" | "activity" | "email";
 
 /**
- * Centro do detalhe: abas Anotação e Atividade (esta só aparece com `activity`) e a linha do tempo.
+ * Centro do detalhe: abas Anotação, Atividade e E-mail (estas só aparecem com `activity` e `email`) e a linha do tempo.
  * Os dois painéis ficam montados para não perder o que o usuário digitou ao trocar de aba.
  */
 export function RecordTabs({
   notes,
   activity,
+  email,
   timeline,
 }: {
   notes?: ReactNode;
   activity?: ReactNode;
+  email?: ReactNode;
   timeline?: ReactNode;
 }) {
   const [tab, setTab] = useState<TabKey>("notes");
   const tabs: { key: TabKey; label: string }[] = [
     { key: "notes", label: "Anotação" },
     ...(activity ? [{ key: "activity" as const, label: "Atividade" }] : []),
+    ...(email ? [{ key: "email" as const, label: "E-mail" }] : []),
   ];
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
@@ -74,7 +77,7 @@ export function RecordTabs({
           </button>
         ))}
         {activity ? null : <DisabledTab label="Atividade" />}
-        <DisabledTab label="E-mail" />
+        {email ? null : <DisabledTab label="E-mail" />}
       </div>
       <div
         role="tabpanel"
@@ -94,6 +97,17 @@ export function RecordTabs({
           data-testid="activity-area"
         >
           {activity}
+        </div>
+      ) : null}
+      {email ? (
+        <div
+          role="tabpanel"
+          id="record-panel-email"
+          aria-labelledby="record-tab-email"
+          hidden={tab !== "email"}
+          data-testid="email-area"
+        >
+          {email}
         </div>
       ) : null}
       <section aria-label="Linha do tempo" data-testid="timeline-area">

@@ -1,5 +1,5 @@
 begin;
-select plan(46);
+select plan(51);
 
 create function pg_temp.u(n int) returns uuid language sql immutable as $$
   select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid $$;

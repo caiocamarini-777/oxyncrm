@@ -45,7 +45,7 @@ export async function getRecordThreads(entity: RecordEntity, recordId: string): 
   const [threads, messages, mine, canEdit] = await Promise.all([
     supabase
       .from("email_threads")
-      .select("id, account_id, subject, last_message_at")
+      .select("id, account_id, gmail_thread_id, subject, last_message_at")
       .in("id", threadIds)
       .order("last_message_at", { ascending: false, nullsFirst: false })
       .limit(MAX_THREADS),

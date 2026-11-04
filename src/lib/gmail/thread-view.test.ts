@@ -32,8 +32,8 @@ describe("buildRecordThreads", () => {
       { id: "l2", thread_id: "t2" },
     ],
     threads: [
-      { id: "t1", account_id: "a1", subject: "Antiga", last_message_at: "2026-01-02T00:00:00Z" },
-      { id: "t2", account_id: "a2", subject: "Nova", last_message_at: "2026-03-01T00:00:00Z" },
+      { id: "t1", account_id: "a1", gmail_thread_id: "g1", subject: "Antiga", last_message_at: "2026-01-02T00:00:00Z" },
+      { id: "t2", account_id: "a2", gmail_thread_id: "g2", subject: "Nova", last_message_at: "2026-03-01T00:00:00Z" },
     ],
     messages: [
       msg({ id: "m2", thread_id: "t1", sent_at: "2026-01-02T00:00:00Z" }),
@@ -96,7 +96,7 @@ describe("threadParticipants", () => {
   it("nomes distintos, com resumo", () => {
     const t = buildRecordThreads({
       links: [{ id: "l", thread_id: "t1" }],
-      threads: [{ id: "t1", account_id: "a", subject: "x", last_message_at: null }],
+      threads: [{ id: "t1", account_id: "a", gmail_thread_id: "g1", subject: "x", last_message_at: null }],
       messages: [
         msg({ from_name: "Ana", to: [{ email: "b@x.com", name: "Bia" }, { email: "c@x.com", name: null }, { email: "d@x.com", name: "Dan" }] }),
         msg({ id: "m2", from_email: "ANA@cliente.com", from_name: "Ana" }),

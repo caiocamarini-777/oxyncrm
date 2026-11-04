@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { ArrowLeft } from "lucide-react";
+import { Composer } from "@/components/email/composer";
 import { CreatePersonFromSender } from "@/components/email/create-person-dialog";
 import { LinkThreadDialog } from "@/components/email/link-thread-dialog";
 import { MessageView } from "@/components/email/message-view";
@@ -11,6 +12,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { clientForAccount } from "@/lib/gmail/accounts";
+import { buildTemplateVars, replyRecipients } from "@/lib/gmail/compose";
+import { getCompanyTemplates } from "@/lib/gmail/compose-data";
 import { classifyGmailError, getThreadLinks, knownPersonEmails, LIVE_ERROR_TEXT, listMyMailboxes } from "@/lib/gmail/live";
 import { externalSenders, mailboxHref, suggestedPersonName, toMessageView, visibleMessages } from "@/lib/gmail/live-thread";
 import { gmailConfig } from "@/lib/gmail/oauth";
@@ -72,9 +75,10 @@ export default async function EmailThreadPage({
   const views = messages.map((m) => toMessageView(parseGmailMessage(m), mailbox.email));
   const subject = views.length > 0 ? (parseGmailMessage(messages[0]).subject.trim() || "(sem assunto)") : "(sem assunto)";
   const senders = externalSenders(views, mailbox.email);
-  const [links, known] = await Promise.all([
+  const [links, known, templates] = await Promise.all([
     getThreadLinks(mailbox.id, threadId),
     knownPersonEmails(company.id, senders.map((s) => s.email)),
+    getCompanyTemplates(company.id),
   ]);
   const unknownSenders = senders.filter((s) => !known.has(s.email));
 
@@ -97,7 +101,16 @@ export default async function EmailThreadPage({
               email={s.email}
             />
           ))}
-          {/* Slot da Task 8: botão "Responder". */}
+          <Composer
+            label="Responder"
+            mailboxes={[{ id: mailbox.id, email: mailbox.email }]}
+            initialAccountId={mailbox.id}
+            initialTo={replyRecipients(views)}
+            initialSubject={subject === "(sem assunto)" ? "" : subject}
+            templates={templates}
+            vars={buildTemplateVars({ personName: senders[0] ? suggestedPersonName(senders[0]) : null, userName: profile.fullName })}
+            reply={{ gmailThreadId: threadId, replyToGmailMessageId: messages[messages.length - 1].id }}
+          />
         </div>
       </header>
       <section className="flex flex-col gap-3" aria-label="Mensagens">

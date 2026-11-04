@@ -131,6 +131,7 @@ describe("GmailClient", () => {
       "Subject",
       "Date",
       "Message-ID",
+      "References",
     ]);
     await client().getMessage("m1", "full");
     expect(urlOf(1).searchParams.get("format")).toBe("full");

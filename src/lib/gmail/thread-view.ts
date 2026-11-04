@@ -19,6 +19,9 @@ export type ThreadMessageView = {
 
 export type RecordThread = {
   threadId: string;
+  /** Caixa da conversa e id da conversa no Gmail (para responder). */
+  accountId: string;
+  gmailThreadId: string;
   linkId: string;
   subject: string;
   lastMessageAt: string | null;
@@ -32,6 +35,7 @@ export type RecordThread = {
 export type ThreadRow = {
   id: string;
   account_id: string;
+  gmail_thread_id: string;
   subject: string;
   last_message_at: string | null;
 };
@@ -121,6 +125,8 @@ export function buildRecordThreads(input: {
     const accountEmail = mineEmail ?? messages.find((m) => m.direction === "out")?.fromEmail ?? null;
     out.push({
       threadId: t.id,
+      accountId: t.account_id,
+      gmailThreadId: t.gmail_thread_id,
       linkId,
       subject: t.subject,
       lastMessageAt: t.last_message_at ?? messages[messages.length - 1]?.sentAt ?? null,

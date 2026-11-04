@@ -18,6 +18,7 @@ const ITEMS = [
   { href: "/configuracoes/categorias-servico", label: "Categorias de serviço" },
   { href: "/configuracoes/motivos-perda", label: "Motivos de perda" },
   { href: "/configuracoes/atividades", label: "Atividades" },
+  { href: "/configuracoes/modelos-email", label: "Modelos de e-mail" },
   { href: "/configuracoes/importacao", label: "Importação" },
 ];
 

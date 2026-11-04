@@ -130,7 +130,7 @@ export type HistoryRecord = { id?: string; messagesAdded?: { message: MessageRef
 export type ThreadSummary = { id: string; snippet?: string; historyId?: string };
 export type GmailThread = { id: string; historyId?: string; messages?: GmailMessage[] };
 
-const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date", "Message-ID"];
+const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date", "Message-ID", "References"];
 
 type Query = Record<string, string | number | string[] | undefined>;
 

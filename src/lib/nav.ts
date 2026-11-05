@@ -7,6 +7,7 @@ import {
   Settings,
   Trash2,
   Users,
+  Video,
   type LucideIcon,
 } from "lucide-react";
 
@@ -27,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "leads", label: "Leads", icon: Inbox, path: "/leads", availableFromPhase: 2, scoped: true },
   { key: "negocios", label: "Negócios", icon: KanbanSquare, path: "/negocios", availableFromPhase: 3, scoped: true },
   { key: "atividades", label: "Atividades", icon: CalendarCheck, path: "/atividades", availableFromPhase: 4, scoped: true },
+  { key: "reunioes", label: "Reuniões", icon: Video, path: "/reunioes", availableFromPhase: 5, scoped: true },
   { key: "contatos", label: "Contatos", icon: Users, path: "/contatos", availableFromPhase: 2, scoped: true },
   { key: "email", label: "E-mail", icon: Mail, path: "/email", availableFromPhase: 5, scoped: true },
   { key: "relatorios", label: "Relatórios", icon: BarChart3, path: "/relatorios", availableFromPhase: 6, scoped: true },

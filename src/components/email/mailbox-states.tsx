@@ -51,6 +51,22 @@ export function Reconnect({ email }: { email: string }) {
   );
 }
 
+/** Caixa conectada antes do assistente de reuniões: faltam os escopos do Meet e da agenda. */
+export function ReconnectForMeet({ companyId }: { companyId: string }) {
+  return (
+    <Notice title="Reconecte o Google para ativar o assistente de reuniões.">
+      <p>Esta caixa foi conectada sem acesso às reuniões do Meet e à agenda. Reconecte-a e autorize os novos acessos.</p>
+      {/* O perfil só oferece "Reconectar" quando a caixa caiu; aqui ela está ativa, então vai direto ao OAuth. */}
+      <a
+        href={`/api/google/conectar?empresa=${encodeURIComponent(companyId)}`}
+        className={cn(buttonVariants({ variant: "outline", size: "sm" }), "self-start")}
+      >
+        Reconectar o Google
+      </a>
+    </Notice>
+  );
+}
+
 export function PickCompany({ companies }: { companies: CompanySummary[] }) {
   return (
     <Notice title="Escolha uma empresa para ver seus e-mails">

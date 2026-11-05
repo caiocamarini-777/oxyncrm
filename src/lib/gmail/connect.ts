@@ -84,6 +84,17 @@ export function hasRequiredScopes(granted: string[]): boolean {
   return REQUIRED_GMAIL_SCOPES.every((s) => granted.includes(s));
 }
 
+/** Escopos do assistente de reuniões (ler a transcrição no Meet e os eventos da agenda). Sem eles a caixa funciona, o assistente não. */
+export const MEET_SCOPES: readonly string[] = [
+  "https://www.googleapis.com/auth/meetings.space.readonly",
+  "https://www.googleapis.com/auth/calendar.events.readonly",
+];
+
+/** Contas conectadas antes do assistente (ou com os escopos desmarcados) precisam reconectar. */
+export function hasMeetScopes(granted: string[]): boolean {
+  return MEET_SCOPES.every((s) => granted.includes(s));
+}
+
 export type MailboxDecision =
   | { kind: "create" }
   | { kind: "update"; accountId: string }

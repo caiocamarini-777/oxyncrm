@@ -14,6 +14,7 @@ export function AppShell({
   lastSlug,
   reportSlugs,
   hasSharedDashboards,
+  pendingMeetings,
   children,
 }: {
   profile: MenuProfile;
@@ -23,6 +24,8 @@ export function AppShell({
   reportSlugs: string[];
   /** Há dashboard compartilhado comigo: sem view_reports, o menu Relatórios leva aos dashboards. */
   hasSharedDashboards: boolean;
+  /** Reuniões do usuário que esperam decisão (contador do menu Reuniões). */
+  pendingMeetings: number;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -36,7 +39,7 @@ export function AppShell({
   return (
     <TooltipProvider delayDuration={150}>
       <div className="flex min-h-screen">
-        <Sidebar scopeSlug={scopeSlug} isSuperAdmin={profile.isSuperAdmin} reports={reports} />
+        <Sidebar scopeSlug={scopeSlug} isSuperAdmin={profile.isSuperAdmin} reports={reports} pendingMeetings={pendingMeetings} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar
             profile={profile}

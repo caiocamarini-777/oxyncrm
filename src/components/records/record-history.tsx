@@ -4,6 +4,7 @@ import { replyRecipients } from "@/lib/gmail/compose";
 import { getComposeData } from "@/lib/gmail/compose-data";
 import { getRecordThreads } from "@/lib/gmail/queries";
 import type { RecordThread } from "@/lib/gmail/thread-view";
+import { getRecordMeetings } from "@/lib/meet/queries";
 import type { RecordEntity } from "@/lib/records/types";
 import type { TimelineItem } from "@/lib/timeline/queries";
 import { Timeline } from "./timeline";
@@ -11,8 +12,8 @@ import { Timeline } from "./timeline";
 type Props = { entity: RecordEntity; recordId: string; items: TimelineItem[]; planned?: ReactNode };
 
 /**
- * Histórico do card (componente servidor): eventos e anotações já carregados mais as conversas de e-mail,
- * que chegam depois (Suspense) para não segurar o resto da página.
+ * Histórico do card (componente servidor): eventos e anotações já carregados mais as conversas de e-mail e
+ * as reuniões do Meet, que chegam depois (Suspense, em paralelo) para não segurar o resto da página.
  */
 export function RecordHistory(props: Props) {
   return (
@@ -23,13 +24,14 @@ export function RecordHistory(props: Props) {
 }
 
 async function RecordHistoryContent({ entity, recordId, items, planned }: Props) {
-  // Se a parte de e-mail falhar, o histórico segue sem as conversas.
-  const [threads, compose] = await Promise.all([
+  // Se a parte de e-mail falhar, o histórico segue sem as conversas; as reuniões falham em silêncio dentro da consulta.
+  const [threads, compose, meetings] = await Promise.all([
     getRecordThreads(entity, recordId).catch((e: unknown) => {
       console.error("[historico] e-mails:", e);
       return [] as RecordThread[];
     }),
     getComposeData(entity, recordId).catch(() => null),
+    getRecordMeetings(entity, recordId),
   ]);
 
   // "Responder" só nas conversas da caixa do próprio usuário, para o remetente da última mensagem recebida.
@@ -55,5 +57,5 @@ async function RecordHistoryContent({ entity, recordId, items, planned }: Props)
     }
   }
 
-  return <Timeline items={items} planned={planned} threads={threads} threadActions={threadActions} />;
+  return <Timeline items={items} planned={planned} threads={threads} meetings={meetings} threadActions={threadActions} />;
 }

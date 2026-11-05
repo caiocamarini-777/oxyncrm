@@ -10,6 +10,8 @@ describe("templates de e-mail", () => {
     expect(m.html).toContain(link.replace(/&/g, "&amp;"));
     expect(m.text).toContain(link);
     expect(m.html).toContain("Ana");
+    expect(m.html).toContain("expira em 3 horas");
+    expect(m.text).toContain("expira em 3 horas");
   });
   it("recuperação traz assunto e link", () => {
     const m = recoveryEmail({ link });

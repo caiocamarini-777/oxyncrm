@@ -202,7 +202,7 @@ function DrawerBody({
           <TeamPicker teams={teams} selected={teamIds} onChange={setTeamIds} />
         </div>
         <div className="flex flex-wrap gap-2">
-          {user.pending ? (
+          {user.invite !== "accepted" ? (
             <Button type="button" variant="outline" disabled={pending} onClick={resend}>
               Reenviar convite
             </Button>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,23 +20,52 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { UserRow } from "@/lib/users/actions";
+import { resendInvite, type UserRow } from "@/lib/users/actions";
 import type { NamedOption } from "./access-rows";
 import { InviteUserDialog } from "./invite-user-dialog";
 import { UserDrawer } from "./user-drawer";
 
-type Status = "active" | "pending" | "inactive";
+type Status = "active" | "pending" | "expired" | "inactive";
 
 function statusOf(u: UserRow): Status {
   if (!u.active) return "inactive";
-  return u.pending ? "pending" : "active";
+  return u.invite === "accepted" ? "active" : u.invite;
 }
 
 const STATUS_LABEL: Record<Status, string> = {
   active: "Ativo",
   pending: "Convite pendente",
+  expired: "Convite expirado",
   inactive: "Inativo",
 };
+
+const STATUS_VARIANT = {
+  active: "default",
+  pending: "secondary",
+  expired: "destructive",
+  inactive: "secondary",
+} as const;
+
+function ResendInviteButton({ user }: { user: UserRow }) {
+  const [busy, startTransition] = useTransition();
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={busy}
+      aria-label={`Reenviar convite para ${user.fullName || user.email}`}
+      onClick={() =>
+        startTransition(async () => {
+          const r = await resendInvite(user.id);
+          if (r.ok) toast.success("Convite reenviado.");
+          else toast.error(r.error);
+        })
+      }
+    >
+      {busy ? "Reenviando..." : "Reenviar convite"}
+    </Button>
+  );
+}
 
 function initials(name: string, email: string) {
   return (name.trim() || email)
@@ -101,6 +131,7 @@ export function UsersTable({
             <SelectItem value="all">Todos os status</SelectItem>
             <SelectItem value="active">Ativo</SelectItem>
             <SelectItem value="pending">Convite pendente</SelectItem>
+            <SelectItem value="expired">Convite expirado</SelectItem>
             <SelectItem value="inactive">Inativo</SelectItem>
           </SelectContent>
         </Select>
@@ -145,19 +176,20 @@ export function UsersTable({
                 </TableCell>
                 <TableCell>{u.teams.map((t) => t.name).join(", ") || "-"}</TableCell>
                 <TableCell>
-                  <Badge variant={statusOf(u) === "active" ? "default" : "secondary"}>
-                    {STATUS_LABEL[statusOf(u)]}
-                  </Badge>
+                  <Badge variant={STATUS_VARIANT[statusOf(u)]}>{STATUS_LABEL[statusOf(u)]}</Badge>
                 </TableCell>
                 <TableCell>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    aria-label={`Editar ${u.fullName || u.email}`}
-                    onClick={() => setEditingId(u.id)}
-                  >
-                    Editar
-                  </Button>
+                  <div className="flex justify-end gap-2">
+                    {statusOf(u) === "expired" ? <ResendInviteButton user={u} /> : null}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Editar ${u.fullName || u.email}`}
+                      onClick={() => setEditingId(u.id)}
+                    >
+                      Editar
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))

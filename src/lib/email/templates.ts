@@ -1,3 +1,5 @@
+import { INVITE_TTL_HOURS } from "@/lib/users/invite-status";
+
 type Built = { subject: string; html: string; text: string };
 
 function esc(s: string): string {
@@ -118,9 +120,9 @@ export function inviteEmail(p: { fullName: string; link: string }): Built {
       ],
       button: "Criar minha senha",
       link: p.link,
-      note: "Este link é pessoal e expira em breve. Se ele expirar, peça um novo convite ao administrador.",
+      note: `Este link é pessoal e expira em ${INVITE_TTL_HOURS} horas. Se ele expirar, peça um novo convite ao administrador.`,
     }),
-    text: `Olá, ${p.fullName}.\n\nVocê foi convidado para usar o Oxyn CRM. Crie sua senha para ativar o acesso:\n${p.link}\n\nEste link é pessoal e expira em breve.`,
+    text: `Olá, ${p.fullName}.\n\nVocê foi convidado para usar o Oxyn CRM. Crie sua senha para ativar o acesso:\n${p.link}\n\nEste link é pessoal e expira em ${INVITE_TTL_HOURS} horas.`,
   };
 }
 

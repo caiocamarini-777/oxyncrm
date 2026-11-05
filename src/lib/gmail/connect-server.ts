@@ -26,6 +26,8 @@ export async function saveMailbox(opts: {
   email: string;
   tokens: TokenSet;
   tokenKey: string;
+  /** Escopos concedidos no Google; gravados na conta para saber se o assistente de reuniões pode rodar. */
+  scopes: string[];
 }): Promise<SaveMailboxResult> {
   const db = createAdminClient();
   const email = opts.email.trim().toLowerCase();
@@ -48,7 +50,7 @@ export async function saveMailbox(opts: {
   if (decision.kind === "create") {
     const ins = await db
       .from("email_accounts")
-      .insert({ user_id: opts.userId, company_id: opts.companyId, email })
+      .insert({ user_id: opts.userId, company_id: opts.companyId, email, scopes: opts.scopes })
       .select("id")
       .single();
     if (ins.error || !ins.data) {
@@ -91,7 +93,7 @@ export async function saveMailbox(opts: {
 
   const up = await db
     .from("email_accounts")
-    .update({ status: "active", last_error: null })
+    .update({ status: "active", last_error: null, scopes: opts.scopes })
     .eq("id", decision.accountId)
     .eq("company_id", opts.companyId);
   if (up.error) {

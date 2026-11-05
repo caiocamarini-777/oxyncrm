@@ -4,13 +4,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Search } from "lucide-react";
-import { Notice, NoMailbox, NotConfigured, PickCompany, Reconnect } from "@/components/email/mailbox-states";
+import { Notice, NoMailbox, NotConfigured, PickCompany, Reconnect, ReconnectForMeet } from "@/components/email/mailbox-states";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { LIVE_ERROR_TEXT, listMyMailboxes, loadLivePage, type Mailbox } from "@/lib/gmail/live";
 import { cleanPageToken, cleanQuery, mailboxHref } from "@/lib/gmail/live-thread";
+import { hasMeetScopes } from "@/lib/gmail/connect";
 import { gmailConfig } from "@/lib/gmail/oauth";
 import { formatDate } from "@/lib/records/format";
 import { cn } from "cn";
@@ -74,6 +75,7 @@ export default async function EmailPage({
         <Reconnect email={mailbox.email} />
       ) : (
         <>
+          {hasMeetScopes(mailbox.scopes) ? null : <ReconnectForMeet companyId={scope.company.id} />}
           <Form action={base} className="flex gap-2">
             <input type="hidden" name="caixa" value={mailbox.id} />
             <Input

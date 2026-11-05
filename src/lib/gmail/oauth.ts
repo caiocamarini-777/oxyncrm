@@ -1,10 +1,12 @@
 import { randomBytes } from "node:crypto";
+import { MEET_SCOPES } from "./connect";
 
 export const GMAIL_SCOPES = [
   "openid",
   "email",
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
+  ...MEET_SCOPES,
 ];
 
 export function buildAuthUrl(opts: { clientId: string; redirectUri: string; state: string }): string {

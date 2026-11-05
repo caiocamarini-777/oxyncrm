@@ -63,6 +63,7 @@ export async function GET(request: Request) {
       email: gmailProfile.emailAddress,
       tokens,
       tokenKey: cfg.tokenKey,
+      scopes: tokens.scopes,
     });
     return finish(result);
   } catch (e) {

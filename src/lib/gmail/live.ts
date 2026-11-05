@@ -7,9 +7,15 @@ import { LIVE_CONCURRENCY, LIVE_PAGE_SIZE, effectiveQuery, mapLimit, summarizeTh
 
 // Leitura ao vivo do Gmail para o módulo E-mail (nada disso é gravado).
 
-export type Mailbox = { id: string; email: string; status: "active" | "reconnect"; visibility: "shared" | "private" };
+export type Mailbox = {
+  id: string;
+  email: string;
+  status: "active" | "reconnect";
+  visibility: "shared" | "private";
+  scopes: string[];
+};
 
-const MAILBOX_COLUMNS = "id, email, status, visibility";
+const MAILBOX_COLUMNS = "id, email, status, visibility, scopes";
 
 /**
  * Caixas do usuário na empresa. O admin geral também lê as caixas dos outros pela RLS,

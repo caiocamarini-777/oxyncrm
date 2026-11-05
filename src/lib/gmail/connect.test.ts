@@ -4,7 +4,10 @@ import {
   decideMailbox,
   gmailErrorMessage,
   GMAIL_ERROR_MESSAGES,
+  hasMeetScopes,
   hasRequiredScopes,
+  MEET_SCOPES,
+  REQUIRED_GMAIL_SCOPES,
   parseOauthCookie,
   profileRedirectPath,
   serializeOauthCookie,
@@ -111,5 +114,18 @@ describe("hasRequiredScopes", () => {
     expect(hasRequiredScopes([send])).toBe(false);
     expect(hasRequiredScopes([])).toBe(false);
     expect(gmailErrorMessage("escopos_incompletos")).toMatch(/ler e enviar/);
+  });
+});
+
+describe("hasMeetScopes", () => {
+  it("exige os dois escopos do Meet", () => {
+    expect(MEET_SCOPES).toEqual([
+      "https://www.googleapis.com/auth/meetings.space.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+    ]);
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, ...MEET_SCOPES])).toBe(true);
+    expect(hasMeetScopes(REQUIRED_GMAIL_SCOPES)).toBe(false);
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0]])).toBe(false);
+    expect(hasMeetScopes([])).toBe(false);
   });
 });

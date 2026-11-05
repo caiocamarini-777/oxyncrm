@@ -230,6 +230,21 @@ async function loadAccounts(db: SupabaseClient): Promise<AccountRow[]> {
   return accounts.filter((a) => enabled.has(a.company_id));
 }
 
+/**
+ * Marca como lidos os avisos de "reunião sem vínculo" das reuniões resolvidas (vinculadas e concluídas, ou
+ * descartadas). Falha aqui só vai para o log: o aviso é secundário à decisão.
+ */
+export async function markUnlinkedNoticesRead(db: SupabaseClient, meetingIds: string[], now: Date): Promise<void> {
+  if (meetingIds.length === 0) return;
+  const { error } = await db
+    .from("notifications")
+    .update({ read_at: now.toISOString() })
+    .eq("kind", "meeting_unlinked")
+    .in("meeting_id", meetingIds)
+    .is("read_at", null);
+  if (error) console.error("meet: falha ao marcar o aviso de reunião sem vínculo como lido", meetingIds, error.message);
+}
+
 /** Sem decisão em 7 dias, a reunião sem vínculo vira `ignored`, e a transcrição e as notas são apagadas. */
 async function discardStaleUnlinked(db: SupabaseClient, now: Date): Promise<void> {
   const cutoff = new Date(now.getTime() - UNLINKED_DISCARD_MS).toISOString();
@@ -251,8 +266,14 @@ async function discardStaleUnlinked(db: SupabaseClient, now: Date): Promise<void
     .from("meetings")
     .update({ status: "ignored", last_error: null })
     .in("id", ids)
-    .eq("status", "unlinked");
+    .eq("status", "unlinked")
+    .select("id");
   check(marked.error, "descartar as reuniões sem vínculo");
+  await markUnlinkedNoticesRead(
+    db,
+    ((marked.data ?? []) as { id: string }[]).map((r) => r.id),
+    now,
+  );
 }
 
 /**
@@ -1087,6 +1108,8 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   await createSuggestions(db, m.id, link.entity, notes.suggestions);
   const { error } = await db.from("meetings").update({ status: "done", last_error: null }).eq("id", m.id);
   check(error, "concluir a reunião");
+  // Se ela passou por Sem vínculo, o aviso do sino já foi resolvido.
+  await markUnlinkedNoticesRead(db, [m.id], deps.now());
   return "done";
 }
 

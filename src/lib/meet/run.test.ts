@@ -1202,6 +1202,54 @@ describe("processMeeting: registro apagado no Pipedrive", () => {
   });
 });
 
+describe("aviso de reunião sem vínculo", () => {
+  it("fica lido quando a reunião é vinculada e concluída", async () => {
+    loader.candidates = [];
+    const t = setup();
+    await t.run();
+    expect(t.tables.notifications).toHaveLength(1);
+    expect(t.tables.notifications[0].read_at).toBeNull();
+
+    // A ação de vincular grava o registro e reivindica a reunião.
+    Object.assign(t.tables.meetings[0], { status: "processing", entity: "deals", record_id: "d1" });
+    t.setNow(minutesAfter(NOW.toISOString(), 30));
+    await processMeeting(t.deps, "m1");
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+    expect(t.tables.notifications[0].read_at).toBe(minutesAfter(NOW.toISOString(), 30).toISOString());
+  });
+
+  it("fica lido quando a reunião é descartada sozinha em 7 dias", async () => {
+    const t = setup({
+      tables: baseTables({
+        meetings: [
+          {
+            id: "old",
+            company_id: "co",
+            account_id: "acc1",
+            owner_id: "u1",
+            conference_record: "conferenceRecords/old",
+            title: "Velha",
+            attendees: [],
+            status: "unlinked",
+            attempts: 0,
+            entity: null,
+            record_id: null,
+            updated_at: "2026-10-28T14:00:00.000Z",
+          },
+        ],
+        notifications: [
+          { id: 1, user_id: "u1", company_id: "co", kind: "meeting_unlinked", meeting_id: "old", read_at: null },
+          { id: 2, user_id: "u1", company_id: "co", kind: "meeting_unlinked", meeting_id: "outra", read_at: null },
+        ],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    await t.run();
+    expect(t.tables.meetings[0].status).toBe("ignored");
+    expect(t.tables.notifications.map((n) => n.read_at)).toEqual([NOW.toISOString(), null]);
+  });
+});
+
 describe("runMeetSync: descarte", () => {
   it("unlinked de 8 dias vira ignored, e a transcrição e as notas são apagadas", async () => {
     const old = {

@@ -5,6 +5,7 @@ import {
   canLink,
   canRetry,
   isLinkEntity,
+  isOwnerOrAdmin,
   outcomeIdFor,
   outcomeMap,
   stagePipedriveIdFor,
@@ -180,6 +181,16 @@ describe("canDiscard e canRetry", () => {
   it("tentar de novo vale só para falha", () => {
     expect(canRetry("failed")).toBe(true);
     expect(canRetry("unlinked")).toBe(false);
+  });
+});
+
+describe("isOwnerOrAdmin", () => {
+  it("descartar e tentar de novo: só o dono da reunião ou o admin geral", () => {
+    const m = { owner_id: "u1" };
+    expect(isOwnerOrAdmin(m, "u1", false)).toBe(true);
+    expect(isOwnerOrAdmin(m, "u2", true)).toBe(true);
+    // gestor que edita o registro vinculado, mas não é o dono
+    expect(isOwnerOrAdmin(m, "u2", false)).toBe(false);
   });
 });
 

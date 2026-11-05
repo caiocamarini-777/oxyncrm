@@ -14,6 +14,7 @@ import {
   canLink,
   canRetry,
   isLinkEntity,
+  isOwnerOrAdmin,
   outcomeIdFor,
   outcomeMap,
   stagePipedriveIdFor,
@@ -25,13 +26,14 @@ import {
   type SuggestionKind,
 } from "./decisions";
 import { readMeetingSettings } from "./settings";
-import { defaultMeetDeps, pipedriveIdOf, processMeeting, resolveSinkTarget } from "./run";
+import { defaultMeetDeps, markUnlinkedNoticesRead, pipedriveIdOf, processMeeting, resolveSinkTarget } from "./run";
 import { pipedriveSink, pipedriveUserFor, SinkError, type SinkTarget } from "./sink";
 
 /**
  * Ações do vendedor sobre as reuniões do assistente. Em todas: a permissão é conferida com o cliente do
  * USUÁRIO (`can_edit_meeting`, que segue a regra do registro vinculado) e só depois a escrita acontece com o
- * cliente administrativo, porque as tabelas de reunião não têm política de escrita para o usuário.
+ * cliente administrativo, porque as tabelas de reunião não têm política de escrita para o usuário. Vincular,
+ * descartar e tentar de novo pedem ainda o dono da reunião ou o admin geral.
  */
 
 const uuid = z.string().uuid();
@@ -64,10 +66,12 @@ type Admin = ReturnType<typeof createAdminClient>;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+type Authorized = { ok: true; db: Admin; meeting: MeetingRow; profile: Awaited<ReturnType<typeof requireUser>> };
+
 /** Confere `can_edit_meeting` com o usuário e carrega a reunião com o cliente administrativo. */
-async function authorize(meetingId: string): Promise<{ ok: true; db: Admin; meeting: MeetingRow } | { ok: false; error: string }> {
+async function authorize(meetingId: string): Promise<Authorized | { ok: false; error: string }> {
   if (!uuid.safeParse(meetingId).success) return INVALID;
-  await requireUser();
+  const profile = await requireUser();
   const supabase = await createServerClient();
   const { data: allowed, error } = await supabase.rpc("can_edit_meeting", { p_meeting: meetingId });
   if (error) return { ok: false, error: "Não foi possível conferir a permissão. Tente novamente." };
@@ -76,7 +80,7 @@ async function authorize(meetingId: string): Promise<{ ok: true; db: Admin; meet
   const { data, error: readError } = await db.from("meetings").select(MEETING_COLUMNS).eq("id", meetingId).maybeSingle();
   if (readError) return { ok: false, error: "Não foi possível ler a reunião. Tente novamente." };
   if (!data) return NOT_FOUND;
-  return { ok: true, db, meeting: data as MeetingRow };
+  return { ok: true, db, meeting: data as MeetingRow, profile };
 }
 
 function pipedriveToken(): string {
@@ -359,11 +363,13 @@ export async function linkMeeting(meetingId: string, entity: "deals" | "leads" |
 /**
  * Descarta uma reunião sem vínculo (inclusive a concluída com o registro na lixeira) ou com falha: apaga a
  * transcrição, as notas e as sugestões e só então vira `ignored` (se uma limpeza falhar, dá para tentar de novo).
+ * Só o dono da reunião ou o admin geral.
  */
 export async function discardMeeting(meetingId: string): Promise<ActionResult> {
   const auth = await authorize(meetingId);
   if (!auth.ok) return auth;
-  const { db, meeting } = auth;
+  const { db, meeting, profile } = auth;
+  if (!isOwnerOrAdmin(meeting, profile.id, profile.isSuperAdmin)) return DENIED;
   let trashed: boolean;
   try {
     trashed = await linkedRecordTrashed(db, meeting);
@@ -392,6 +398,8 @@ export async function discardMeeting(meetingId: string): Promise<ActionResult> {
     .select("id");
   if (error) return { ok: false, error: "Não foi possível descartar a reunião. Tente novamente." };
   if (!data || data.length === 0) return BUSY;
+  // Resolvida: o aviso de "sem vínculo" do sino deixa de pedir decisão.
+  await markUnlinkedNoticesRead(db, [meetingId], new Date());
   refresh();
   return { ok: true, data: undefined };
 }
@@ -422,12 +430,13 @@ async function cannotFetchAgain(db: Admin, m: MeetingRow): Promise<string | null
  * Tenta de novo uma reunião com falha. Com a transcrição guardada (falhou o Claude ou o Pipedrive): zera as
  * tentativas e processa na hora. Sem ela (o Google não deixou ler a reunião, ou a transcrição não apareceu no
  * prazo): não há o que processar; a reunião volta a esperar a transcrição, e a próxima rodada do cron relê a
- * reunião e busca a transcrição de novo.
+ * reunião e busca a transcrição de novo. Só o dono da reunião ou o admin geral.
  */
 export async function retryMeeting(meetingId: string): Promise<ActionResult<{ message: string }>> {
   const auth = await authorize(meetingId);
   if (!auth.ok) return auth;
-  const { db, meeting } = auth;
+  const { db, meeting, profile } = auth;
+  if (!isOwnerOrAdmin(meeting, profile.id, profile.isSuperAdmin)) return DENIED;
   if (!canRetry(meeting.status)) return { ok: false, error: "Só reuniões com falha podem ser tentadas de novo." };
 
   const transcript = await db.from("meeting_transcripts").select("meeting_id").eq("meeting_id", meetingId).maybeSingle();

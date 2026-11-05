@@ -129,6 +129,14 @@ export function stagePipedriveIdFor(
 const isUnlinkedLike = (status: MeetingStatus, recordTrashed: boolean) =>
   status === "unlinked" || (status === "done" && recordTrashed);
 
+/**
+ * Dono da reunião ou admin geral: quem pode vincular, descartar e tentar de novo. Vale além de
+ * `can_edit_meeting`, que deixa passar quem edita o registro vinculado (gestor, por exemplo).
+ */
+export function isOwnerOrAdmin(meeting: { owner_id: string }, userId: string, isSuperAdmin: boolean): boolean {
+  return meeting.owner_id === userId || isSuperAdmin;
+}
+
 /** Só reunião sem vínculo, do próprio vendedor (ou do admin geral), pode ser vinculada. */
 export function canLink(
   meeting: { owner_id: string; status: MeetingStatus },
@@ -136,7 +144,7 @@ export function canLink(
   isSuperAdmin: boolean,
   recordTrashed = false,
 ): boolean {
-  return isUnlinkedLike(meeting.status, recordTrashed) && (meeting.owner_id === userId || isSuperAdmin);
+  return isUnlinkedLike(meeting.status, recordTrashed) && isOwnerOrAdmin(meeting, userId, isSuperAdmin);
 }
 
 export const canDiscard = (status: MeetingStatus, recordTrashed = false) =>

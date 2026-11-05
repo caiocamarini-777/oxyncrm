@@ -134,6 +134,31 @@ describe("retryMeeting", () => {
   });
 });
 
+describe("dono ou admin geral (descartar e tentar de novo)", () => {
+  it("quem edita o registro mas não é o dono não descarta nem tenta de novo", async () => {
+    state.profile = { id: "gestor", isSuperAdmin: false, active: true };
+    const t = setup(tables({ meetings: [meeting({ entity: "deals", record_id: "d1" })] }));
+    const denied = { ok: false, error: "Você não tem permissão para esta ação." };
+    expect(await discardMeeting(M)).toEqual(denied);
+    expect(await retryMeeting(M)).toEqual(denied);
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", attempts: 3 });
+  });
+
+  it("o admin geral pode, mesmo sem ser o dono", async () => {
+    state.profile = { id: "admin", isSuperAdmin: true, active: true };
+    const t = setup();
+    expect(await retryMeeting(M)).toMatchObject({ ok: true });
+    expect(t.tables.meetings[0].status).toBe("waiting_transcript");
+    expect(await discardMeeting(M)).toMatchObject({ ok: false }); // waiting_transcript não se descarta
+  });
+
+  it("sem can_edit_meeting, nem o dono passa", async () => {
+    state.canEdit = false;
+    setup();
+    expect(await retryMeeting(M)).toEqual({ ok: false, error: "Você não tem permissão para esta ação." });
+  });
+});
+
 describe("discardMeeting", () => {
   it("apaga transcrição, notas e sugestões e vira ignored", async () => {
     const t = setup(
@@ -149,5 +174,20 @@ describe("discardMeeting", () => {
     expect(t.tables.meeting_transcripts).toHaveLength(0);
     expect(t.tables.meeting_notes).toHaveLength(0);
     expect(t.tables.meeting_suggestions).toHaveLength(0);
+  });
+
+  it("marca como lido o aviso de reunião sem vínculo", async () => {
+    const t = setup(
+      tables({
+        meetings: [meeting({ status: "unlinked", attempts: 0, last_error: null })],
+        notifications: [
+          { id: 1, user_id: "u1", kind: "meeting_unlinked", meeting_id: M, read_at: null },
+          { id: 2, user_id: "u1", kind: "activity_reminder", meeting_id: null, read_at: null },
+        ],
+      }),
+    );
+    expect(await discardMeeting(M)).toMatchObject({ ok: true });
+    expect(Number.isNaN(Date.parse(t.tables.notifications[0].read_at as string))).toBe(false);
+    expect(t.tables.notifications[1].read_at).toBeNull();
   });
 });

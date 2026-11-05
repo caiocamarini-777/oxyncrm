@@ -159,7 +159,10 @@ export default function PrivacyPage() {
           <li>
             A transcrição e as notas de uma reunião vinculada ficam no CRM junto com o registro. Reuniões sem vínculo e
             sem decisão do vendedor são descartadas sozinhas em 7 dias, com a transcrição apagada. O vendedor também
-            pode descartá-las antes disso.
+            pode descartá-las antes disso. Uma reunião ignorada (só com gente interna, sem a transcrição lida) ou
+            descartada continua registrada no CRM com o título, os participantes (nome e e-mail), o horário e o
+            identificador da reunião no Google, para não ser lida de novo. A transcrição e as notas da reunião
+            descartada são apagadas.
           </li>
           <li>
             Você também pode revogar o acesso a qualquer momento em{" "}

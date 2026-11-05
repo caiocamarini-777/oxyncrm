@@ -32,8 +32,9 @@ export default async function MeetingAssistantSettingsPage({
       </div>
       <p className="text-sm text-muted-foreground">
         Depois de cada reunião do Google Meet com convidado externo, o assistente lê a transcrição, escreve as notas e
-        sugere atualizações no registro. A configuração vale para a empresa selecionada, e cada vendedor precisa ter
-        reconectado o Google em Perfil para o assistente enxergar as reuniões dele.
+        sugere atualizações no registro. A configuração vale para a empresa selecionada. Com o assistente ligado,
+        cada vendedor precisa reconectar o Google uma vez pelo aviso que aparece no módulo E-mail da empresa, para o
+        assistente enxergar as reuniões dele.
       </p>
       <MeetingAssistantForm key={selected.id} companyId={selected.id} enabled={enabled} questions={questions} />
     </div>

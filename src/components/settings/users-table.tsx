@@ -20,6 +20,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatTime } from "@/lib/activities/time";
+import { formatDate } from "@/lib/records/format";
 import { resendInvite, type UserRow } from "@/lib/users/actions";
 import type { NamedOption } from "./access-rows";
 import { InviteUserDialog } from "./invite-user-dialog";
@@ -145,13 +147,14 @@ export function UsersTable({
             <TableHead>Empresas e papéis</TableHead>
             <TableHead>Equipes</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead title="Último login. Quem mantém a sessão aberta não faz login de novo.">Último acesso</TableHead>
             <TableHead className="w-0" />
           </TableRow>
         </TableHeader>
         <TableBody>
           {shown.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-muted-foreground">
+              <TableCell colSpan={7} className="text-muted-foreground">
                 Nenhum usuário encontrado.
               </TableCell>
             </TableRow>
@@ -177,6 +180,9 @@ export function UsersTable({
                 <TableCell>{u.teams.map((t) => t.name).join(", ") || "-"}</TableCell>
                 <TableCell>
                   <Badge variant={STATUS_VARIANT[statusOf(u)]}>{STATUS_LABEL[statusOf(u)]}</Badge>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {u.lastSignInAt ? `${formatDate(u.lastSignInAt)} ${formatTime(u.lastSignInAt)}` : "Nunca entrou"}
                 </TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-2">

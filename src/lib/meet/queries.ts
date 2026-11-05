@@ -4,7 +4,7 @@ import { PAGE_SIZE, recordHref, type Paged, type RecordEntity } from "@/lib/reco
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
 import type { TimelineItem } from "@/lib/timeline/queries";
-import type { MeetingStatus, SuggestionKind } from "./decisions";
+import { canDecide, type MeetingStatus, type SuggestionKind } from "./decisions";
 import type { MeetingNotes } from "./notes";
 import { isPendingOverdue, type MeetingListTab, type MeetingTabKey } from "./view";
 
@@ -220,6 +220,7 @@ export function hideMeetingNotes(items: TimelineItem[], meetingNotePipedriveIds:
  * Em que aba da página Reuniões a reunião cai (`null`: só aparece em "Todas"). "Sem vínculo" é `unlinked` ou o
  * caso calculado de `done` com o registro vinculado na lixeira (`recordTrashed`, verificado por quem chama), que
  * vale mais que as sugestões pendentes: a reunião precisa de outro registro antes de qualquer decisão.
+ * `suggestionsPending` conta as sugestões sem decisão: `pending` e `failed`.
  */
 export function meetingTab(m: { status: MeetingStatus; suggestionsPending: number; recordTrashed: boolean }): MeetingTabKey | null {
   if (m.status === "unlinked") return "sem-vinculo";
@@ -256,8 +257,9 @@ export type MeetingListRow = {
   record: MeetingListRecord | null;
   /** `done` cujo registro vinculado está na lixeira (ou sumiu). */
   recordTrashed: boolean;
+  /** Sugestões sem decisão: `pending` e `failed`. */
   suggestionsPending: number;
-  /** Pendente há mais de 24 h (medido desde que a reunião foi concluída, quando as sugestões nasceram). */
+  /** Sugestões sem decisão (pendentes ou com falha) há mais de 24 h, medido desde que a reunião foi concluída. */
   overdue: boolean;
   lastError: string | null;
   /** É o dono (ou admin geral): pode vincular, descartar e tentar de novo. A ação confere de novo no servidor. */
@@ -294,8 +296,10 @@ const LIST_COLUMNS =
   "id, company_id, owner_id, title, started_at, ended_at, created_at, updated_at, status, last_error, entity, record_id, " +
   "owner:profiles!owner_id(full_name), company:companies(name, slug)";
 
+/** Sugestões sem decisão: `pending` e também `failed` (o card ainda deixa confirmar ou descartar de novo). */
+const UNDECIDED_STATUSES = ["pending", "failed"];
 const countPending = (rows: unknown): number =>
-  many(rows).filter((r) => isObject(r) && r.status === "pending").length;
+  many(rows).filter((r) => isObject(r) && typeof r.status === "string" && canDecide(r.status)).length;
 
 const MEETING_STATUSES: MeetingStatus[] = ["waiting_transcript", "processing", "unlinked", "done", "failed", "ignored"];
 
@@ -309,21 +313,26 @@ async function resolveRecords(refs: { entity: RecordEntity; id: string }[]): Pro
   for (const r of refs) byEntity.set(r.entity, (byEntity.get(r.entity) ?? new Set()).add(r.id));
   if (byEntity.size === 0) return out;
   const supabase = await createServerClient();
-  for (const [entity, idSet] of byEntity) {
+  // Uma consulta por entidade e lote de ids, todas ao mesmo tempo: o contador do menu roda no layout de toda página.
+  const lookups = [...byEntity].flatMap(([entity, idSet]) => {
     const ids = [...idSet];
-    for (let i = 0; i < ids.length; i += ID_CHUNK) {
-      const col = NAME_COLUMN[entity];
-      const { data, error } = await supabase
-        .from(entity)
-        .select(`id, deleted_at, ${col}`)
-        .in("id", ids.slice(i, i + ID_CHUNK));
-      if (error) throw new Error(`ler ${entity}: ${error.code} ${error.message}`);
-      for (const r of (data ?? []) as unknown as Record<string, unknown>[]) {
-        if (typeof r.id !== "string") continue;
-        out.set(recordKey(entity, r.id), { title: str(r[col]).trim(), trashed: r.deleted_at != null });
-      }
-    }
-  }
+    const col = NAME_COLUMN[entity];
+    return Array.from({ length: Math.ceil(ids.length / ID_CHUNK) }, (_, i) =>
+      Promise.resolve(
+        supabase
+          .from(entity)
+          .select(`id, deleted_at, ${col}`)
+          .in("id", ids.slice(i * ID_CHUNK, (i + 1) * ID_CHUNK)),
+      ).then(({ data, error }) => {
+        if (error) throw new Error(`ler ${entity}: ${error.code} ${error.message}`);
+        for (const r of (data ?? []) as unknown as Record<string, unknown>[]) {
+          if (typeof r.id !== "string") continue;
+          out.set(recordKey(entity, r.id), { title: str(r[col]).trim(), trashed: r.deleted_at != null });
+        }
+      }),
+    );
+  });
+  await Promise.all(lookups);
   return out;
 }
 
@@ -405,7 +414,7 @@ export async function listMeetings(scope: CompanyScope, tab: MeetingListTab, pag
       .select(`${LIST_COLUMNS}, ${suggestions}`, tab === "todas" ? { count: "exact" } : undefined)
       .neq("status", "ignored");
     if (scope.kind === "company") q = q.eq("company_id", scope.company.id);
-    if (tab === "pendentes") q = q.eq("status", "done").eq("meeting_suggestions.status", "pending");
+    if (tab === "pendentes") q = q.eq("status", "done").in("meeting_suggestions.status", UNDECIDED_STATUSES);
     if (tab === "com-erro") q = q.eq("status", "failed");
     if (tab === "sem-vinculo") q = q.in("status", ["unlinked", "done"]);
     if ((tab === "com-erro" || tab === "sem-vinculo") && !viewer.isSuperAdmin) q = q.eq("owner_id", viewer.id);

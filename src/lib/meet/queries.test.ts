@@ -221,6 +221,14 @@ describe("toMeetingListRow", () => {
     });
   });
 
+  it("sugestão com falha também conta como sem decisão", () => {
+    const failedOnly = { ...raw, meeting_suggestions: [{ status: "failed" }, { status: "confirmed" }, { status: "dismissed" }] };
+    const row = toMeetingListRow(failedOnly, alive, viewer, NOW);
+    expect(row).toMatchObject({ tab: "pendentes", suggestionsPending: 1, overdue: true });
+    const decided = { ...raw, meeting_suggestions: [{ status: "confirmed" }, { status: "dismissed" }] };
+    expect(toMeetingListRow(decided, alive, viewer, NOW)).toMatchObject({ tab: null, suggestionsPending: 0 });
+  });
+
   it("pendente há menos de 24 h não é destacada", () => {
     const row = toMeetingListRow({ ...raw, updated_at: "2026-11-06T09:00:00Z" }, alive, viewer, NOW);
     expect(row?.tab).toBe("pendentes");

@@ -11,9 +11,9 @@ import { parseMeetingTab } from "@/lib/meet/view";
 export const instant = false;
 
 const HINTS = {
-  pendentes: "Reuniões com sugestões do assistente esperando confirmação. As pendentes há mais de 24 h ficam em destaque.",
+  pendentes: "Reuniões com sugestões do assistente esperando decisão. As pendentes há mais de 24 h ficam em destaque.",
   "sem-vinculo":
-    "Reuniões sem registro no CRM, ou cujo registro foi para a lixeira. Sem decisão em 7 dias, elas são descartadas sozinhas.",
+    "Reuniões sem registro no CRM são descartadas sozinhas em 7 dias; as de cards excluídos ficam até você vincular ou descartar.",
   "com-erro": "Reuniões que o assistente não conseguiu processar. Tente de novo ou descarte.",
   todas: "Todas as reuniões que você pode ver, menos as descartadas.",
 } as const;

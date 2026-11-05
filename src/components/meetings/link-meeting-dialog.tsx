@@ -103,6 +103,7 @@ export function LinkMeetingDialog({
   }
 
   const shown = query.trim().length < 2 ? [] : results;
+  const ofCompany = meeting.companyName ? `de ${meeting.companyName}` : "da empresa";
 
   return (
     <Dialog open={open} onOpenChange={change}>
@@ -110,7 +111,7 @@ export function LinkMeetingDialog({
         <DialogHeader>
           <DialogTitle>Vincular reunião</DialogTitle>
           <DialogDescription>
-            Escolha o negócio, lead ou pessoa de {meeting.companyName || "a empresa"} que recebe a reunião “{meeting.title}”.
+            Escolha o negócio, lead ou pessoa {ofCompany} que recebe a reunião “{meeting.title}”.
           </DialogDescription>
         </DialogHeader>
         <Command shouldFilter={false} className="rounded-lg border">

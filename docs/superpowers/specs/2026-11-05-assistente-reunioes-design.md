@@ -117,7 +117,7 @@ A reunião agendada encontrada vira `anchor_activity_id`.
 - **Até a sincronização das 9h:** a anotação vive no Pipedrive e no `meeting_notes`. O card mostra a reunião pelo `meeting_notes`, então ela aparece no CRM na hora.
 - **Menu lateral:** item "Reuniões" com um contador do que espera decisão do usuário (sem vínculo e sugestões pendentes dele).
 - **Sino de notificações:** um aviso quando uma reunião do usuário cai em Sem vínculo, porque ela é descartada sozinha em 7 dias. Para isso, `notifications.kind` ganha `meeting_unlinked` e a coluna `meeting_id` (cascade).
-- **Card que foi para a lixeira:** se o registro vinculado for para a lixeira (por exemplo, porque o modo espelho viu que ele foi apagado no Pipedrive), a reunião volta para Sem vínculo, também na tela. Se o registro for restaurado, o vínculo volta.
+- **Card que foi para a lixeira:** se o registro vinculado for para a lixeira (por exemplo, porque o modo espelho viu que ele foi apagado no Pipedrive), a reunião guarda o vínculo, mas aparece em Sem vínculo enquanto o registro estiver na lixeira (estado calculado, não gravado). Se o registro for restaurado, ela volta ao card sozinha.
 - **Sem duplicar:** quando a sincronização traz a anotação do Pipedrive, o histórico esconde a anotação importada cujo id do Pipedrive é o `pipedrive_note_id` de uma reunião, já que o bloco da reunião mostra o mesmo conteúdo.
 
 ### Configurações

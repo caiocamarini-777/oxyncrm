@@ -10,181 +10,14 @@ vi.mock("./match-loader", () => ({
   loadCandidates: vi.fn(async () => loader.candidates),
 }));
 
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { GmailApiError, GmailNetworkError, GmailRateLimitError } from "@/lib/gmail/client";
 import { MEET_SCOPES } from "@/lib/gmail/connect";
 import type { CalendarEvent, ConferenceRecord, MeetClient, Participant, Transcript, TranscriptEntry } from "./google";
+import { fakeDb, resetSeq, type Row, type Tables } from "./fake-db.test-support";
 import type { Candidate } from "./match";
 import type { MeetingNotes, NotesInput } from "./notes";
 import { isPermanentGoogleError, MAX_TRANSCRIPT_CHARS, type MeetDeps, processMeeting, runMeetSync } from "./run";
 import { type MeetingSink, SinkError } from "./sink";
-
-// ---- banco em memória ----------------------------------------------------------------------------------------
-
-type Row = Record<string, unknown>;
-type Tables = Record<string, Row[]>;
-
-/** Chaves únicas que o banco de verdade garante (as que a rodada depende). */
-const UNIQUE: Record<string, string[]> = {
-  meetings: ["conference_record"],
-  meeting_transcripts: ["meeting_id"],
-  meeting_notes: ["meeting_id"],
-  notifications: ["meeting_id", "kind", "user_id"],
-};
-
-let seq = 0;
-const DEFAULTS: Record<string, () => Row> = {
-  meetings: () => ({
-    id: `m${++seq}`,
-    status: "waiting_transcript",
-    attempts: 0,
-    last_error: null,
-    entity: null,
-    record_id: null,
-    anchor_activity_id: null,
-    calendar_event_id: null,
-    attendees: [],
-    title: "",
-    updated_at: "2026-11-05T15:00:00.000Z",
-  }),
-  meeting_notes: () => ({ pipedrive_note_id: null, written_at: null }),
-  meeting_suggestions: () => ({ id: `s${++seq}`, status: "pending", decided_by: null, decided_at: null, last_error: null }),
-  notifications: () => ({ id: ++seq, read_at: null }),
-};
-
-const time = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
-function cmp(a: unknown, b: unknown): number {
-  if (typeof a === "number" && typeof b === "number") return a - b;
-  const ta = time(a);
-  const tb = time(b);
-  if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta - tb;
-  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
-}
-const unquote = (s: string) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1) : s);
-
-/**
- * Banco falso no padrão do `run.test.ts` do Gmail, mas com estado: as tabelas são listas de linhas e o
- * construtor de consultas entende o vocabulário que a rodada usa (filtros, ordem, insert, upsert com
- * `onConflict`/`ignoreDuplicates`, update, delete e o `.or` do lease). Chave única violada devolve 23505.
- */
-function fakeDb(tables: Tables) {
-  const log: { table: string; op: string; values?: unknown }[] = [];
-  const db = {
-    from(table: string) {
-      const rows = (tables[table] ??= []);
-      let op: "select" | "insert" | "upsert" | "update" | "delete" = "select";
-      let payload: Row[] = [];
-      let upsertOpts: { onConflict?: string; ignoreDuplicates?: boolean } = {};
-      let returning = false;
-      let single: "single" | "maybe" | null = null;
-      let limit = Infinity;
-      const orders: { col: string; asc: boolean }[] = [];
-      const filters: ((r: Row) => boolean)[] = [];
-      const chain: Record<string, unknown> = {};
-
-      chain.select = () => {
-        if (op !== "select") returning = true;
-        return chain;
-      };
-      chain.insert = (v: Row | Row[]) => ((op = "insert"), (payload = Array.isArray(v) ? v : [v]), chain);
-      chain.upsert = (v: Row | Row[], o: typeof upsertOpts = {}) => (
-        (op = "upsert"), (payload = Array.isArray(v) ? v : [v]), (upsertOpts = o), chain
-      );
-      chain.update = (v: Row) => ((op = "update"), (payload = [v]), chain);
-      chain.delete = () => ((op = "delete"), chain);
-      chain.eq = (c: string, v: unknown) => (filters.push((r) => r[c] === v), chain);
-      // `ilike` sem curingas (o código escapa `%`, `_` e `\`): igualdade sem diferenciar maiúsculas.
-      chain.ilike = (c: string, pattern: string) => {
-        const literal = pattern.replace(/\\(.)/g, "$1").toLowerCase();
-        filters.push((r) => typeof r[c] === "string" && (r[c] as string).toLowerCase() === literal);
-        return chain;
-      };
-      chain.neq = (c: string, v: unknown) => (filters.push((r) => r[c] !== v), chain);
-      chain.is = (c: string, v: null) => (filters.push((r) => (r[c] ?? null) === v), chain);
-      chain.not = (c: string, o: string, v: unknown) => (
-        filters.push((r) => (o === "is" ? (r[c] ?? null) !== v : true)), chain
-      );
-      chain.in = (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), chain);
-      chain.lt = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) < 0), chain);
-      chain.lte = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) <= 0), chain);
-      chain.gte = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) >= 0), chain);
-      chain.or = (expr: string) => {
-        const parts = expr.split(",").map((p) => {
-          const [col, o, ...rest] = p.split(".");
-          const v = unquote(rest.join("."));
-          return (r: Row) =>
-            o === "is" ? (r[col] ?? null) === null : o === "lt" ? r[col] != null && cmp(r[col], v) < 0 : r[col] === v;
-        });
-        filters.push((r) => parts.some((f) => f(r)));
-        return chain;
-      };
-      chain.order = (col: string, o: { ascending?: boolean } = {}) => (
-        orders.push({ col, asc: o.ascending !== false }), chain
-      );
-      chain.limit = (n: number) => ((limit = n), chain);
-      chain.single = () => ((single = "single"), chain);
-      chain.maybeSingle = () => ((single = "maybe"), chain);
-
-      const conflict = (row: Row) => {
-        const keys = UNIQUE[table];
-        if (!keys) return undefined;
-        return rows.find((r) => keys.every((k) => r[k] != null && r[k] === row[k]));
-      };
-
-      chain.then = (resolve: (v: unknown) => void, reject?: (e: unknown) => void) => {
-        try {
-          log.push({ table, op, values: op === "select" || op === "delete" ? undefined : payload });
-          const match = rows.filter((r) => filters.every((f) => f(r)));
-          let data: Row[] = [];
-          if (op === "select") {
-            data = [...match];
-            for (const o of [...orders].reverse()) data.sort((a, b) => (o.asc ? 1 : -1) * cmp(a[o.col], b[o.col]));
-            data = data.slice(0, limit);
-          } else if (op === "insert") {
-            const fresh = payload.map((v) => ({ ...(DEFAULTS[table]?.() ?? {}), ...structuredClone(v) }));
-            if (fresh.some((r) => conflict(r))) {
-              return resolve({ data: null, error: { code: "23505", message: "duplicate key value" } });
-            }
-            rows.push(...fresh);
-            data = fresh;
-          } else if (op === "upsert") {
-            for (const v of payload) {
-              const existing = conflict(v);
-              if (existing) {
-                if (upsertOpts.ignoreDuplicates) continue;
-                Object.assign(existing, structuredClone(v));
-                data.push(existing);
-              } else {
-                const fresh = { ...(DEFAULTS[table]?.() ?? {}), ...structuredClone(v) };
-                rows.push(fresh);
-                data.push(fresh);
-              }
-            }
-          } else if (op === "update") {
-            for (const r of match) Object.assign(r, structuredClone(payload[0]));
-            data = match;
-          } else {
-            for (const r of match) rows.splice(rows.indexOf(r), 1);
-            data = match;
-          }
-          const out = data.map((r) => structuredClone(r));
-          if (single) {
-            if (single === "single" && out.length !== 1) {
-              return resolve({ data: null, error: { code: "PGRST116", message: "esperava uma linha" } });
-            }
-            return resolve({ data: out[0] ?? null, error: null });
-          }
-          return resolve({ data: op === "select" || returning ? out : null, error: null });
-        } catch (e) {
-          if (reject) return reject(e);
-          throw e;
-        }
-      };
-      return chain;
-    },
-  } as unknown as SupabaseClient;
-  return { db, tables, log };
-}
 
 // ---- Meet falso ----------------------------------------------------------------------------------------------
 
@@ -362,9 +195,9 @@ type Setup = {
 };
 
 function setup(s: Setup = {}) {
-  const { db, tables, log } = fakeDb(s.tables ?? baseTables());
-  const meets = Object.fromEntries(Object.entries(s.meet ?? { acc1: meetData() }).map(([k, v]) => [k, fakeMeet(v)]));
   let now = s.now ?? NOW;
+  const { db, tables, log } = fakeDb(s.tables ?? baseTables(), () => now);
+  const meets = Object.fromEntries(Object.entries(s.meet ?? { acc1: meetData() }).map(([k, v]) => [k, fakeMeet(v)]));
   const sink = s.sink ?? fakeSink();
   const notes = vi.fn(s.notes ?? (async () => NOTES));
   const pipedriveNames = vi.fn(async () => ({ outcomes: ["Realizada", "Não compareceu"], activityTypes: ["Reunião", "Ligação"] }));
@@ -393,7 +226,7 @@ function setup(s: Setup = {}) {
 const minutesAfter = (iso: string, min: number) => new Date(Date.parse(iso) + min * 60_000);
 
 beforeEach(() => {
-  seq = 0;
+  resetSeq();
   loader.domains = new Set(["oxyn.com.br"]);
   loader.candidates = [dealCandidate];
 });
@@ -818,8 +651,10 @@ describe("processMeeting", () => {
     });
     expect(out[0]).toMatchObject({ processed: 1, failed: 0 });
 
-    // Rodar de novo (ex.: ação de vincular sem registro) não duplica a notificação.
+    // Rodar de novo (ex.: a ação de vincular reivindica e o registro some no meio) não duplica a notificação.
+    t.tables.meetings[0].status = "processing";
     await processMeeting(t.deps, "m1");
+    expect(t.tables.meetings[0]).toMatchObject({ status: "unlinked" });
     expect(t.tables.notifications).toHaveLength(1);
   });
 
@@ -842,7 +677,7 @@ describe("processMeeting", () => {
           entity: "deals",
           record_id: "d1",
           anchor_activity_id: null,
-          updated_at: "2026-11-05T14:50:00.000Z",
+          updated_at: "2026-11-05T14:30:00.000Z",
         },
       ],
       meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
@@ -874,11 +709,12 @@ describe("processMeeting", () => {
     });
     expect(t.tables.meeting_notes[0].pipedrive_note_id).toBeNull();
 
-    t.setNow(minutesAfter(NOW.toISOString(), 10));
+    // A retentativa só pega a reunião parada há mais de 10 min.
+    t.setNow(minutesAfter(NOW.toISOString(), 11));
     await t.run();
     expect(t.tables.meetings[0]).toMatchObject({ status: "processing", attempts: 2 });
 
-    t.setNow(minutesAfter(NOW.toISOString(), 20));
+    t.setNow(minutesAfter(NOW.toISOString(), 22));
     const out = await t.run();
     expect(t.tables.meetings[0]).toMatchObject({ status: "failed", attempts: 3 });
     expect(out[0]).toMatchObject({ failed: 1 });
@@ -887,7 +723,7 @@ describe("processMeeting", () => {
     expect(t.tables.meeting_suggestions).toHaveLength(0);
 
     // Reunião failed não é tentada de novo pela rodada.
-    t.setNow(minutesAfter(NOW.toISOString(), 30));
+    t.setNow(minutesAfter(NOW.toISOString(), 40));
     await t.run();
     expect(sink.writeNote).toHaveBeenCalledTimes(3);
   });
@@ -899,7 +735,7 @@ describe("processMeeting", () => {
       },
     });
     for (let i = 0; i < 3; i++) {
-      t.setNow(minutesAfter(NOW.toISOString(), i * 10));
+      t.setNow(minutesAfter(NOW.toISOString(), i * 11));
       await t.run();
     }
     expect(t.tables.meetings[0]).toMatchObject({
@@ -931,7 +767,7 @@ describe("processMeeting", () => {
           entity: "deals",
           record_id: "d1",
           anchor_activity_id: null,
-          updated_at: "2026-11-05T14:50:00.000Z",
+          updated_at: "2026-11-05T14:30:00.000Z",
         },
       ],
       meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
@@ -991,6 +827,217 @@ describe("processMeeting", () => {
     await processMeeting(internos.deps, internos.tables.meetings[0].id as string);
     expect(internos.tables.meetings[0]).toMatchObject({ status: "ignored", attempts: 0, entity: null });
     expect(internos.notes).not.toHaveBeenCalled();
+  });
+});
+
+/** Reunião já com transcrição, em `processing`, vinculada ao negócio d1 (como deixa uma rodada ou uma ação). */
+function processingMeeting(over: Row = {}): Row {
+  return {
+    id: "m1",
+    company_id: "co",
+    account_id: "acc1",
+    owner_id: "u1",
+    conference_record: R1,
+    title: "Apresentação Acme",
+    started_at: "2026-11-05T14:00:00.000Z",
+    ended_at: "2026-11-05T14:45:00.000Z",
+    attendees: [{ email: "cliente@acme.com", name: "Cliente", internal: false }],
+    status: "processing",
+    attempts: 1,
+    last_error: "Pipedrive fora do ar",
+    entity: "deals",
+    record_id: "d1",
+    anchor_activity_id: null,
+    updated_at: "2026-11-05T14:30:00.000Z",
+    ...over,
+  };
+}
+
+const storedNotes = (over: Row = {}): Row => ({
+  meeting_id: "m1",
+  summary: NOTES.summary,
+  pains: NOTES.pains,
+  objections: NOTES.objections,
+  qualification: NOTES.qualification,
+  next_steps: NOTES.next_steps,
+  model: "claude-opus-5-5",
+  raw: NOTES,
+  pipedrive_note_id: null,
+  written_at: null,
+  ...over,
+});
+
+/** Envolve `from(table)` para rodar `hook` logo antes do primeiro `method` (insert, upsert, update) na tabela. */
+function beforeFirst(t: ReturnType<typeof setup>, table: string, method: string, hook: (values: Row) => void) {
+  const from = t.db.from.bind(t.db);
+  let fired = false;
+  (t.db as unknown as { from: (name: string) => unknown }).from = (name: string) => {
+    const q = from(name) as unknown as Record<string, (v: Row, ...rest: unknown[]) => unknown>;
+    if (name !== table) return q;
+    const original = q[method];
+    q[method] = (v: Row, ...rest: unknown[]) => {
+      if (!fired) {
+        fired = true;
+        hook(v);
+      }
+      return original(v, ...rest);
+    };
+    return q;
+  };
+}
+
+describe("runMeetSync: concorrência com as ações", () => {
+  it("retentativa só pega reunião em processing parada há mais de 10 min", async () => {
+    const t = setup({
+      tables: baseTables({
+        // atualizada há 5 min: uma ação (vincular, tentar de novo) acabou de reivindicar e está processando
+        meetings: [processingMeeting({ updated_at: "2026-11-05T14:55:00.000Z" })],
+        meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+        meeting_notes: [storedNotes()],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    await t.run();
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "processing", attempts: 1 });
+
+    t.setNow(minutesAfter("2026-11-05T14:55:00.000Z", 11));
+    await t.run();
+    expect(t.sink.writeNote).toHaveBeenCalledTimes(1);
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("reivindica com update condicional: se uma ação pegou a reunião depois da lista, a rodada não processa", async () => {
+    const t = setup({
+      tables: baseTables({
+        meetings: [processingMeeting()],
+        meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+        meeting_notes: [storedNotes()],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    // Entre a lista e a reivindicação, a ação "Tentar de novo" reivindicou a reunião (o trigger muda updated_at).
+    beforeFirst(t, "meetings", "update", () => {
+      t.tables.meetings[0].updated_at = NOW.toISOString();
+    });
+    await t.run();
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "processing", attempts: 1 });
+  });
+
+  it("a reivindicação renova updated_at, e outra rodada logo depois não pega a mesma reunião", async () => {
+    let release: () => void = () => {};
+    const sink = fakeSink(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ noteId: 555 });
+        }),
+    );
+    const t = setup({
+      tables: baseTables({
+        meetings: [processingMeeting()],
+        meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+        meeting_notes: [storedNotes()],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+      sink,
+    });
+    const first = t.run();
+    await vi.waitFor(() => expect(sink.writeNote).toHaveBeenCalledTimes(1));
+    expect(t.tables.meetings[0].updated_at).toBe(NOW.toISOString());
+
+    // A segunda rodada (lease vencida, por exemplo) não reivindica a reunião que a primeira está gravando.
+    t.tables.email_accounts[0].meeting_lock_until = null;
+    await t.run();
+    expect(sink.writeNote).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("o erro de quem perdeu a corrida não volta uma reunião done para processing", async () => {
+    const t = setup({
+      tables: baseTables({
+        meetings: [processingMeeting({ attempts: 0, last_error: null })],
+        meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+        meeting_notes: [storedNotes()],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    // Enquanto esta chamada grava, a outra termina a reunião; esta falha em seguida.
+    t.sink.writeNote.mockImplementationOnce(async () => {
+      Object.assign(t.tables.meetings[0], { status: "done", last_error: null });
+      throw new SinkError(503, "Pipedrive respondeu 503 em POST /v1/notes");
+    });
+    await processMeeting(t.deps, "m1");
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", attempts: 0, last_error: null });
+  });
+
+  it("sugestões: uma criada ao mesmo tempo por outra chamada não duplica nem derruba a gravação", async () => {
+    const t = setup({
+      tables: baseTables({
+        meetings: [processingMeeting()],
+        meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+        meeting_notes: [storedNotes({ pipedrive_note_id: 777, written_at: "2026-11-05T14:20:00.000Z" })],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    const concurrent = () => {
+      t.tables.meeting_suggestions.push({ id: "outra", meeting_id: "m1", kind: "meeting_outcome", payload: { outcome: "Realizada" }, status: "pending" });
+    };
+    beforeFirst(t, "meeting_suggestions", "insert", concurrent);
+    beforeFirst(t, "meeting_suggestions", "upsert", concurrent);
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", last_error: null });
+    expect(t.tables.meeting_suggestions.map((s) => s.kind).sort()).toEqual(["meeting_outcome", "next_activity", "stage"]);
+    expect(t.log.some((l) => l.table === "meeting_suggestions" && l.op === "upsert")).toBe(true);
+  });
+
+  it("revínculo (R9): as sugestões já decididas ficam, e só os outros tipos são recriados", async () => {
+    const t = setup({
+      tables: baseTables({
+        meetings: [processingMeeting()],
+        meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+        meeting_notes: [storedNotes()],
+        meeting_suggestions: [
+          { id: "dec", meeting_id: "m1", kind: "meeting_outcome", payload: { outcome: "Não compareceu" }, status: "confirmed" },
+        ],
+      }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    await t.run();
+    expect(t.tables.meeting_suggestions.map((s) => [s.kind, s.status])).toEqual([
+      ["meeting_outcome", "confirmed"],
+      ["next_activity", "pending"],
+      ["stage", "pending"],
+    ]);
+    expect(t.tables.meeting_suggestions[0].payload).toEqual({ outcome: "Não compareceu" });
+  });
+});
+
+describe("processMeeting: registro apagado no Pipedrive", () => {
+  it.each([404, 410])("writeNote com %i: vira unlinked com 'registro excluído', sem gastar tentativa", async (status) => {
+    const sink = fakeSink(async () => {
+      throw new SinkError(status, `Pipedrive respondeu ${status} em POST /v1/notes`);
+    });
+    const t = setup({ sink });
+    const out = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({
+      status: "unlinked",
+      entity: "deals",
+      record_id: "d1",
+      attempts: 0,
+      last_error: "registro excluído",
+    });
+    expect(t.tables.notifications).toHaveLength(1);
+    expect(t.tables.meeting_suggestions).toHaveLength(0);
+    expect(out[0]).toMatchObject({ processed: 1, failed: 0 });
+
+    // Não entra nas retentativas da rodada seguinte.
+    t.setNow(minutesAfter(NOW.toISOString(), 30));
+    await t.run();
+    expect(sink.writeNote).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -83,6 +83,8 @@ create table public.meeting_suggestions (
   last_error text
 );
 create index meeting_suggestions_meeting_idx on public.meeting_suggestions (meeting_id);
+-- Uma sugestão por tipo e reunião: duas gravações ao mesmo tempo (cron e ação) não duplicam.
+create unique index meeting_suggestions_meeting_kind_key on public.meeting_suggestions (meeting_id, kind);
 
 create trigger set_updated_at before update on public.meetings
   for each row execute function public.set_updated_at();

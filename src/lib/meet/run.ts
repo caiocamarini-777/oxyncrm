@@ -16,7 +16,7 @@ import { loadCandidates, loadInternalDomains } from "./match-loader";
 import { renderNoteHtml } from "./note-html";
 import { generateNotes, type MeetingNotes, MeetingNotesSchema, NOTES_MODEL, type NotesInput } from "./notes";
 import { readMeetingSettings } from "./settings";
-import { type MeetingSink, pipedriveSink, pipedriveUserFor, type SinkTarget } from "./sink";
+import { type MeetingSink, pipedriveSink, pipedriveUserFor, SinkError, type SinkTarget } from "./sink";
 
 /**
  * Rodada do assistente de reuniões (cron a cada 10 min). Regras na spec, seções "Capturar", "Vincular",
@@ -26,7 +26,9 @@ import { type MeetingSink, pipedriveSink, pipedriveUserFor, type SinkTarget } fr
  * 2. para cada caixa ativa com os escopos do Meet, na empresa com o assistente ligado, e com o lease
  *    `meeting_lock_until`: lê as reuniões encerradas desde o cursor, espera a transcrição (até 2 h depois do
  *    fim) e processa (vínculo, notas com o Claude, anotação no Pipedrive e sugestões);
- * 3. tenta de novo as reuniões em `processing` (Claude ou Pipedrive falharam), até 3 tentativas.
+ * 3. tenta de novo as reuniões em `processing` (Claude ou Pipedrive falharam), até 3 tentativas. Só pega a
+ *    reunião parada há mais de 10 min e a reivindica com um update condicional, porque as ações do vendedor
+ *    (vincular, tentar de novo) também processam na própria requisição.
  *
  * `processMeeting` é exportada para as ações do vendedor (vincular, tentar de novo), que reaproveitam as
  * notas já guardadas em `meeting_notes` em vez de chamar o Claude de novo.
@@ -42,6 +44,11 @@ export const MAX_ATTEMPTS = 3;
 export const UNLINKED_DISCARD_MS = 7 * 24 * 3600_000;
 /** Primeira leitura de uma caixa (sem cursor): reuniões encerradas nas últimas 24 h. */
 const FIRST_LOOKBACK_MS = 24 * 3600_000;
+/**
+ * Reunião em `processing` só volta para a fila do cron depois deste tempo sem mudança (`updated_at`): antes
+ * disso, uma ação do vendedor ou outra rodada pode estar no meio do processamento.
+ */
+export const PROCESSING_STALE_MS = 10 * 60_000;
 /** Duração do lease de uma caixa: o `maxDuration` da rota. Rodada que morre solta a caixa sozinha. */
 export const LEASE_MS = 300_000;
 
@@ -339,20 +346,39 @@ async function runAccount(
     }
   }
 
-  // 3. Retentativas: notas ou anotação que falharam numa rodada anterior.
+  // 3. Retentativas: notas ou anotação que falharam numa rodada anterior. Só a reunião parada há mais de
+  //    10 min: a mais recente pode estar sendo processada agora por uma ação do vendedor.
+  const stale = new Date(deps.now().getTime() - PROCESSING_STALE_MS).toISOString();
   const pending = await db
     .from("meetings")
     .select("id")
     .eq("account_id", acc.id)
     .eq("status", "processing")
     .lt("attempts", MAX_ATTEMPTS)
+    .lt("updated_at", stale)
     .order("updated_at", { ascending: true })
     .limit(20);
   check(pending.error, "listar as reuniões em processamento");
   for (const { id } of (pending.data ?? []) as { id: string }[]) {
     if (!timeLeft()) return;
     if (handled.has(id)) continue;
-    count(result, await runProcess(deps, id));
+    try {
+      // Reivindica antes de processar: o update só pega a reunião se ninguém mexeu nela desde a lista, e o
+      // trigger renova `updated_at`, o que a tira da fila das outras rodadas pelos próximos 10 min.
+      const claimed = await db
+        .from("meetings")
+        .update({ status: "processing" })
+        .eq("id", id)
+        .eq("status", "processing")
+        .lt("updated_at", stale)
+        .select("id");
+      check(claimed.error, "reivindicar a reunião");
+      if (!claimed.data?.length) continue;
+      count(result, await runProcess(deps, id));
+    } catch (e) {
+      result.error ??= errorMessage(e);
+      console.error("meet: falha ao tentar de novo a reunião", id, errorMessage(e));
+    }
   }
 }
 
@@ -867,8 +893,8 @@ export async function resolveSinkTarget(
 }
 
 /**
- * Sugestões não nulas em `pending`. Tipos que já têm sugestão (tentativa anterior, ou decidida antes de um
- * novo vínculo) não são recriados.
+ * Sugestões não nulas em `pending`. Uma por tipo (índice único `meeting_id, kind`): tipos que já têm sugestão
+ * (tentativa anterior, chamada concorrente, ou decidida antes de um novo vínculo) não são recriados nem alterados.
  */
 async function createSuggestions(
   db: SupabaseClient,
@@ -876,19 +902,18 @@ async function createSuggestions(
   entity: LinkEntity,
   s: MeetingNotes["suggestions"],
 ): Promise<void> {
-  const existing = await db.from("meeting_suggestions").select("kind").eq("meeting_id", meetingId);
-  check(existing.error, "ler as sugestões");
-  const have = new Set(((existing.data ?? []) as { kind: string }[]).map((r) => r.kind));
   const rows: SuggestionPayload[] = [];
   if (s.meeting_outcome) rows.push({ kind: "meeting_outcome", payload: { outcome: s.meeting_outcome } });
   if (s.next_activity) rows.push({ kind: "next_activity", payload: s.next_activity });
   // Etapa só existe em negócio.
   if (s.stage && entity === "deals") rows.push({ kind: "stage", payload: { stage: s.stage } });
-  const fresh = rows.filter((r) => !have.has(r.kind));
-  if (fresh.length === 0) return;
+  if (rows.length === 0) return;
   const { error } = await db
     .from("meeting_suggestions")
-    .insert(fresh.map((r) => ({ meeting_id: meetingId, kind: r.kind, payload: r.payload, status: "pending" })));
+    .upsert(
+      rows.map((r) => ({ meeting_id: meetingId, kind: r.kind, payload: r.payload, status: "pending" })),
+      { onConflict: "meeting_id,kind", ignoreDuplicates: true },
+    );
   check(error, "criar as sugestões");
 }
 
@@ -946,7 +971,18 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
       ownerName: (owner.data as { full_name?: string } | null)?.full_name || "vendedor",
       mappedUser: userId != null,
     });
-    const { noteId } = await deps.sink.writeNote(target, html, userId);
+    let noteId: number;
+    try {
+      ({ noteId } = await deps.sink.writeNote(target, html, userId));
+    } catch (e) {
+      // Registro apagado no Pipedrive e ainda não trazido pela sincronização: igual ao registro na lixeira
+      // (spec, "Erros"). Volta para Sem vínculo, sem gastar tentativa.
+      if (isRecordGone(e)) {
+        await markUnlinked(db, m, RECORD_DELETED);
+        return "unlinked";
+      }
+      throw e;
+    }
     const saved = await db
       .from("meeting_notes")
       .update({ pipedrive_note_id: noteId, written_at: deps.now().toISOString() })
@@ -966,14 +1002,18 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   return "done";
 }
 
+/** 404 ou 410 do Pipedrive ao gravar a anotação: o registro foi apagado lá. */
+const isRecordGone = (e: unknown) => e instanceof SinkError && (e.status === 404 || e.status === 410);
+
 /** Processa uma reunião e conta a tentativa em caso de erro. Devolve o status final (ou `skipped`). */
 async function runProcess(deps: MeetDeps, meetingId: string): Promise<MeetingStatus | "skipped"> {
   const { db } = deps;
   const { data, error } = await db.from("meetings").select(MEETING_COLUMNS).eq("id", meetingId).maybeSingle();
   check(error, "ler a reunião");
   const m = data as MeetingRow | null;
-  // Só reuniões com transcrição e ainda não concluídas (as ações reabrem `unlinked` e `failed`).
-  if (!m || !["processing", "unlinked", "failed"].includes(m.status)) return "skipped";
+  // Só a reunião em `processing`: quem chama já a reivindicou (a rodada ao ler a transcrição ou na
+  // retentativa; as ações ao vincular ou tentar de novo).
+  if (!m || m.status !== "processing") return "skipped";
   try {
     return await advance(deps, m);
   } catch (e) {
@@ -981,7 +1021,13 @@ async function runProcess(deps: MeetDeps, meetingId: string): Promise<MeetingSta
     const attempts = (m.attempts ?? 0) + 1;
     const status: MeetingStatus = attempts >= MAX_ATTEMPTS ? "failed" : "processing";
     console.error("meet: falha ao processar a reunião", m.id, msg);
-    const saved = await db.from("meetings").update({ attempts, last_error: msg, status }).eq("id", m.id);
+    // Condicional: se outra chamada já concluiu a reunião (ou ela saiu de `processing`), o erro desta não
+    // a traz de volta.
+    const saved = await db
+      .from("meetings")
+      .update({ attempts, last_error: msg, status })
+      .eq("id", m.id)
+      .eq("status", "processing");
     if (saved.error) console.error("meet: falha ao registrar a tentativa", m.id, saved.error.message);
     return status;
   }

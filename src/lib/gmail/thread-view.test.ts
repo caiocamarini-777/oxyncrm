@@ -8,6 +8,7 @@ import {
   hasRemoteImages,
   sanitizeEmailHtml,
   threadParticipants,
+  threadSummary,
   type MessageRow,
 } from "./thread-view";
 
@@ -205,5 +206,48 @@ describe("hasRemoteImages", () => {
   });
   it("sem imagem remota", () => {
     expect(hasRemoteImages(`<p>oi</p><img src="data:image/png;base64,AA"><img src="cid:abc">`)).toBe(false);
+  });
+});
+
+describe("threadSummary", () => {
+  const view = (over: Partial<MessageRow>[]) =>
+    buildRecordThreads({
+      links: [{ id: "l", thread_id: "t1" }],
+      threads: [{ id: "t1", account_id: "a", gmail_thread_id: "g1", subject: "x", last_message_at: "2026-01-03T10:00:00Z" }],
+      messages: over.map((o, i) => msg({ id: `m${i}`, ...o })),
+      mineAccounts: new Map(),
+      canEditRecord: false,
+    })[0];
+
+  it("remetente e destinatários da última mensagem, contagens e data", () => {
+    const t = view([
+      { from_name: "Ana", attachments: [{ filename: "a.pdf" }] as never, sent_at: "2026-01-01T10:00:00Z" },
+      {
+        from_email: "caio@oxyn.com",
+        from_name: "Caio",
+        to: [{ email: "ana@cliente.com", name: "Ana" }, { email: "b@x.com", name: null }, { email: "c@x.com", name: "Cris" }],
+        attachments: [{ filename: "b.pdf" }, { filename: "c.pdf" }] as never,
+        sent_at: "2026-01-02T10:00:00Z",
+        direction: "out",
+      },
+    ]);
+    expect(threadSummary(t)).toEqual({
+      from: "Caio",
+      to: "Ana, b@x.com e mais 1",
+      messages: 2,
+      attachments: 3,
+      at: "2026-01-03T10:00:00Z",
+      snippet: "",
+      direction: "out",
+    });
+  });
+
+  it("a prévia vem do Gmail com entidades HTML e aparece decodificada", () => {
+    expect(threadSummary(view([{ snippet: "Oxyn &amp; Vowt &quot;ok&quot;" }])).snippet).toBe('Oxyn & Vowt "ok"');
+  });
+
+  it("sem nome cai no e-mail; sem data da conversa usa a da última mensagem", () => {
+    const t = { ...view([{ snippet: "Oi", sent_at: "2026-01-05T08:00:00Z" }]), lastMessageAt: null };
+    expect(threadSummary(t)).toMatchObject({ from: "ana@cliente.com", to: "", at: "2026-01-05T08:00:00Z", snippet: "Oi", direction: "in" });
   });
 });

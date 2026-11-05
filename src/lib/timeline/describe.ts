@@ -1,4 +1,5 @@
 import { formatDateTime } from "@/lib/activities/time";
+import { decodeSnippet } from "@/lib/gmail/thread-view";
 
 export const STATUS_LABELS: Record<string, string> = {
   open: "Aberto",
@@ -124,21 +125,43 @@ export function describeEvent(event: EventLike, names: Record<string, string>): 
   }
 }
 
-/** Item da linha do tempo para uma mensagem de e-mail vinculada ao registro. */
-export function emailTimelineItem(m: {
-  direction: "in" | "out";
-  fromEmail: string;
-  fromName: string | null;
+export type CompletedActivityRow = {
+  id: string;
   subject: string;
-  sentAt: string;
-}): { kind: "email_in" | "email_out"; at: string; actorName: string; text: string } {
-  const subject = m.subject.trim() || "(sem assunto)";
+  typeName: string | null;
+  ownerName: string | null;
+  completed_at: string | null;
+  due_at: string | null;
+  created_at: string;
+  meeting_outcome: string | null;
+  completion_note: string | null;
+};
+
+/** Atividade concluída lida da tabela (inclui as importadas do Pipedrive, que não têm evento). */
+export function activityTimelineItem(a: CompletedActivityRow): {
+  kind: "activity_completed";
+  at: string;
+  actorName: string;
+  text: string;
+  detail: string | null;
+} {
+  const result = a.meeting_outcome ? MEETING_OUTCOME_TEXT[a.meeting_outcome] : undefined;
   return {
-    kind: m.direction === "out" ? "email_out" : "email_in",
-    at: m.sentAt,
-    actorName: m.fromName?.trim() || m.fromEmail || "Alguém",
-    text: `${m.direction === "out" ? "E-mail enviado" : "E-mail recebido"}: ${subject}`,
+    kind: "activity_completed",
+    at: a.completed_at ?? a.due_at ?? a.created_at,
+    actorName: a.ownerName?.trim() || "Alguém",
+    text: `${a.typeName?.trim() || "Atividade"}: ${a.subject}${result ? ` (${result})` : ""}`,
+    detail: a.completion_note?.trim() || null,
   };
+}
+
+export type TimelineCategory = "note" | "activity" | "change";
+
+/** Grupo do filtro do histórico: anotações, atividades e, no resto, alterações do registro. */
+export function timelineCategory(kind: string): TimelineCategory {
+  if (kind === "note") return "note";
+  if (kind === "activity_scheduled" || kind === "activity_completed") return "activity";
+  return "change";
 }
 
 /** Une listas já ordenadas ou não e devolve da mais recente para a mais antiga (empate mantém a ordem). */
@@ -150,6 +173,34 @@ export function sortByAtDesc<T extends { at: string }>(items: T[]): T[] {
 }
 
 export type NoteChunk = { type: "text" | "link"; value: string };
+
+const HTML_TAG = /<\/?[a-z][^>]*>/i;
+
+/**
+ * Anotações importadas do Pipedrive vêm em HTML. Vira texto: quebras de linha, itens com "•", links com a URL
+ * visível (para o `linkify`) e entidades decodificadas. Texto simples (anotações do CRM) fica como está.
+ */
+export function noteText(body: string): string {
+  if (!HTML_TAG.test(body)) return body;
+  const text = body
+    .replace(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href: string, inner: string) => {
+      const url = decodeSnippet(href);
+      const label = decodeSnippet(inner.replace(/<[^>]+>/g, "")).trim();
+      if (!/^https?:/i.test(url) || !label || label === url) return label || url;
+      return `${label} (${url})`;
+    })
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "\n• ")
+    .replace(/<\/(div|p|ul|ol|h[1-6]|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+  return decodeSnippet(text)
+    .split("\n")
+    .map((l) => l.replace(/[ \t\u00a0]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n\n(?=• )/g, "\n")
+    .trim();
+}
 
 /** Separa URLs http(s) do resto; o restante fica como texto puro (React escapa). */
 export function linkify(body: string): NoteChunk[] {

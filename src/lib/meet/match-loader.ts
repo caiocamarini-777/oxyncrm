@@ -25,18 +25,42 @@ function chunks<T>(list: T[], size = CHUNK): T[][] {
   return out;
 }
 
-/** Domínios (minúsculos) dos e-mails de `profiles`: quem tem perfil no CRM é "interno". */
+/**
+ * Domínios de e-mail gratuito: nunca contam como internos. Um perfil com `@gmail.com` faria todo convidado
+ * do Gmail virar interno, e a reunião com cliente seria ignorada.
+ */
+export const FREE_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "yahoo.com",
+  "yahoo.com.br",
+  "icloud.com",
+  "bol.com.br",
+  "uol.com.br",
+]);
+
+/** Domínios (minúsculos) de uma lista de e-mails de perfil, sem os de e-mail gratuito. */
+export function internalDomainsFrom(emails: (string | null)[]): Set<string> {
+  const domains = new Set<string>();
+  for (const raw of emails) {
+    const email = raw ? normalizeEmail(raw) : "";
+    const at = email.lastIndexOf("@");
+    if (at < 0 || at === email.length - 1) continue;
+    const domain = email.slice(at + 1);
+    if (!FREE_EMAIL_DOMAINS.has(domain)) domains.add(domain);
+  }
+  return domains;
+}
+
+/** Domínios (minúsculos) dos e-mails de `profiles`: quem tem perfil no CRM é "interno" (exceto e-mail gratuito). */
 export async function loadInternalDomains(db: SupabaseClient): Promise<Set<string>> {
   const rows = await fetchAll<{ email: string | null }>("perfis", (a, b) =>
     db.from("profiles").select("email").order("id").range(a, b),
   );
-  const domains = new Set<string>();
-  for (const r of rows) {
-    const email = r.email ? normalizeEmail(r.email) : "";
-    const at = email.lastIndexOf("@");
-    if (at >= 0 && at < email.length - 1) domains.add(email.slice(at + 1));
-  }
-  return domains;
+  return internalDomainsFrom(rows.map((r) => r.email));
 }
 
 type PersonRow = { id: string; organization_id: string | null };

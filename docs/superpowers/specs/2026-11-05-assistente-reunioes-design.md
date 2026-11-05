@@ -120,7 +120,21 @@ A reunião agendada encontrada vira `anchor_activity_id`.
 - **Card que foi para a lixeira:** se o registro vinculado for para a lixeira (por exemplo, porque o modo espelho viu que ele foi apagado no Pipedrive), a reunião guarda o vínculo, mas aparece em Sem vínculo enquanto o registro estiver na lixeira (estado calculado, não gravado). Se o registro for restaurado, ela volta ao card sozinha.
 - **Sem duplicar:** quando a sincronização traz a anotação do Pipedrive, o histórico esconde a anotação importada cujo id do Pipedrive é o `pipedrive_note_id` de uma reunião, já que o bloco da reunião mostra o mesmo conteúdo.
 
-### Configurações
+### Tela inicial (`/[empresa]/inicio`)
+
+Pedido do usuário em 2026-11-05: aproveitar a tela inicial, que hoje está quase vazia. Tudo é **do usuário logado**, na empresa (ou empresas) do escopo, no dia de hoje em horário de São Paulo.
+
+- **Indicador do dia:** "Realizadas X de Y (Z%)".
+  - **Y (marcadas):** atividades de reunião (`activity_types.is_meeting`) do usuário com `due_at` hoje e não excluídas.
+  - **X (realizadas):** dessas, as que tiveram reunião do Meet ligada (`meetings.anchor_activity_id`) ou foram concluídas com `meeting_outcome = 'held'`.
+  - Sem reuniões marcadas, aparece "Nenhuma reunião marcada hoje".
+- **Reuniões de hoje:** lista das marcadas, por horário, com:
+  - assunto e card vinculado (com link);
+  - situação: **Realizada**, **A fazer** (horário ainda não passou) ou **Não realizada** (passou mais de 1 h do horário sem Meet e sem conclusão).
+- **Realizadas hoje (Meet):** reuniões da tabela `meetings` do usuário encerradas hoje, com título, card e as duas primeiras linhas do resumo. Leva ao bloco da reunião no card.
+- **Sem vínculo:** as reuniões sem vínculo do usuário (inclusive as de card na lixeira), com Vincular e Descartar, iguais aos da página Reuniões. O bloco só aparece quando há alguma.
+
+
 
 - Em Configurações → Assistente de reuniões, por empresa:
   - liga e desliga;

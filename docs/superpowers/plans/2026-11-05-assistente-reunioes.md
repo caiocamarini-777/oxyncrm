@@ -415,6 +415,34 @@
 - [ ] **Step 4:** Os testes passam, e `tsc` e `lint` também. Conferir as telas no navegador.
 - [ ] **Step 5: Commit.**
 
+### Task 14: Tela inicial com as reuniões do dia (roda antes da Task 13)
+
+**Files:**
+- Create: `src/lib/meet/home.ts`, `src/components/home/meetings-today.tsx`
+- Modify: `src/app/(app)/[empresa]/inicio/page.tsx`
+- Test: `src/lib/meet/home.test.ts`
+
+**Interfaces:**
+- Consumes: `link-meeting-dialog.tsx` e as ações `linkMeeting` e `discardMeeting` (Tasks 9 e 11), e `meetingTab` (Task 11).
+- Produces:
+  - `todayRange(now: Date): { start: string; end: string }`: o dia de hoje em São Paulo, em ISO UTC.
+  - `meetingSituation(a: { dueAt: string; done: boolean; meetingOutcome: string | null; hasMeet: boolean }, now: Date): "realizada" | "a_fazer" | "nao_realizada"`.
+    - **realizada:** `hasMeet`, ou `done` com `meetingOutcome === "held"`.
+    - **a_fazer:** o horário de `dueAt` mais 1 h ainda não passou.
+    - **nao_realizada:** os demais casos.
+  - `successRate(items): { done: number; total: number; pct: number | null }`.
+  - `getHomeMeetings(userId, companyIds, now)`: devolve `{ scheduled, heldToday, unlinked }`, conforme a spec, seção "Tela inicial".
+- **UI:** o card do indicador, a lista "Reuniões de hoje", a lista "Realizadas hoje (Meet)" e o bloco "Sem vínculo" (só quando houver), abaixo da saudação. O card de equipe que já existe continua.
+
+- [ ] **Step 1:** Testes:
+  - `todayRange(new Date("2026-11-05T02:00:00Z"))` dá início `2026-11-04T03:00:00.000Z`, porque em São Paulo ainda é dia 4;
+  - `meetingSituation`, cobrindo os três casos e a fronteira de exatamente 1 h;
+  - `successRate` com 3 de 5 dá 60, e com lista vazia dá `pct: null`.
+- [ ] **Step 2:** Os testes falham.
+- [ ] **Step 3:** Implementar.
+- [ ] **Step 4:** Os testes passam, e `tsc` e `lint` também. Conferir no navegador.
+- [ ] **Step 5: Commit.**
+
 ### Task 13: Aplicar no banco, variáveis e teste real (controlador, com o usuário)
 
 - [ ] **Step 1:** Com a permissão do usuário, rodar `pnpm db:migrate`. Esperado: aplica `20261106000001_meetings.sql`.

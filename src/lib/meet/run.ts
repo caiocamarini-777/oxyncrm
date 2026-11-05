@@ -1,9 +1,16 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { GmailApiError } from "@/lib/gmail/client";
 import { hasMeetScopes } from "@/lib/gmail/connect";
 import { createPipedriveClient } from "@/lib/import/pipedrive/client";
 import { noteText } from "@/lib/timeline/describe";
-import { type CalendarEvent, type MeetClient, type Participant, meetClientForAccount } from "./google";
+import {
+  type CalendarEvent,
+  type MeetClient,
+  type Participant,
+  type TranscriptEntry,
+  meetClientForAccount,
+} from "./google";
 import { normalizeEmail, pickRecord, splitAttendees } from "./match";
 import { loadCandidates, loadInternalDomains } from "./match-loader";
 import { renderNoteHtml } from "./note-html";
@@ -109,6 +116,18 @@ type AccountRow = { id: string; user_id: string; company_id: string; scopes: str
 type DbError = { message: string; code?: string } | null;
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * Erro do Google que não melhora tentando de novo: 4xx que não é de token (401, `GmailAuthError`) nem de
+ * limite (429 e 403 de cota, `GmailRateLimitError`), ex.: 403 sem acesso ou 404 de espaço apagado.
+ * Rede, 5xx e limite são passageiros.
+ */
+export function isPermanentGoogleError(e: unknown): boolean {
+  return e instanceof GmailApiError && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 429;
+}
+
+/** Texto para `ilike` que casa só com ele mesmo (escapa `%`, `_` e `\`). */
+const likeLiteral = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 function check(error: DbError, what: string): void {
   if (error) throw new Error(`Falha ao ${what}: ${error.message}`);
@@ -364,7 +383,20 @@ async function captureNew(
     try {
       const existing = await db.from("meetings").select("id").eq("conference_record", rec.name).maybeSingle();
       check(existing.error, "procurar a reunião");
-      if (!existing.data && (await insertMeeting(deps, meet, acc, rec, internalDomains))) result.created++;
+      if (!existing.data) {
+        try {
+          if (await insertMeeting(deps, meet, acc, rec, internalDomains)) result.created++;
+        } catch (e) {
+          // Erro permanente do Google numa reunião: registra como `failed` e segue, para o cursor não
+          // travar nela. Passageiro (rede, 5xx, limite): para aqui e a próxima rodada tenta de novo.
+          if (!isPermanentGoogleError(e)) throw e;
+          console.error("meet: reunião ilegível no Google", rec.name, errorMessage(e));
+          if (await insertUnreadable(db, acc, rec, errorMessage(e))) {
+            result.created++;
+            result.failed++;
+          }
+        }
+      }
     } catch (e) {
       failure = e;
       break;
@@ -414,6 +446,59 @@ function attendeesFromParticipants(participants: Participant[]): Attendee[] {
   }));
 }
 
+/**
+ * Dono pelo organizador: perfil ativo com o mesmo e-mail (sem diferenciar maiúsculas e espaços) e com
+ * vínculo na empresa da reunião. `null` quando não serve (a reunião fica com o dono da caixa).
+ */
+async function organizerOwner(db: SupabaseClient, organizer: string, companyId: string): Promise<string | null> {
+  const p = await db
+    .from("profiles")
+    .select("id, email")
+    .ilike("email", likeLiteral(organizer))
+    .eq("active", true)
+    .limit(5);
+  check(p.error, "procurar o organizador");
+  const profile = ((p.data ?? []) as { id: string; email: string }[]).find((r) => normalizeEmail(r.email) === organizer);
+  if (!profile) return null;
+  const member = await db
+    .from("memberships")
+    .select("user_id")
+    .eq("user_id", profile.id)
+    .eq("company_id", companyId)
+    .limit(1);
+  check(member.error, "conferir o vínculo do organizador");
+  return member.data?.length ? profile.id : null;
+}
+
+/** Reunião que o Google não deixa ler (erro permanente): fica `failed`, com o motivo, sem bloquear o cursor. */
+async function insertUnreadable(
+  db: SupabaseClient,
+  acc: AccountRow,
+  rec: { name: string; startTime: string; endTime: string },
+  reason: string,
+): Promise<boolean> {
+  const { data, error } = await db
+    .from("meetings")
+    .upsert(
+      {
+        company_id: acc.company_id,
+        account_id: acc.id,
+        owner_id: acc.user_id,
+        conference_record: rec.name,
+        title: DEFAULT_TITLE,
+        started_at: rec.startTime,
+        ended_at: rec.endTime,
+        attendees: [],
+        status: "failed",
+        last_error: `Não foi possível ler a reunião no Google: ${reason}`.slice(0, 500),
+      },
+      { onConflict: "conference_record", ignoreDuplicates: true },
+    )
+    .select("id");
+  check(error, "gravar a reunião ilegível");
+  return (data?.length ?? 0) > 0;
+}
+
 /** Grava a reunião nova (`on conflict (conference_record) do nothing`). Devolve se ela foi criada agora. */
 async function insertMeeting(
   deps: MeetDeps,
@@ -430,14 +515,8 @@ async function insertMeeting(
     : attendeesFromParticipants(await meet.listParticipants(rec.name));
   const hasExternal = attendees.some((a) => a.email && !a.internal);
 
-  // Dono: o organizador, quando ele é usuário do CRM; senão, o dono da caixa.
-  let ownerId = acc.user_id;
   const organizer = ev?.organizer?.email ? normalizeEmail(ev.organizer.email) : "";
-  if (organizer) {
-    const p = await db.from("profiles").select("id").eq("email", organizer).eq("active", true).maybeSingle();
-    check(p.error, "procurar o organizador");
-    if (p.data) ownerId = (p.data as { id: string }).id;
-  }
+  const ownerId = (organizer && (await organizerOwner(db, organizer, acc.company_id))) || acc.user_id;
 
   const { data, error } = await db
     .from("meetings")
@@ -483,32 +562,46 @@ export function buildTranscript(entries: TranscriptEntryRow[]): { entries: Trans
 
 /**
  * Confere a transcrição de uma reunião em `waiting_transcript`. Pronta (`FILE_GENERATED`): grava e a reunião
- * vai para `processing`. Alguma ainda gerando: espera, até o prazo. Sem transcrição 2 h depois do fim: `failed`.
+ * vai para `processing`. Alguma ainda gerando: espera, até o prazo. Sem transcrição 2 h depois do fim, ou com
+ * a leitura no Google falhando depois desse prazo: `failed`.
  */
 async function fetchTranscript(deps: MeetDeps, meet: MeetClient, m: MeetingRow): Promise<"ready" | "waiting" | "failed"> {
   const { db } = deps;
   const endedAt = Date.parse(m.ended_at ?? m.started_at ?? "");
   const late = !Number.isNaN(endedAt) && deps.now().getTime() - endedAt > TRANSCRIPT_DEADLINE_MS;
 
-  const transcripts = await meet.listTranscripts(m.conference_record);
-  const ready = transcripts.filter((t) => t.state === "FILE_GENERATED");
-  const generating = ready.length < transcripts.length;
-
-  if (ready.length === 0 || (generating && !late)) {
-    if (!late) return "waiting";
+  const giveUp = async (lastError: string) => {
     const { error } = await db
       .from("meetings")
-      .update({ status: "failed", last_error: NO_TRANSCRIPT })
+      .update({ status: "failed", last_error: lastError.slice(0, 500) })
       .eq("id", m.id)
       .eq("status", "waiting_transcript");
     check(error, "marcar a reunião sem transcrição");
-    return "failed";
-  }
+    return "failed" as const;
+  };
 
-  const [lists, participants] = await Promise.all([
-    Promise.all(ready.map((t) => meet.listTranscriptEntries(t.name))),
-    meet.listParticipants(m.conference_record),
-  ]);
+  // Leitura no Google. Se falhar depois do prazo, a reunião não fica esperando para sempre: vira `failed`.
+  let read: { lists: TranscriptEntry[][]; participants: Participant[] } | null;
+  try {
+    const transcripts = await meet.listTranscripts(m.conference_record);
+    const ready = transcripts.filter((t) => t.state === "FILE_GENERATED");
+    const generating = ready.length < transcripts.length;
+    if (ready.length === 0 || (generating && !late)) {
+      read = null;
+    } else {
+      const [lists, participants] = await Promise.all([
+        Promise.all(ready.map((t) => meet.listTranscriptEntries(t.name))),
+        meet.listParticipants(m.conference_record),
+      ]);
+      read = { lists, participants };
+    }
+  } catch (e) {
+    if (!late) throw e;
+    console.error("meet: transcrição ilegível depois do prazo", m.id, errorMessage(e));
+    return giveUp(`${NO_TRANSCRIPT} (${errorMessage(e)})`);
+  }
+  if (!read) return late ? giveUp(NO_TRANSCRIPT) : "waiting";
+  const { lists, participants } = read;
   const speakers = new Map(
     participants.map((p) => [p.name, p.signedinUser?.displayName || p.anonymousUser?.displayName || UNKNOWN_SPEAKER]),
   );

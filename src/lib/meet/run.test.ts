@@ -11,11 +11,12 @@ vi.mock("./match-loader", () => ({
 }));
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { GmailApiError, GmailNetworkError, GmailRateLimitError } from "@/lib/gmail/client";
 import { MEET_SCOPES } from "@/lib/gmail/connect";
 import type { CalendarEvent, ConferenceRecord, MeetClient, Participant, Transcript, TranscriptEntry } from "./google";
 import type { Candidate } from "./match";
 import type { MeetingNotes, NotesInput } from "./notes";
-import { MAX_TRANSCRIPT_CHARS, type MeetDeps, processMeeting, runMeetSync } from "./run";
+import { isPermanentGoogleError, MAX_TRANSCRIPT_CHARS, type MeetDeps, processMeeting, runMeetSync } from "./run";
 import { type MeetingSink, SinkError } from "./sink";
 
 // ---- banco em memória ----------------------------------------------------------------------------------------
@@ -92,6 +93,12 @@ function fakeDb(tables: Tables) {
       chain.update = (v: Row) => ((op = "update"), (payload = [v]), chain);
       chain.delete = () => ((op = "delete"), chain);
       chain.eq = (c: string, v: unknown) => (filters.push((r) => r[c] === v), chain);
+      // `ilike` sem curingas (o código escapa `%`, `_` e `\`): igualdade sem diferenciar maiúsculas.
+      chain.ilike = (c: string, pattern: string) => {
+        const literal = pattern.replace(/\\(.)/g, "$1").toLowerCase();
+        filters.push((r) => typeof r[c] === "string" && (r[c] as string).toLowerCase() === literal);
+        return chain;
+      };
       chain.neq = (c: string, v: unknown) => (filters.push((r) => r[c] !== v), chain);
       chain.is = (c: string, v: null) => (filters.push((r) => (r[c] ?? null) === v), chain);
       chain.not = (c: string, o: string, v: unknown) => (
@@ -282,6 +289,10 @@ function baseTables(over: Tables = {}): Tables {
       { id: "u1", email: "caio@oxyn.com.br", full_name: "Caio Camarini", active: true },
       { id: "u2", email: "ana@oxyn.com.br", full_name: "Ana Souza", active: true },
     ],
+    memberships: [
+      { user_id: "u1", company_id: "co" },
+      { user_id: "u2", company_id: "co" },
+    ],
     email_accounts: [account("acc1", "u1")],
     deals: [
       {
@@ -427,6 +438,48 @@ describe("runMeetSync: captura", () => {
     expect(t.tables.meetings[0]).toMatchObject({ owner_id: "u1" });
   });
 
+  it("organizador com maiúsculas e espaços (no evento ou no perfil) ainda é reconhecido como dono", async () => {
+    const t = setup({
+      tables: baseTables({ email_accounts: [account("acc2", "u2")] }),
+      meet: {
+        acc2: meetData({ events: { "abc-defg-hij": event(["cliente@acme.com"], " Caio@OXYN.com.br ") } }),
+      },
+    });
+    (t.tables.profiles[0] as Row).email = "CAIO@oxyn.com.br";
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ account_id: "acc2", owner_id: "u1" });
+  });
+
+  it("organizador do CRM sem vínculo com a empresa da reunião, ou inativo: dono é o dono da conta", async () => {
+    const semVinculo = setup({
+      tables: baseTables({
+        email_accounts: [account("acc2", "u2")],
+        memberships: [
+          { user_id: "u1", company_id: "outra" },
+          { user_id: "u2", company_id: "co" },
+        ],
+      }),
+      meet: { acc2: meetData() },
+    });
+    await semVinculo.run();
+    expect(semVinculo.tables.meetings[0]).toMatchObject({ owner_id: "u2" });
+
+    const inativo = setup({ tables: baseTables({ email_accounts: [account("acc2", "u2")] }), meet: { acc2: meetData() } });
+    (inativo.tables.profiles[0] as Row).active = false;
+    await inativo.run();
+    expect(inativo.tables.meetings[0]).toMatchObject({ owner_id: "u2" });
+  });
+
+  it("e-mail de organizador com _ não casa com outro perfil por curinga", async () => {
+    const t = setup({
+      tables: baseTables({ email_accounts: [account("acc2", "u2")] }),
+      meet: { acc2: meetData({ events: { "abc-defg-hij": event(["cliente@acme.com"], "c_io@oxyn.com.br") } }) },
+    });
+    (t.tables.profiles[0] as Row).email = "caio@oxyn.com.br";
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ owner_id: "u2" });
+  });
+
   it("grava título, evento e convidados (normalizados, com a marca de interno)", async () => {
     const t = setup();
     await t.run();
@@ -525,6 +578,77 @@ describe("runMeetSync: captura", () => {
     expect(free.tables.email_accounts[0].meeting_lock_until).toBeNull();
   });
 
+  it("isPermanentGoogleError: 4xx sem ser token ou limite é permanente; rede, 5xx e limite não", () => {
+    expect(isPermanentGoogleError(new GmailApiError(404, "não encontrado"))).toBe(true);
+    expect(isPermanentGoogleError(new GmailApiError(403, "sem acesso"))).toBe(true);
+    expect(isPermanentGoogleError(new GmailApiError(401, "token"))).toBe(false);
+    expect(isPermanentGoogleError(new GmailApiError(429, "limite"))).toBe(false);
+    expect(isPermanentGoogleError(new GmailApiError(503, "fora do ar"))).toBe(false);
+    expect(isPermanentGoogleError(new GmailRateLimitError())).toBe(false);
+    expect(isPermanentGoogleError(new GmailNetworkError())).toBe(false);
+    expect(isPermanentGoogleError(new Error("x"))).toBe(false);
+  });
+
+  it("erro permanente do Google numa reunião: registra como failed e o cursor passa dela", async () => {
+    const r2 = record({ name: "conferenceRecords/r2", space: "spaces/s2", endTime: "2026-11-05T14:50:00.000Z" });
+    const t = setup({
+      meet: {
+        acc1: meetData({
+          records: [record({ space: "spaces/apagado" }), r2],
+          codes: { "spaces/s2": "abc-defg-hij" },
+          transcripts: { "conferenceRecords/r2": [{ name: T1, state: "FILE_GENERATED" }] },
+        }),
+      },
+    });
+    const client = t.meets.acc1.client as unknown as { getMeetingCode: (space: string) => Promise<string | null> };
+    const original = client.getMeetingCode;
+    client.getMeetingCode = async (space) => {
+      if (space === "spaces/apagado") throw new GmailApiError(404, "Requested entity was not found.");
+      return original(space);
+    };
+    const out = await t.run();
+
+    expect(t.tables.meetings.map((m) => [m.conference_record, m.status])).toEqual([
+      [R1, "failed"],
+      ["conferenceRecords/r2", "done"],
+    ]);
+    expect(t.tables.meetings[0]).toMatchObject({
+      owner_id: "u1",
+      last_error: "Não foi possível ler a reunião no Google: Requested entity was not found.",
+    });
+    expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:50:00.000Z");
+    expect(out[0]).toEqual({ accountId: "acc1", created: 2, processed: 1, failed: 1 });
+
+    // Na rodada seguinte, a reunião ilegível não é lida de novo.
+    let reads = 0;
+    client.getMeetingCode = async (space) => (reads++, original(space));
+    await t.run();
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ["5xx", new GmailApiError(503, "Backend Error")],
+    ["rede", new GmailNetworkError("socket hang up")],
+    ["limite", new GmailRateLimitError("Quota exceeded")],
+  ])("erro passageiro do Google (%s): para, o cursor não passa da reunião e a próxima rodada tenta de novo", async (_n, err) => {
+    const r2 = record({ name: "conferenceRecords/r2", endTime: "2026-11-05T14:50:00.000Z" });
+    const t = setup({ meet: { acc1: meetData({ records: [record(), r2] }) } });
+    const client = t.meets.acc1.client as unknown as { getMeetingCode: (space: string) => Promise<string | null> };
+    const original = client.getMeetingCode;
+    client.getMeetingCode = async () => {
+      throw err;
+    };
+    const out = await t.run();
+    expect(t.tables.meetings).toHaveLength(0);
+    expect(t.tables.email_accounts[0].meeting_cursor).toBeNull();
+    expect(out[0]).toMatchObject({ created: 0, error: err.message });
+
+    client.getMeetingCode = original;
+    await t.run();
+    expect(t.tables.meetings.map((m) => m.conference_record)).toEqual([R1, "conferenceRecords/r2"]);
+    expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:50:00.000Z");
+  });
+
   it("falha do Google numa conta não derruba as outras", async () => {
     const t = setup({
       tables: baseTables({ email_accounts: [account("acc1", "u1"), account("acc2", "u2")] }),
@@ -555,6 +679,39 @@ describe("runMeetSync: transcrição", () => {
     const out = await t.run();
     expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: "reunião sem transcrição" });
     expect(out[0]).toMatchObject({ failed: 1 });
+    expect(t.notes).not.toHaveBeenCalled();
+  });
+
+  it("leitura da transcrição falhando: antes do prazo continua esperando; depois do prazo vira failed", async () => {
+    const t = setup({ meet: { acc1: meetData({ transcripts: { [R1]: [{ name: T1, state: "STARTED" }] } }) } });
+    await t.run();
+    const client = t.meets.acc1.client as unknown as { listTranscripts: () => Promise<never> };
+    client.listTranscripts = async () => {
+      throw new GmailApiError(403, "The caller does not have permission");
+    };
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 60));
+    const early = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript" });
+    expect(early[0].error).toBe("The caller does not have permission");
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
+    const out = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({
+      status: "failed",
+      last_error: "reunião sem transcrição (The caller does not have permission)",
+    });
+    expect(out[0]).toMatchObject({ failed: 1 });
+  });
+
+  it("falha passageira lendo as entradas depois do prazo também encerra a espera", async () => {
+    const t = setup({ now: minutesAfter("2026-11-05T14:45:00.000Z", 130) });
+    const client = t.meets.acc1.client as unknown as { listTranscriptEntries: () => Promise<never> };
+    client.listTranscriptEntries = async () => {
+      throw new GmailNetworkError("socket hang up");
+    };
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: "reunião sem transcrição (socket hang up)" });
     expect(t.notes).not.toHaveBeenCalled();
   });
 

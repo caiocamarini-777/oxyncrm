@@ -814,7 +814,7 @@ async function markUnlinked(db: SupabaseClient, m: MeetingRow, lastError: string
   }
 }
 
-async function pipedriveIdOf(
+export async function pipedriveIdOf(
   db: SupabaseClient,
   companyId: string,
   entity: string,
@@ -836,7 +836,7 @@ async function pipedriveIdOf(
 
 async function sinkTarget(
   db: SupabaseClient,
-  m: MeetingRow,
+  m: Pick<MeetingRow, "company_id">,
   entity: SinkTarget["entity"],
   recordId: string,
   ctx: RecordContext,
@@ -849,6 +849,21 @@ async function sinkTarget(
     personPipedriveId: entity === "persons" ? null : await pipedriveIdOf(db, m.company_id, "persons", ctx.personId),
     orgPipedriveId: await pipedriveIdOf(db, m.company_id, "organizations", ctx.organizationId),
   };
+}
+
+/**
+ * Destino da gravação no Pipedrive para um registro vivo da empresa (ações do vendedor).
+ * Lança em português se o registro não existe, está na lixeira ou ainda não tem id no Pipedrive.
+ */
+export async function resolveSinkTarget(
+  db: SupabaseClient,
+  companyId: string,
+  entity: SinkTarget["entity"],
+  recordId: string,
+): Promise<SinkTarget> {
+  const ctx = await loadRecord(db, entity, recordId);
+  if (!ctx || ctx.deletedAt) throw new Error("O registro não existe ou está na lixeira.");
+  return sinkTarget(db, { company_id: companyId }, entity, recordId, ctx);
 }
 
 /** Sugestões não nulas em `pending`. Se já existem (tentativa anterior), não duplica. */

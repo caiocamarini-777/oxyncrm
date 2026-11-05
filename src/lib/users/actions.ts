@@ -20,6 +20,7 @@ export type UserRow = {
   isSuperAdmin: boolean;
   active: boolean;
   invite: InviteStatus;
+  lastSignInAt: string | null;
   access: { companyId: string; companyName: string; roleId: string; roleName: string }[];
   teams: { id: string; name: string }[];
 };
@@ -236,11 +237,13 @@ export async function listUsers(): Promise<UserRow[]> {
 
   // Convite aceito = já entrou alguma vez. Confirmar o e-mail não basta: o link pode ter sido aberto sem criar a senha.
   const invites = new Map<string, InviteStatus>();
+  const lastSignIn = new Map<string, string>();
   const admin = createAdminClient();
   for (let page = 1; page < 50; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
     if (error || !data) break;
     for (const u of data.users) {
+      if (u.last_sign_in_at) lastSignIn.set(u.id, u.last_sign_in_at);
       invites.set(
         u.id,
         inviteStatus({
@@ -261,6 +264,7 @@ export async function listUsers(): Promise<UserRow[]> {
     isSuperAdmin: p.is_super_admin,
     active: p.active,
     invite: invites.get(p.id) ?? "accepted",
+    lastSignInAt: lastSignIn.get(p.id) ?? null,
     access: (memberships.data ?? [])
       .filter((m) => m.user_id === p.id)
       .map((m) => ({

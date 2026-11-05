@@ -1,6 +1,8 @@
 name: Sincronização Pipedrive
 
-# Todo dia às 9h (Brasília, UTC-3): traz do Pipedrive, que segue como origem até a migração, o que mudou.
+# Todo dia às 9h (Brasília, UTC-3): deixa o CRM igual ao Pipedrive, que segue como origem até a migração.
+# --espelho: o Pipedrive sobrescreve edições do CRM e vai para a lixeira o que não existe lá (com trava de 5%).
+# Ao desligar o Pipedrive, tire o --espelho (ou o workflow inteiro).
 # Também roda à mão em Actions > Sincronização Pipedrive > Run workflow.
 on:
   schedule:
@@ -31,6 +33,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Negócios, leads, pessoas, organizações, atividades e notas
-        run: pnpm sync:pipedrive
+        run: pnpm sync:pipedrive --espelho
       - name: Histórico de etapas
         run: pnpm import:pipedrive-etapas

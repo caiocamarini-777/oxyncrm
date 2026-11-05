@@ -415,3 +415,20 @@ export async function retryMeeting(meetingId: string): Promise<ActionResult> {
   }
   return outcomeOf(db, meetingId);
 }
+
+/**
+ * Transcrição de uma reunião, lida sob demanda ao abrir "Ver transcrição" (o texto pode ter até 1 MB e não vai
+ * junto com o card). A leitura é com o cliente do USUÁRIO: a RLS (`can_read_meeting`) decide quem vê. `null`
+ * quando não há transcrição, o usuário não pode lê-la ou a leitura falhou.
+ */
+export async function getMeetingTranscript(meetingId: string): Promise<string | null> {
+  if (!uuid.safeParse(meetingId).success) return null;
+  await requireUser();
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from("meeting_transcripts").select("text").eq("meeting_id", meetingId).maybeSingle();
+  if (error) {
+    console.error("meet: falha ao ler a transcrição", meetingId, error.message);
+    return null;
+  }
+  return (data as { text: string } | null)?.text ?? null;
+}

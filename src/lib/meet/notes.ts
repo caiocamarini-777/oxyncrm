@@ -8,7 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 
-const MODEL = "claude-opus-5-5";
+export const NOTES_MODEL = "claude-opus-5-5";
 const MAX_TOKENS = 16000;
 
 /** Limite da transcrição enviada, em caracteres (~150 mil tokens): cabe folgado no contexto. */
@@ -158,7 +158,7 @@ export async function generateNotes(input: NotesInput, client?: Anthropic): Prom
   let response;
   try {
     response = await (client ?? new Anthropic()).beta.messages.parse({
-      model: MODEL,
+      model: NOTES_MODEL,
       max_tokens: MAX_TOKENS,
       system,
       messages: [{ role: "user", content: user }],

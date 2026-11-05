@@ -103,7 +103,10 @@ A reunião agendada encontrada vira `anchor_activity_id`.
   - etapa: move o negócio.
 
   A sincronização das 9h traz tudo para o CRM.
-- **Reunião sem vínculo:** as notas ficam guardadas. Quando o vendedor escolhe o registro, a gravação acima roda na hora.
+- **Reunião sem vínculo:** as notas ficam guardadas, e nada é gravado no Pipedrive. O assistente **nunca cria** pessoa, organização, lead ou negócio. O vendedor tem duas saídas:
+  - **Vincular:** escolhe um registro que já existe, e a gravação acima roda na hora. Se for um prospect novo, ele cria o card no Pipedrive (validação humana) e vincula depois da sincronização.
+  - **Descartar:** a reunião não é comercial (fornecedor, parceiro, entrevista). Ela vira `ignored`, e a transcrição e as notas são apagadas.
+- Sem decisão em 7 dias, a reunião sem vínculo é descartada sozinha, com a transcrição apagada.
 
 ### Ver no CRM
 
@@ -174,7 +177,7 @@ A reunião agendada encontrada vira `anchor_activity_id`.
 - Atualização automática de campos personalizados do negócio.
 - Rascunho do e-mail de follow-up.
 - Análise entre reuniões (objeções mais comuns, padrões de ganho).
-- Criar pessoas ou organizações a partir dos convidados.
+- Criar pessoas, organizações, leads ou negócios a partir dos convidados (decisão do usuário: nada é criado sem validação).
 
 ## Riscos a confirmar no começo da implementação
 

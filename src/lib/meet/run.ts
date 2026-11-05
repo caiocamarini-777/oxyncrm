@@ -866,25 +866,29 @@ export async function resolveSinkTarget(
   return sinkTarget(db, { company_id: companyId }, entity, recordId, ctx);
 }
 
-/** Sugestões não nulas em `pending`. Se já existem (tentativa anterior), não duplica. */
+/**
+ * Sugestões não nulas em `pending`. Tipos que já têm sugestão (tentativa anterior, ou decidida antes de um
+ * novo vínculo) não são recriados.
+ */
 async function createSuggestions(
   db: SupabaseClient,
   meetingId: string,
   entity: LinkEntity,
   s: MeetingNotes["suggestions"],
 ): Promise<void> {
-  const existing = await db.from("meeting_suggestions").select("id").eq("meeting_id", meetingId).limit(1);
+  const existing = await db.from("meeting_suggestions").select("kind").eq("meeting_id", meetingId);
   check(existing.error, "ler as sugestões");
-  if (existing.data?.length) return;
+  const have = new Set(((existing.data ?? []) as { kind: string }[]).map((r) => r.kind));
   const rows: SuggestionPayload[] = [];
   if (s.meeting_outcome) rows.push({ kind: "meeting_outcome", payload: { outcome: s.meeting_outcome } });
   if (s.next_activity) rows.push({ kind: "next_activity", payload: s.next_activity });
   // Etapa só existe em negócio.
   if (s.stage && entity === "deals") rows.push({ kind: "stage", payload: { stage: s.stage } });
-  if (rows.length === 0) return;
+  const fresh = rows.filter((r) => !have.has(r.kind));
+  if (fresh.length === 0) return;
   const { error } = await db
     .from("meeting_suggestions")
-    .insert(rows.map((r) => ({ meeting_id: meetingId, kind: r.kind, payload: r.payload, status: "pending" })));
+    .insert(fresh.map((r) => ({ meeting_id: meetingId, kind: r.kind, payload: r.payload, status: "pending" })));
   check(error, "criar as sugestões");
 }
 

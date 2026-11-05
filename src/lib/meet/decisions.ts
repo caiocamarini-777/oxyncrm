@@ -102,26 +102,45 @@ export function typeKeyFor(name: string, types: { name?: string | null; key_stri
 }
 
 /**
- * Id da etapa no Pipedrive: inverte `mappings.pipelines[*].stages` (id no Pipedrive -> etapa do CRM).
- * `null` quando a etapa do CRM não veio da importação.
+ * Id da etapa no Pipedrive: inverte `mappings.pipelines[*].stages` (id no Pipedrive -> etapa do CRM) e, para
+ * os funis criados pela própria importação, `cursor.cache.pipelines[*].stages` (mesma precedência do importador:
+ * o mapeamento primeiro, depois o cache). `null` quando a etapa do CRM não veio da importação.
  */
 export function stagePipedriveIdFor(
   crmStageId: string,
   pipelines: Record<string, { stages: Record<string, string | null> }> | null | undefined,
+  cached?: Record<string, { stages: Record<string, string | null> }> | null,
 ): number | null {
-  for (const p of Object.values(pipelines ?? {})) {
-    for (const [pdId, crmId] of Object.entries(p.stages ?? {})) {
-      const id = Number(pdId);
-      if (crmId === crmStageId && Number.isFinite(id)) return id;
+  for (const source of [pipelines, cached]) {
+    for (const p of Object.values(source ?? {})) {
+      for (const [pdId, crmId] of Object.entries(p?.stages ?? {})) {
+        const id = Number(pdId);
+        if (crmId === crmStageId && Number.isFinite(id)) return id;
+      }
     }
   }
   return null;
 }
 
+/**
+ * Sem vínculo: `unlinked`, ou o caso calculado de `done` com o registro vinculado na lixeira
+ * (`recordTrashed`, verificado por quem chama).
+ */
+const isUnlinkedLike = (status: MeetingStatus, recordTrashed: boolean) =>
+  status === "unlinked" || (status === "done" && recordTrashed);
+
 /** Só reunião sem vínculo, do próprio vendedor (ou do admin geral), pode ser vinculada. */
-export function canLink(meeting: { owner_id: string; status: MeetingStatus }, userId: string, isSuperAdmin: boolean): boolean {
-  return meeting.status === "unlinked" && (meeting.owner_id === userId || isSuperAdmin);
+export function canLink(
+  meeting: { owner_id: string; status: MeetingStatus },
+  userId: string,
+  isSuperAdmin: boolean,
+  recordTrashed = false,
+): boolean {
+  return isUnlinkedLike(meeting.status, recordTrashed) && (meeting.owner_id === userId || isSuperAdmin);
 }
 
-export const canDiscard = (status: MeetingStatus) => status === "unlinked" || status === "failed";
+export const canDiscard = (status: MeetingStatus, recordTrashed = false) =>
+  isUnlinkedLike(status, recordTrashed) || status === "failed";
 export const canRetry = (status: MeetingStatus) => status === "failed";
+/** Sugestão com falha pode ser confirmada ou descartada de novo. */
+export const canDecide = (status: string) => status === "pending" || status === "failed";

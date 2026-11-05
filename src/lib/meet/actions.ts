@@ -8,6 +8,7 @@ import { createPipedriveClient } from "@/lib/import/pipedrive/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
 import {
+  canDecide,
   canDiscard,
   canLink,
   canRetry,
@@ -80,19 +81,24 @@ function pipedriveToken(): string {
   return token;
 }
 
-/** Mapeamentos da última importação concluída do Pipedrive (etapas). */
-async function importedStagePipelines(db: Admin) {
+type StageMap = Record<string, { stages: Record<string, string | null> }>;
+
+/**
+ * Etapas da última importação concluída do Pipedrive: `mappings.pipelines` e, para os funis criados pela
+ * importação, `cursor.cache.pipelines` (o importador resolve nesta ordem).
+ */
+async function importedStagePipelines(db: Admin): Promise<{ mapped?: StageMap; cached?: StageMap }> {
   const { data, error } = await db
     .from("import_jobs")
-    .select("mappings")
+    .select("mappings, cursor")
     .eq("source", "pipedrive")
     .eq("status", "done")
     .order("finished_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`Falha ao ler as importações do Pipedrive: ${error.message}`);
-  return (data as { mappings?: { pipelines?: Record<string, { stages: Record<string, string | null> }> } | null } | null)?.mappings
-    ?.pipelines;
+  const row = data as { mappings?: { pipelines?: StageMap } | null; cursor?: { cache?: { pipelines?: StageMap } | null } | null } | null;
+  return { mapped: row?.mappings?.pipelines, cached: row?.cursor?.cache?.pipelines };
 }
 
 type Suggestion = { id: string; meeting_id: string; kind: SuggestionKind; payload: unknown; status: string };
@@ -164,7 +170,8 @@ async function applySuggestion(db: Admin, m: MeetingRow, kind: SuggestionKind, p
     (s) => !s.archived_at && s.name.trim().toLocaleLowerCase("pt-BR") === wanted,
   );
   if (!crmStage) throw new UserError(`A etapa "${stage}" não existe no funil deste negócio.`);
-  const stageId = stagePipedriveIdFor(crmStage.id, await importedStagePipelines(db));
+  const imported = await importedStagePipelines(db);
+  const stageId = stagePipedriveIdFor(crmStage.id, imported.mapped, imported.cached);
   if (stageId == null) throw new UserError(`A etapa "${stage}" ainda não existe no Pipedrive.`);
   await sink.moveStage(target.pipedriveId, stageId);
 }
@@ -184,7 +191,7 @@ export async function confirmSuggestion(id: string, edited?: unknown): Promise<A
 
   const auth = await authorize(suggestion.meeting_id);
   if (!auth.ok) return auth;
-  if (suggestion.status !== "pending") return { ok: false, error: "Esta sugestão já foi decidida." };
+  if (!canDecide(suggestion.status)) return { ok: false, error: "Esta sugestão já foi decidida." };
 
   const valid = validateEdited(suggestion.kind, edited ?? suggestion.payload);
   if (!valid.ok) return { ok: false, error: valid.error };
@@ -199,7 +206,7 @@ export async function confirmSuggestion(id: string, edited?: unknown): Promise<A
         .from("meeting_suggestions")
         .update({ status: "failed", last_error: lastError, decided_by: profile.id, decided_at: new Date().toISOString() })
         .eq("id", id)
-        .eq("status", "pending");
+        .in("status", ["pending", "failed"]);
       refresh();
       return { ok: false, error: `Não foi possível gravar no Pipedrive: ${lastError}` };
     }
@@ -218,7 +225,7 @@ export async function confirmSuggestion(id: string, edited?: unknown): Promise<A
       decided_at: new Date().toISOString(),
     })
     .eq("id", id)
-    .eq("status", "pending")
+    .in("status", ["pending", "failed"])
     .select("id");
   if (saved.error) {
     console.error("meet: sugestão gravada no Pipedrive sem registrar a confirmação", id, saved.error.message);
@@ -242,7 +249,7 @@ export async function dismissSuggestion(id: string): Promise<ActionResult> {
     .from("meeting_suggestions")
     .update({ status: "dismissed", decided_by: profile.id, decided_at: new Date().toISOString() })
     .eq("id", id)
-    .eq("status", "pending")
+    .in("status", ["pending", "failed"])
     .select("id");
   if (error) return { ok: false, error: "Não foi possível descartar a sugestão. Tente novamente." };
   if (!data || data.length === 0) return { ok: false, error: "Esta sugestão já foi decidida." };
@@ -251,10 +258,12 @@ export async function dismissSuggestion(id: string): Promise<ActionResult> {
 }
 
 /** Resultado de `processMeeting`: lê o status final e devolve o erro guardado se a reunião não concluiu. */
-async function outcomeOf(db: Admin, meetingId: string): Promise<ActionResult> {
+async function outcomeOf(db: Admin, meetingId: string, opts: { linking?: boolean } = {}): Promise<ActionResult> {
   const { data } = await db.from("meetings").select("status, last_error").eq("id", meetingId).maybeSingle();
   const row = data as { status: MeetingStatus; last_error: string | null } | null;
   refresh();
+  // Ao vincular, voltar a `unlinked` significa que o registro foi para a lixeira no meio do caminho.
+  if (opts.linking && row?.status === "unlinked") return { ok: false, error: "O registro foi excluído; escolha outro." };
   if (row && (row.status === "processing" || row.status === "failed")) {
     return {
       ok: false,
@@ -265,8 +274,20 @@ async function outcomeOf(db: Admin, meetingId: string): Promise<ActionResult> {
 }
 
 /**
- * Vincula uma reunião sem vínculo a um negócio, lead ou pessoa que já existe (nunca cria registro) e roda a
- * gravação na hora, reaproveitando as notas já geradas.
+ * Caso calculado de "Sem vínculo": reunião `done` cujo registro vinculado foi para a lixeira (ou sumiu).
+ * Só `done` com vínculo entra na conta; os demais status já dizem tudo.
+ */
+async function linkedRecordTrashed(db: Admin, m: MeetingRow): Promise<boolean> {
+  if (m.status !== "done" || !m.entity || !m.record_id) return false;
+  const { data, error } = await db.from(m.entity).select("deleted_at").eq("id", m.record_id).maybeSingle();
+  if (error) throw new Error(`Falha ao ler o registro vinculado: ${error.message}`);
+  const row = data as { deleted_at: string | null } | null;
+  return !row || row.deleted_at != null;
+}
+
+/**
+ * Vincula uma reunião sem vínculo (inclusive a concluída cujo registro foi para a lixeira) a um negócio, lead ou
+ * pessoa que já existe (nunca cria registro) e roda a gravação na hora, reaproveitando as notas já geradas.
  */
 export async function linkMeeting(meetingId: string, entity: "deals" | "leads" | "persons", recordId: string): Promise<ActionResult> {
   if (!uuid.safeParse(meetingId).success || !uuid.safeParse(recordId).success || !isLinkEntity(entity)) return INVALID;
@@ -274,7 +295,14 @@ export async function linkMeeting(meetingId: string, entity: "deals" | "leads" |
   const auth = await authorize(meetingId);
   if (!auth.ok) return auth;
   const { db, meeting } = auth;
-  if (!canLink(meeting, profile.id, profile.isSuperAdmin)) {
+  let trashed: boolean;
+  try {
+    trashed = await linkedRecordTrashed(db, meeting);
+  } catch (e) {
+    console.error("meet: falha ao conferir o registro vinculado", meetingId, message(e));
+    return { ok: false, error: "Não foi possível ler o registro vinculado. Tente novamente." };
+  }
+  if (!canLink(meeting, profile.id, profile.isSuperAdmin, trashed)) {
     return { ok: false, error: "Só reuniões sem vínculo podem ser vinculadas." };
   }
 
@@ -295,12 +323,21 @@ export async function linkMeeting(meetingId: string, entity: "deals" | "leads" |
     return { ok: false, error: `Este registro ainda não pode receber a reunião: ${message(e)}` };
   }
 
+  // Reunião concluída: a anotação foi para o registro antigo. Solta o id da anotação (será reescrita no novo
+  // registro) e apaga as sugestões não decididas; confirmadas e descartadas ficam.
+  if (meeting.status === "done") {
+    const note = await db.from("meeting_notes").update({ pipedrive_note_id: null, written_at: null }).eq("meeting_id", meetingId);
+    const sugg = await db.from("meeting_suggestions").delete().eq("meeting_id", meetingId).in("status", ["pending", "failed"]);
+    if (note.error || sugg.error) return { ok: false, error: "Não foi possível preparar a reunião para o novo vínculo. Tente novamente." };
+  }
+
   // Troca de status condicional ANTES de processar: duas chamadas (ou o cron) não processam a mesma reunião.
+  // O status esperado é o que acabou de ser verificado acima (`unlinked`, ou `done` com o registro na lixeira).
   const claimed = await db
     .from("meetings")
     .update({ status: "processing", entity, record_id: recordId, anchor_activity_id: null, attempts: 0, last_error: null })
     .eq("id", meetingId)
-    .eq("status", "unlinked")
+    .eq("status", meeting.status)
     .select("id");
   if (claimed.error) return { ok: false, error: "Não foi possível vincular a reunião. Tente novamente." };
   if (!claimed.data || claimed.data.length === 0) return BUSY;
@@ -312,25 +349,27 @@ export async function linkMeeting(meetingId: string, entity: "deals" | "leads" |
     refresh();
     return { ok: false, error: "A reunião foi vinculada, mas a gravação falhou e será tentada de novo." };
   }
-  return outcomeOf(db, meetingId);
+  return outcomeOf(db, meetingId, { linking: true });
 }
 
-/** Descarta uma reunião sem vínculo ou com falha: vira `ignored` e a transcrição, as notas e as sugestões somem. */
+/**
+ * Descarta uma reunião sem vínculo (inclusive a concluída com o registro na lixeira) ou com falha: apaga a
+ * transcrição, as notas e as sugestões e só então vira `ignored` (se uma limpeza falhar, dá para tentar de novo).
+ */
 export async function discardMeeting(meetingId: string): Promise<ActionResult> {
   const auth = await authorize(meetingId);
   if (!auth.ok) return auth;
   const { db, meeting } = auth;
-  if (!canDiscard(meeting.status)) {
+  let trashed: boolean;
+  try {
+    trashed = await linkedRecordTrashed(db, meeting);
+  } catch (e) {
+    console.error("meet: falha ao conferir o registro vinculado", meetingId, message(e));
+    return { ok: false, error: "Não foi possível ler o registro vinculado. Tente novamente." };
+  }
+  if (!canDiscard(meeting.status, trashed)) {
     return { ok: false, error: "Só reuniões sem vínculo ou com falha podem ser descartadas." };
   }
-  const { data, error } = await db
-    .from("meetings")
-    .update({ status: "ignored" })
-    .eq("id", meetingId)
-    .in("status", ["unlinked", "failed"])
-    .select("id");
-  if (error) return { ok: false, error: "Não foi possível descartar a reunião. Tente novamente." };
-  if (!data || data.length === 0) return BUSY;
   const cleaned = await Promise.all([
     db.from("meeting_transcripts").delete().eq("meeting_id", meetingId),
     db.from("meeting_notes").delete().eq("meeting_id", meetingId),
@@ -338,10 +377,17 @@ export async function discardMeeting(meetingId: string): Promise<ActionResult> {
   ]);
   const failed = cleaned.find((r) => r.error);
   if (failed?.error) {
-    console.error("meet: reunião descartada, mas a limpeza falhou", meetingId, failed.error.message);
-    refresh();
-    return { ok: false, error: "A reunião foi descartada, mas não foi possível apagar a transcrição. Tente novamente." };
+    console.error("meet: falha ao apagar os dados da reunião descartada", meetingId, failed.error.message);
+    return { ok: false, error: "Não foi possível apagar a transcrição. Tente novamente." };
   }
+  const { data, error } = await db
+    .from("meetings")
+    .update({ status: "ignored" })
+    .eq("id", meetingId)
+    .eq("status", meeting.status)
+    .select("id");
+  if (error) return { ok: false, error: "Não foi possível descartar a reunião. Tente novamente." };
+  if (!data || data.length === 0) return BUSY;
   refresh();
   return { ok: true, data: undefined };
 }

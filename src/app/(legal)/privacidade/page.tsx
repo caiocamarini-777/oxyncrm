@@ -31,9 +31,10 @@ export default function PrivacyPage() {
             <strong>Dados do Gmail</strong>, somente quando o próprio usuário conecta a sua caixa (veja a seção 3).
           </li>
           <li>
-            <strong>Dados das reuniões do Google Meet</strong> (participantes, título, horário e transcrição),
-            somente quando o próprio usuário conecta a sua conta Google, a empresa liga o assistente de reuniões e a
-            reunião tem convidado externo (veja as seções 4 e 5).
+            <strong>Dados das reuniões do Google Meet</strong>, somente quando o próprio usuário conecta a sua conta
+            Google e a empresa liga o assistente de reuniões. Das reuniões encerradas da conta conectada, o CRM lê o
+            título, o horário e os participantes (nome e e-mail), para saber se há convidado externo. A transcrição só
+            é lida quando há convidado externo (veja as seções 4 e 5).
           </li>
         </ul>
       </LegalSection>
@@ -87,11 +88,11 @@ export default function PrivacyPage() {
           </li>
         </ul>
         <p>
-          A transcrição só é lida quando a reunião tem pelo menos um convidado de fora das empresas do grupo e quando o
-          assistente de reuniões está ligado para a empresa da caixa conectada. Reuniões só com gente interna são
-          ignoradas, e, com o assistente desligado, nenhuma transcrição é lida. Esses dados são usados apenas para
-          escrever a anotação da reunião e sugerir atualizações do funil, que aparecem para o vendedor, no registro do
-          CRM correspondente, e só valem depois de ele confirmar.
+          Com o assistente de reuniões ligado para a empresa da caixa conectada, o CRM lê o título, o horário e os
+          participantes das reuniões encerradas da conta, para saber se há pelo menos um convidado de fora das
+          empresas do grupo. Reuniões só com gente interna são marcadas como ignoradas e a transcrição delas não é
+          lida. Com o assistente desligado, nada é lido. Esses dados são usados apenas para escrever a anotação da
+          reunião e sugerir atualizações do funil para o vendedor.
         </p>
       </LegalSection>
 
@@ -100,15 +101,17 @@ export default function PrivacyPage() {
           <li>
             <strong>Anthropic, fornecedora do processamento:</strong> para escrever a anotação, o texto da transcrição,
             o título, a data e os participantes da reunião, o roteiro de perguntas da empresa e um resumo do registro
-            vinculado (etapa, valores e as últimas anotações) são enviados à Anthropic, que opera o modelo de
-            inteligência artificial Claude por conta do CRM. Pelos termos comerciais da API da Anthropic, esses dados
-            não são usados para treinar os modelos dela.
+            vinculado (nome, etapa, valores e as últimas anotações) são enviados à Anthropic, junto com os nomes dos
+            resultados de reunião, dos tipos de atividade e das etapas do funil que o assistente pode sugerir. A
+            Anthropic opera o modelo de inteligência artificial Claude por conta do CRM. Pelos termos comerciais da API
+            da Anthropic, esses dados não são usados para treinar os modelos dela.
           </li>
           <li>
             <strong>Guarda no CRM:</strong> a transcrição e as notas geradas ficam guardadas no banco do CRM e são
-            visíveis, no registro vinculado, para as pessoas que têm acesso a esse registro. A anotação (sem a
-            transcrição) também é gravada no registro correspondente do Pipedrive, ferramenta comercial que o grupo
-            ainda usa.
+            visíveis, no registro vinculado, para as pessoas que têm acesso a esse registro. A anotação da reunião
+            (sem a transcrição) é gravada direto no registro correspondente do Pipedrive, ferramenta comercial que o
+            grupo ainda usa, sem esperar confirmação. Só as sugestões de atualização do funil (resultado da reunião,
+            próxima atividade e etapa) dependem de o vendedor confirmar.
           </li>
           <li>
             <strong>Reuniões sem vínculo:</strong> quando o assistente não encontra um registro do CRM para a reunião,

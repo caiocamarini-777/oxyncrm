@@ -70,6 +70,8 @@ export function MeetingAssistantForm({
         setError(res.error);
         return;
       }
+      // O servidor grava as perguntas aparadas; espelha isso aqui para o formulário voltar a "sem alterações".
+      setItems((cur) => cur.map((it) => ({ ...it, text: it.text.trim() })));
       toast.success("Configurações salvas.");
       router.refresh();
     });

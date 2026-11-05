@@ -24,8 +24,9 @@ import { type MeetingSink, pipedriveSink, pipedriveUserFor, SinkError, type Sink
  *
  * 1. descarta as reuniões sem vínculo há mais de 7 dias;
  * 2. para cada caixa ativa com os escopos do Meet, na empresa com o assistente ligado, e com o lease
- *    `meeting_lock_until`: lê as reuniões encerradas desde o cursor, espera a transcrição (até 2 h depois do
- *    fim) e processa (vínculo, notas com o Claude, anotação no Pipedrive e sugestões);
+ *    `meeting_lock_until`: lê as reuniões encerradas desde o cursor (no máximo as das últimas 24 h), espera a
+ *    transcrição (até 2 h depois do fim) e processa (vínculo, notas com o Claude, anotação no Pipedrive e
+ *    sugestões). Reunião que o Google não deixou ler e que o vendedor reabriu ("Tentar de novo") é relida antes;
  * 3. tenta de novo as reuniões em `processing` (Claude ou Pipedrive falharam), até 3 tentativas. Só pega a
  *    reunião parada há mais de 10 min e a reivindica com um update condicional, porque as ações do vendedor
  *    (vincular, tentar de novo) também processam na própria requisição.
@@ -42,8 +43,17 @@ export const TRANSCRIPT_DEADLINE_MS = 2 * 3600_000;
 export const MAX_ATTEMPTS = 3;
 /** Reunião sem vínculo é descartada sozinha depois deste prazo. */
 export const UNLINKED_DISCARD_MS = 7 * 24 * 3600_000;
-/** Primeira leitura de uma caixa (sem cursor): reuniões encerradas nas últimas 24 h. */
-const FIRST_LOOKBACK_MS = 24 * 3600_000;
+/**
+ * Janela máxima de leitura: as reuniões encerradas nas últimas 24 h. Vale na primeira leitura (sem cursor) e
+ * também com um cursor antigo (assistente religado, caixa reconectada depois de muito tempo), para não
+ * processar reuniões velhas de uma vez.
+ */
+export const FIRST_LOOKBACK_MS = 24 * 3600_000;
+/**
+ * A leitura começa um pouco antes do cursor: uma reunião que o Google só lista depois, com fim anterior ao
+ * cursor, ainda entra. As repetidas são puladas pelo `conference_record`.
+ */
+export const CURSOR_OVERLAP_MS = 15 * 60_000;
 /**
  * Reunião em `processing` só volta para a fila do cron depois deste tempo sem mudança (`updated_at`): antes
  * disso, uma ação do vendedor ou outra rodada pode estar no meio do processamento.
@@ -337,6 +347,13 @@ async function runAccount(
     if (!timeLeft()) return;
     handled.add(m.id);
     try {
+      // Sem convidados: a reunião foi gravada como ilegível e o vendedor a reabriu. Relê antes de esperar a
+      // transcrição (e o vínculo só é procurado depois de existir transcrição).
+      if ((m.attendees ?? []).length === 0) {
+        const reread = await rereadMeeting(deps, meet, acc, m, internalDomains);
+        if (reread === "failed") result.failed++;
+        if (reread !== "waiting") continue;
+      }
       const state = await fetchTranscript(deps, meet, m);
       if (state === "failed") result.failed++;
       if (state === "ready") count(result, await runProcess(deps, m.id));
@@ -383,9 +400,10 @@ async function runAccount(
 }
 
 /**
- * Lê as reuniões encerradas desde o cursor (ou nas últimas 24 h), da mais antiga para a mais nova. O cursor
- * avança até o maior `endTime` tratado; se uma reunião falhar no meio, ele para antes dela e a próxima
- * rodada lê de novo (as já gravadas são puladas pelo `conference_record`).
+ * Lê as reuniões encerradas desde o cursor menos 15 min (sem cursor, ou com ele mais velho que isso, só as
+ * das últimas 24 h), da mais antiga para a mais nova. O cursor avança até o maior `endTime` tratado (nunca
+ * volta); se uma reunião falhar no meio, ele para antes dela e a próxima rodada lê de novo (as já gravadas são
+ * puladas pelo `conference_record`).
  */
 async function captureNew(
   deps: MeetDeps,
@@ -395,14 +413,14 @@ async function captureNew(
   internalDomains: () => Promise<Set<string>>,
 ): Promise<void> {
   const { db } = deps;
-  const since = acc.meeting_cursor
-    ? new Date(acc.meeting_cursor)
-    : new Date(deps.now().getTime() - FIRST_LOOKBACK_MS);
+  const saved = acc.meeting_cursor ? Date.parse(acc.meeting_cursor) : NaN;
+  const floor = deps.now().getTime() - FIRST_LOOKBACK_MS;
+  const since = new Date(Number.isNaN(saved) ? floor : Math.max(saved - CURSOR_OVERLAP_MS, floor));
   const records = (await meet.listConferenceRecords(since))
     .filter((r): r is typeof r & { endTime: string } => !!r.endTime && !Number.isNaN(Date.parse(r.endTime)))
     .sort((a, b) => Date.parse(a.endTime) - Date.parse(b.endTime));
 
-  const start = acc.meeting_cursor ? Date.parse(acc.meeting_cursor) : -Infinity;
+  const start = Number.isNaN(saved) ? -Infinity : saved;
   let cursor = start;
   let failure: unknown = null;
   for (const rec of records) {
@@ -431,11 +449,11 @@ async function captureNew(
   }
 
   if (cursor > start) {
-    const saved = await db
+    const moved = await db
       .from("email_accounts")
       .update({ meeting_cursor: new Date(cursor).toISOString() })
       .eq("id", acc.id);
-    check(saved.error, "avançar o cursor da caixa");
+    check(moved.error, "avançar o cursor da caixa");
   }
   if (failure) throw failure;
 }
@@ -525,15 +543,27 @@ async function insertUnreadable(
   return (data?.length ?? 0) > 0;
 }
 
-/** Grava a reunião nova (`on conflict (conference_record) do nothing`). Devolve se ela foi criada agora. */
-async function insertMeeting(
+/** O que se lê do Google sobre uma reunião: evento da agenda, título, convidados e dono. */
+type MeetingInfo = {
+  owner_id: string;
+  calendar_event_id: string | null;
+  title: string;
+  attendees: Attendee[];
+  /** Sem convidado de fora: a reunião é ignorada, sem ler a transcrição. */
+  status: "waiting_transcript" | "ignored";
+};
+
+/**
+ * Código da reunião, evento da agenda (título e convidados; sem evento, os participantes do Meet) e dono (o
+ * organizador, se for usuário da empresa; senão, o dono da caixa).
+ */
+async function readMeetingInfo(
   deps: MeetDeps,
   meet: MeetClient,
   acc: AccountRow,
-  rec: { name: string; space: string; startTime: string; endTime: string },
+  rec: { name: string; space: string; startTime: string },
   internalDomains: () => Promise<Set<string>>,
-): Promise<boolean> {
-  const { db } = deps;
+): Promise<MeetingInfo> {
   const code = await meet.getMeetingCode(rec.space);
   const ev = code ? await meet.findEventByMeetingCode(code, new Date(rec.startTime)) : null;
   const attendees = ev
@@ -542,29 +572,75 @@ async function insertMeeting(
   const hasExternal = attendees.some((a) => a.email && !a.internal);
 
   const organizer = ev?.organizer?.email ? normalizeEmail(ev.organizer.email) : "";
-  const ownerId = (organizer && (await organizerOwner(db, organizer, acc.company_id))) || acc.user_id;
+  const ownerId = (organizer && (await organizerOwner(deps.db, organizer, acc.company_id))) || acc.user_id;
+  return {
+    owner_id: ownerId,
+    calendar_event_id: ev?.id ?? null,
+    title: ev?.summary?.trim() || DEFAULT_TITLE,
+    attendees,
+    status: hasExternal ? "waiting_transcript" : "ignored",
+  };
+}
 
-  const { data, error } = await db
+/** Grava a reunião nova (`on conflict (conference_record) do nothing`). Devolve se ela foi criada agora. */
+async function insertMeeting(
+  deps: MeetDeps,
+  meet: MeetClient,
+  acc: AccountRow,
+  rec: { name: string; space: string; startTime: string; endTime: string },
+  internalDomains: () => Promise<Set<string>>,
+): Promise<boolean> {
+  const info = await readMeetingInfo(deps, meet, acc, rec, internalDomains);
+  const { data, error } = await deps.db
     .from("meetings")
     .upsert(
       {
+        ...info,
         company_id: acc.company_id,
         account_id: acc.id,
-        owner_id: ownerId,
         conference_record: rec.name,
-        calendar_event_id: ev?.id ?? null,
-        title: ev?.summary?.trim() || DEFAULT_TITLE,
         started_at: rec.startTime,
         ended_at: rec.endTime,
-        attendees,
-        // Sem convidado de fora: ignorada, sem ler a transcrição.
-        status: hasExternal ? "waiting_transcript" : "ignored",
       },
       { onConflict: "conference_record", ignoreDuplicates: true },
     )
     .select("id");
   check(error, "gravar a reunião");
   return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Reunião gravada como ilegível (`insertUnreadable`: sem convidados) e reaberta pelo vendedor com "Tentar de
+ * novo": relê a reunião, o código, o evento, os convidados e o dono, como na primeira leitura. Sem convidado de
+ * fora, vira `ignored`. Erro permanente do Google volta a reunião para `failed` com o motivo; erro passageiro
+ * lança, e a próxima rodada tenta de novo.
+ */
+async function rereadMeeting(
+  deps: MeetDeps,
+  meet: MeetClient,
+  acc: AccountRow,
+  m: MeetingRow,
+  internalDomains: () => Promise<Set<string>>,
+): Promise<"waiting" | "ignored" | "failed"> {
+  const { db } = deps;
+  let info: MeetingInfo;
+  try {
+    const rec = await meet.getConferenceRecord(m.conference_record);
+    info = await readMeetingInfo(deps, meet, acc, { ...rec, startTime: rec.startTime || m.started_at || "" }, internalDomains);
+  } catch (e) {
+    if (!isPermanentGoogleError(e)) throw e;
+    console.error("meet: reunião ainda ilegível no Google", m.id, errorMessage(e));
+    const { error } = await db
+      .from("meetings")
+      .update({ status: "failed", last_error: `Não foi possível ler a reunião no Google: ${errorMessage(e)}`.slice(0, 500) })
+      .eq("id", m.id)
+      .eq("status", "waiting_transcript");
+    check(error, "marcar a reunião ilegível");
+    return "failed";
+  }
+  const { error } = await db.from("meetings").update(info).eq("id", m.id).eq("status", "waiting_transcript");
+  check(error, "gravar a reunião relida");
+  return info.status === "ignored" ? "ignored" : "waiting";
 }
 
 type TranscriptEntryRow = { speaker: string; text: string; start: string };
@@ -776,18 +852,20 @@ function participantLabel(a: Attendee): string {
 }
 
 /** Gera as notas com o Claude e guarda em `meeting_notes` (ainda sem `pipedrive_note_id`). */
-async function generateAndStore(deps: MeetDeps, m: MeetingRow, ctx: RecordContext | null): Promise<MeetingNotes> {
+async function generateAndStore(
+  deps: MeetDeps,
+  m: MeetingRow,
+  ctx: RecordContext | null,
+  transcript: string,
+): Promise<MeetingNotes> {
   const { db } = deps;
-  const transcript = await db.from("meeting_transcripts").select("text").eq("meeting_id", m.id).maybeSingle();
-  check(transcript.error, "ler a transcrição");
-  if (!transcript.data) throw new Error(NO_TRANSCRIPT);
   const company = await db.from("companies").select("settings").eq("id", m.company_id).maybeSingle();
   check(company.error, "ler a configuração da empresa");
   const { questions } = readMeetingSettings((company.data as { settings?: unknown } | null)?.settings);
   const names = await namesLoader(deps)();
 
   const input: NotesInput = {
-    transcript: (transcript.data as { text: string }).text,
+    transcript,
     questions,
     title: m.title,
     startedAt: m.started_at ?? m.ended_at ?? "",
@@ -921,6 +999,23 @@ async function createSuggestions(
 async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   const { db } = deps;
 
+  // 0. Notas guardadas (tentativa anterior) ou a transcrição para gerar as novas. Sem nenhuma das duas não há
+  //    o que fazer, e o vínculo nem é procurado.
+  const stored = await db
+    .from("meeting_notes")
+    .select("summary, pains, objections, qualification, next_steps, raw, pipedrive_note_id")
+    .eq("meeting_id", m.id)
+    .maybeSingle();
+  check(stored.error, "ler as notas guardadas");
+  const notesRow = stored.data as NotesRow | null;
+  let transcript = "";
+  if (!notesRow) {
+    const t = await db.from("meeting_transcripts").select("text").eq("meeting_id", m.id).maybeSingle();
+    check(t.error, "ler a transcrição");
+    if (!t.data) throw new Error(NO_TRANSCRIPT);
+    transcript = (t.data as { text: string }).text;
+  }
+
   // 1. Vínculo: o já gravado (casado antes ou escolhido pelo vendedor) ou o casador.
   let link: { entity: LinkEntity; recordId: string } | null =
     m.entity && m.record_id ? { entity: m.entity, recordId: m.record_id } : null;
@@ -940,14 +1035,7 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
 
   // 2. Notas: as guardadas (tentativa anterior) ou novas, do Claude.
   const ctx = link ? await loadRecord(db, link.entity, link.recordId) : null;
-  const stored = await db
-    .from("meeting_notes")
-    .select("summary, pains, objections, qualification, next_steps, raw, pipedrive_note_id")
-    .eq("meeting_id", m.id)
-    .maybeSingle();
-  check(stored.error, "ler as notas guardadas");
-  const notesRow = stored.data as NotesRow | null;
-  const notes = notesRow ? notesFromRow(notesRow) : await generateAndStore(deps, m, ctx);
+  const notes = notesRow ? notesFromRow(notesRow) : await generateAndStore(deps, m, ctx, transcript);
 
   // 3. Destino: sem vínculo ou registro na lixeira ficam em "Sem vínculo", sem gravar no Pipedrive.
   if (!link) {

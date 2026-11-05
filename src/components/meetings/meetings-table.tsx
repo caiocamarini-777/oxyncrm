@@ -50,7 +50,7 @@ export function MeetingsTable({
     start(async () => {
       const res = await retryMeeting(row.id);
       if (!res.ok) toast.error(res.error);
-      else toast.success("Reunião processada.");
+      else toast.success(res.data.message);
       router.refresh();
     });
   }

@@ -11,6 +11,7 @@ vi.mock("./match-loader", () => ({
 }));
 
 import { GmailApiError, GmailNetworkError, GmailRateLimitError } from "@/lib/gmail/client";
+import { loadCandidates } from "./match-loader";
 import { MEET_SCOPES } from "@/lib/gmail/connect";
 import type { CalendarEvent, ConferenceRecord, MeetClient, Participant, Transcript, TranscriptEntry } from "./google";
 import { fakeDb, resetSeq, type Row, type Tables } from "./fake-db.test-support";
@@ -31,11 +32,17 @@ type MeetData = {
 };
 
 function fakeMeet(d: MeetData) {
-  const calls = { list: [] as Date[], transcripts: 0, codes: 0 };
+  const calls = { list: [] as Date[], transcripts: 0, codes: 0, records: 0 };
   const client = {
     listConferenceRecords: async (since: Date) => {
       calls.list.push(since);
       return d.records.filter((r) => r.endTime && Date.parse(r.endTime) >= since.getTime());
+    },
+    getConferenceRecord: async (name: string) => {
+      calls.records++;
+      const found = d.records.find((r) => r.name === name);
+      if (!found) throw new GmailApiError(404, "Requested entity was not found.");
+      return found;
     },
     getMeetingCode: async (space: string) => (calls.codes++, d.codes?.[space] ?? null),
     findEventByMeetingCode: async (code: string) => d.events?.[code] ?? null,
@@ -369,9 +376,38 @@ describe("runMeetSync: captura", () => {
     expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:50:00.000Z");
     expect(t.tables.meetings.map((m) => m.conference_record)).toEqual([R1, "conferenceRecords/r2"]);
 
+    // Da segunda vez em diante, lê a partir do cursor menos 15 min (as já gravadas são puladas).
     await t.run();
-    expect(t.meets.acc1.calls.list[1].toISOString()).toBe("2026-11-05T14:50:00.000Z");
+    expect(t.meets.acc1.calls.list[1].toISOString()).toBe("2026-11-05T14:35:00.000Z");
     expect(t.tables.meetings).toHaveLength(2);
+    expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:50:00.000Z");
+  });
+
+  it("sobreposição de 15 min: reunião que aparece atrasada no Google, com fim antes do cursor, ainda entra", async () => {
+    const late = record({ name: "conferenceRecords/atrasada", space: "spaces/s1", endTime: "2026-11-05T14:40:00.000Z" });
+    const data = meetData({ records: [record({ endTime: "2026-11-05T14:50:00.000Z" })] });
+    const t = setup({ meet: { acc1: data } });
+    await t.run();
+    expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:50:00.000Z");
+
+    data.records.push(late); // o Google só lista agora
+    t.setNow(minutesAfter(NOW.toISOString(), 10));
+    await t.run();
+    expect(t.tables.meetings.map((m) => m.conference_record)).toEqual([R1, "conferenceRecords/atrasada"]);
+    // o cursor não volta
+    expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:50:00.000Z");
+  });
+
+  it("cursor muito antigo (assistente religado, caixa reconectada): lê só as últimas 24 h", async () => {
+    const old = record({ name: "conferenceRecords/antiga", endTime: "2026-10-10T14:45:00.000Z", startTime: "2026-10-10T14:00:00.000Z" });
+    const t = setup({
+      tables: baseTables({ email_accounts: [account("acc1", "u1", { meeting_cursor: "2026-10-01T00:00:00.000Z" })] }),
+      meet: { acc1: meetData({ records: [old, record()] }) },
+    });
+    await t.run();
+    expect(t.meets.acc1.calls.list[0].toISOString()).toBe("2026-11-04T15:00:00.000Z");
+    expect(t.tables.meetings.map((m) => m.conference_record)).toEqual([R1]);
+    expect(t.tables.email_accounts[0].meeting_cursor).toBe("2026-11-05T14:45:00.000Z");
   });
 
   it("conta sem os escopos do Meet ou empresa com o assistente desligado é pulada", async () => {
@@ -1013,6 +1049,131 @@ describe("runMeetSync: concorrência com as ações", () => {
       ["stage", "pending"],
     ]);
     expect(t.tables.meeting_suggestions[0].payload).toEqual({ outcome: "Não compareceu" });
+  });
+});
+
+/** Linha de `insertUnreadable` reaberta por "Tentar de novo" (volta para `waiting_transcript`, sem convidados). */
+function reopenedUnreadable(over: Row = {}): Row {
+  return {
+    id: "m1",
+    company_id: "co",
+    account_id: "acc1",
+    owner_id: "u1",
+    conference_record: R1,
+    calendar_event_id: null,
+    title: "Reunião do Meet",
+    started_at: "2026-11-05T14:00:00.000Z",
+    ended_at: "2026-11-05T14:45:00.000Z",
+    attendees: [],
+    status: "waiting_transcript",
+    attempts: 0,
+    last_error: null,
+    entity: null,
+    record_id: null,
+    anchor_activity_id: null,
+    updated_at: "2026-11-05T14:58:00.000Z",
+    ...over,
+  };
+}
+
+describe("runMeetSync: reunião reaberta por Tentar de novo", () => {
+  it("ilegível antes (sem convidados): relê código, evento, convidados e dono antes de esperar a transcrição", async () => {
+    const t = setup({
+      tables: baseTables({
+        email_accounts: [account("acc2", "u2")],
+        meetings: [reopenedUnreadable({ account_id: "acc2", owner_id: "u2" })],
+      }),
+      meet: { acc2: meetData() },
+    });
+    const out = await t.run();
+    expect(t.meets.acc2.calls.records).toBe(1);
+    expect(t.tables.meetings).toHaveLength(1);
+    expect(t.tables.meetings[0]).toMatchObject({
+      title: "Apresentação Acme",
+      calendar_event_id: "ev1",
+      // o organizador (u1) é usuário do CRM e da empresa: vira o dono, como na primeira leitura
+      owner_id: "u1",
+      attendees: [
+        { email: "caio@oxyn.com.br", name: "caio", internal: true },
+        { email: "cliente@acme.com", name: "Cliente", internal: false },
+      ],
+      status: "done",
+      entity: "deals",
+    });
+    expect(t.notes).toHaveBeenCalledTimes(1);
+    expect(out[0]).toMatchObject({ processed: 1, failed: 0 });
+  });
+
+  it("relida só com gente interna: vira ignored, sem ler a transcrição", async () => {
+    const t = setup({
+      tables: baseTables({ meetings: [reopenedUnreadable()] }),
+      meet: { acc1: meetData({ events: { "abc-defg-hij": event(["caio@oxyn.com.br", "ana@oxyn.com.br"]) } }) },
+    });
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "ignored", title: "Apresentação Acme" });
+    expect(t.meets.acc1.calls.transcripts).toBe(0);
+    expect(t.notes).not.toHaveBeenCalled();
+  });
+
+  it("erro permanente do Google na releitura: volta para failed com o motivo, sem esperar a transcrição", async () => {
+    const t = setup({ tables: baseTables({ meetings: [reopenedUnreadable()] }) });
+    (t.meets.acc1.client as unknown as { getMeetingCode: () => Promise<never> }).getMeetingCode = async () => {
+      throw new GmailApiError(403, "Google Meet REST API has not been used in project");
+    };
+    const out = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({
+      status: "failed",
+      attendees: [],
+      last_error: "Não foi possível ler a reunião no Google: Google Meet REST API has not been used in project",
+    });
+    expect(t.meets.acc1.calls.transcripts).toBe(0);
+    expect(out[0]).toMatchObject({ failed: 1 });
+  });
+
+  it("erro passageiro do Google na releitura: continua esperando para a próxima rodada", async () => {
+    const t = setup({ tables: baseTables({ meetings: [reopenedUnreadable()] }) });
+    const client = t.meets.acc1.client as unknown as { getMeetingCode: (space: string) => Promise<string | null> };
+    const original = client.getMeetingCode;
+    client.getMeetingCode = async () => {
+      throw new GmailNetworkError("socket hang up");
+    };
+    const out = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript", attendees: [] });
+    expect(out[0]).toMatchObject({ error: "socket hang up" });
+
+    client.getMeetingCode = original;
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", title: "Apresentação Acme" });
+  });
+
+  it("reaberta com convidados (falhou só por falta de transcrição): não relê, vai direto à transcrição", async () => {
+    const t = setup({
+      tables: baseTables({
+        meetings: [
+          reopenedUnreadable({
+            title: "Apresentação Acme",
+            calendar_event_id: "ev1",
+            attendees: [{ email: "cliente@acme.com", name: "Cliente", internal: false }],
+          }),
+        ],
+      }),
+    });
+    await t.run();
+    expect(t.meets.acc1.calls.records).toBe(0);
+    expect(t.meets.acc1.calls.codes).toBe(0);
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("o pareamento não roda antes de existir transcrição", async () => {
+    const t = setup({
+      tables: baseTables({ meetings: [processingMeeting({ entity: null, record_id: null, attempts: 0, last_error: null })] }),
+      meet: { acc1: meetData({ records: [] }) },
+    });
+    vi.mocked(loadCandidates).mockClear();
+    await processMeeting(t.deps, "m1");
+    expect(loadCandidates).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ entity: null, record_id: null, attempts: 1, last_error: "reunião sem transcrição" });
+    expect(t.notes).not.toHaveBeenCalled();
   });
 });
 

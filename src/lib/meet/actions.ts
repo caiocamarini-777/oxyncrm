@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/session";
 import type { ActionResult } from "@/lib/db-errors";
+import { hasMeetScopes } from "@/lib/gmail/connect";
 import { createPipedriveClient } from "@/lib/import/pipedrive/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
@@ -23,6 +24,7 @@ import {
   type MeetingStatus,
   type SuggestionKind,
 } from "./decisions";
+import { readMeetingSettings } from "./settings";
 import { defaultMeetDeps, pipedriveIdOf, processMeeting, resolveSinkTarget } from "./run";
 import { pipedriveSink, pipedriveUserFor, SinkError, type SinkTarget } from "./sink";
 
@@ -45,6 +47,7 @@ const refresh = () => revalidatePath("/", "layout");
 type MeetingRow = {
   id: string;
   company_id: string;
+  account_id: string | null;
   owner_id: string;
   title: string;
   started_at: string | null;
@@ -54,7 +57,8 @@ type MeetingRow = {
   record_id: string | null;
   anchor_activity_id: string | null;
 };
-const MEETING_COLUMNS = "id, company_id, owner_id, title, started_at, ended_at, status, entity, record_id, anchor_activity_id";
+const MEETING_COLUMNS =
+  "id, company_id, account_id, owner_id, title, started_at, ended_at, status, entity, record_id, anchor_activity_id";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -392,12 +396,57 @@ export async function discardMeeting(meetingId: string): Promise<ActionResult> {
   return { ok: true, data: undefined };
 }
 
-/** Tenta de novo uma reunião com falha: zera as tentativas e processa. */
-export async function retryMeeting(meetingId: string): Promise<ActionResult> {
+/**
+ * Sem transcrição guardada, "Tentar de novo" só serve se o cron puder buscá-la: a caixa que trouxe a reunião
+ * ativa e com os acessos do Meet, e o assistente ligado na empresa. `null` quando pode; senão, o motivo.
+ */
+async function cannotFetchAgain(db: Admin, m: MeetingRow): Promise<string | null> {
+  const [account, company] = await Promise.all([
+    m.account_id
+      ? db.from("email_accounts").select("status, scopes").eq("id", m.account_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    db.from("companies").select("settings").eq("id", m.company_id).maybeSingle(),
+  ]);
+  if (account.error || company.error) return "Não foi possível ler a reunião. Tente novamente.";
+  const acc = account.data as { status: string; scopes: string[] | null } | null;
+  if (!acc || acc.status !== "active" || !hasMeetScopes(acc.scopes ?? [])) {
+    return "A caixa do Google que trouxe esta reunião está desconectada ou sem acesso ao Meet. Reconecte-a no módulo E-mail e tente de novo.";
+  }
+  if (!readMeetingSettings((company.data as { settings?: unknown } | null)?.settings).enabled) {
+    return "O assistente de reuniões está desligado nesta empresa.";
+  }
+  return null;
+}
+
+/**
+ * Tenta de novo uma reunião com falha. Com a transcrição guardada (falhou o Claude ou o Pipedrive): zera as
+ * tentativas e processa na hora. Sem ela (o Google não deixou ler a reunião, ou a transcrição não apareceu no
+ * prazo): não há o que processar; a reunião volta a esperar a transcrição, e a próxima rodada do cron relê a
+ * reunião e busca a transcrição de novo.
+ */
+export async function retryMeeting(meetingId: string): Promise<ActionResult<{ message: string }>> {
   const auth = await authorize(meetingId);
   if (!auth.ok) return auth;
   const { db, meeting } = auth;
   if (!canRetry(meeting.status)) return { ok: false, error: "Só reuniões com falha podem ser tentadas de novo." };
+
+  const transcript = await db.from("meeting_transcripts").select("meeting_id").eq("meeting_id", meetingId).maybeSingle();
+  if (transcript.error) return { ok: false, error: "Não foi possível ler a reunião. Tente novamente." };
+  if (!transcript.data) {
+    const blocked = await cannotFetchAgain(db, meeting);
+    if (blocked) return { ok: false, error: blocked };
+    const requeued = await db
+      .from("meetings")
+      .update({ status: "waiting_transcript", attempts: 0, last_error: null })
+      .eq("id", meetingId)
+      .eq("status", "failed")
+      .select("id");
+    if (requeued.error) return { ok: false, error: "Não foi possível tentar de novo. Tente novamente." };
+    if (!requeued.data || requeued.data.length === 0) return BUSY;
+    refresh();
+    return { ok: true, data: { message: "Vamos buscar a transcrição de novo na próxima rodada." } };
+  }
+
   const claimed = await db
     .from("meetings")
     .update({ status: "processing", attempts: 0, last_error: null })
@@ -413,7 +462,8 @@ export async function retryMeeting(meetingId: string): Promise<ActionResult> {
     refresh();
     return { ok: false, error: "Não foi possível processar agora. A reunião será tentada de novo." };
   }
-  return outcomeOf(db, meetingId);
+  const outcome = await outcomeOf(db, meetingId);
+  return outcome.ok ? { ok: true, data: { message: "Reunião processada." } } : outcome;
 }
 
 /**

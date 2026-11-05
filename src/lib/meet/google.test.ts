@@ -167,6 +167,33 @@ describe("MeetClient.findEventByMeetingCode", () => {
     expect(urlOf(1).searchParams.get("pageToken")).toBe("p2");
   });
 
+  it("com vários eventos do mesmo código (reunião recorrente), escolhe o de início mais perto de around", async () => {
+    fetchMock.mockResolvedValueOnce(
+      json(200, {
+        items: [
+          { id: "ontem", conferenceData: { conferenceId: "abc-defg-hij" }, start: { dateTime: "2026-11-04T13:00:00Z" } },
+          { id: "sem-inicio", conferenceData: { conferenceId: "abc-defg-hij" } },
+          { id: "hoje", conferenceData: { conferenceId: "abc-defg-hij" }, start: { dateTime: "2026-11-05T09:00:00-03:00" } },
+          { id: "amanha", conferenceData: { conferenceId: "abc-defg-hij" }, start: { dateTime: "2026-11-05T22:00:00Z" } },
+          { id: "outro", conferenceData: { conferenceId: "zzz-zzzz-zzz" }, start: { dateTime: "2026-11-05T12:00:00Z" } },
+        ],
+      }),
+    );
+    expect((await client().meet.findEventByMeetingCode("abc-defg-hij", around))?.id).toBe("hoje");
+  });
+
+  it("evento de dia inteiro conta pelo início do dia; sem início, fica atrás dos que têm", async () => {
+    fetchMock.mockResolvedValueOnce(
+      json(200, {
+        items: [
+          { id: "sem-inicio", conferenceData: { conferenceId: "abc-defg-hij" } },
+          { id: "dia", conferenceData: { conferenceId: "abc-defg-hij" }, start: { date: "2026-11-05" } },
+        ],
+      }),
+    );
+    expect((await client().meet.findEventByMeetingCode("abc-defg-hij", around))?.id).toBe("dia");
+  });
+
   it("devolve null quando nenhum evento bate (ou não há itens)", async () => {
     fetchMock
       .mockResolvedValueOnce(json(200, { items: [{ id: "e1", conferenceData: { conferenceId: "outro" } }] }))
@@ -174,5 +201,29 @@ describe("MeetClient.findEventByMeetingCode", () => {
     const { meet } = client();
     expect(await meet.findEventByMeetingCode("abc-defg-hij", around)).toBeNull();
     expect(await meet.findEventByMeetingCode("abc-defg-hij", around)).toBeNull();
+  });
+});
+
+describe("MeetClient.getConferenceRecord", () => {
+  it("lê a reunião pelo nome, com endTime nulo quando ainda não terminou", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        json(200, { name: "conferenceRecords/a", space: "spaces/s1", startTime: "2026-11-05T10:00:00Z", endTime: "2026-11-05T11:00:00Z" }),
+      )
+      .mockResolvedValueOnce(json(200, { name: "conferenceRecords/b", space: "spaces/s2", startTime: "2026-11-05T12:00:00Z" }));
+    const { meet } = client();
+    expect(await meet.getConferenceRecord("conferenceRecords/a")).toEqual({
+      name: "conferenceRecords/a",
+      space: "spaces/s1",
+      startTime: "2026-11-05T10:00:00Z",
+      endTime: "2026-11-05T11:00:00Z",
+    });
+    expect(urlOf(0).origin + urlOf(0).pathname).toBe("https://meet.googleapis.com/v2/conferenceRecords/a");
+    expect((await meet.getConferenceRecord("conferenceRecords/b")).endTime).toBeNull();
+  });
+
+  it("404 vira GmailApiError (erro permanente para quem chama)", async () => {
+    fetchMock.mockResolvedValueOnce(json(404, { error: { message: "Requested entity was not found." } }));
+    await expect(client().meet.getConferenceRecord("conferenceRecords/x")).rejects.toMatchObject({ status: 404 });
   });
 });

@@ -5,7 +5,7 @@ import { NextResponse, type NextRequest } from "next/server";
 const PUBLIC = ["/entrar", "/recuperar-senha", "/auth/confirm", "/auth/callback", "/privacidade", "/termos"];
 // Rotas que dispensam sessão porque se autenticam sozinhas. Só caminhos exatos, e cada handler
 // DEVE chamar isCronAuthorized (src/lib/notifications/cron-auth.ts) antes de qualquer trabalho.
-const SELF_AUTH = ["/api/cron/lembretes", "/api/cron/gmail"];
+const SELF_AUTH = ["/api/cron/lembretes", "/api/cron/gmail", "/api/cron/meet"];
 // Dashboards públicos (/d/<token>): a página não usa sessão e se autoriza sozinha pelo token (43 caracteres,
 // conferido no banco por hash). O prefixo é exato: só `/d` e `/d/...`, nunca `/dashboard` ou `/dx`.
 // A página DEVE validar o formato do token e usar o cliente admin só no servidor.

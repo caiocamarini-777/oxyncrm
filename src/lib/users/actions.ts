@@ -9,6 +9,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { z } from "zod";
+import { inviteStatus, type InviteStatus } from "./invite-status";
 import { accessListSchema, inviteSchema, type Access, type InviteInput } from "./schema";
 
 export type UserRow = {
@@ -18,7 +19,7 @@ export type UserRow = {
   avatarUrl: string | null;
   isSuperAdmin: boolean;
   active: boolean;
-  pending: boolean;
+  invite: InviteStatus;
   access: { companyId: string; companyName: string; roleId: string; roleName: string }[];
   teams: { id: string; name: string }[];
 };
@@ -217,6 +218,7 @@ export async function resendInvite(userId: string): Promise<ActionResult> {
   } catch {
     return { ok: false, error: "Não foi possível reenviar o convite. Tente novamente." };
   }
+  REFRESH();
   return { ok: true, data: undefined };
 }
 
@@ -232,12 +234,22 @@ export async function listUsers(): Promise<UserRow[]> {
     supabase.from("team_members").select("user_id, team_id, teams(name)"),
   ]);
 
-  const pendingIds = new Set<string>();
+  // Convite aceito = já entrou alguma vez. Confirmar o e-mail não basta: o link pode ter sido aberto sem criar a senha.
+  const invites = new Map<string, InviteStatus>();
   const admin = createAdminClient();
   for (let page = 1; page < 50; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
     if (error || !data) break;
-    for (const u of data.users) if (!u.email_confirmed_at) pendingIds.add(u.id);
+    for (const u of data.users) {
+      invites.set(
+        u.id,
+        inviteStatus({
+          lastSignInAt: u.last_sign_in_at ?? null,
+          invitedAt: u.invited_at ?? null,
+          recoverySentAt: u.recovery_sent_at ?? null,
+        }),
+      );
+    }
     if (data.users.length < 200) break;
   }
 
@@ -248,7 +260,7 @@ export async function listUsers(): Promise<UserRow[]> {
     avatarUrl: p.avatar_url,
     isSuperAdmin: p.is_super_admin,
     active: p.active,
-    pending: pendingIds.has(p.id),
+    invite: invites.get(p.id) ?? "accepted",
     access: (memberships.data ?? [])
       .filter((m) => m.user_id === p.id)
       .map((m) => ({

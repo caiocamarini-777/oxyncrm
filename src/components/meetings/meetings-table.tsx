@@ -4,25 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/activities/time";
-import { discardMeeting, retryMeeting } from "@/lib/meet/actions";
+import { retryMeeting } from "@/lib/meet/actions";
 import { canDiscard, canRetry } from "@/lib/meet/decisions";
 import type { MeetingListRow } from "@/lib/meet/queries";
 import { meetingSituation, type MeetingListTab } from "@/lib/meet/view";
 import { cn } from "cn";
+import { DiscardMeetingDialog } from "./discard-meeting-dialog";
 import { LinkMeetingDialog } from "./link-meeting-dialog";
 
 const EMPTY: Record<MeetingListTab, string> = {
@@ -60,22 +51,6 @@ export function MeetingsTable({
       const res = await retryMeeting(row.id);
       if (!res.ok) toast.error(res.error);
       else toast.success("Reunião processada.");
-      router.refresh();
-    });
-  }
-
-  function discard() {
-    if (!discarding) return;
-    const row = discarding;
-    start(async () => {
-      const res = await discardMeeting(row.id);
-      if (!res.ok) {
-        toast.error(res.error);
-        router.refresh();
-        return;
-      }
-      toast.success("Reunião descartada.");
-      setDiscarding(null);
       router.refresh();
     });
   }
@@ -179,28 +154,7 @@ export function MeetingsTable({
           onOpenChange={(o) => !o && setLinking(null)}
         />
       ) : null}
-      <AlertDialog open={discarding !== null} onOpenChange={(o) => !o && setDiscarding(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Descartar reunião?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {`A transcrição, as notas e as sugestões de “${discarding?.title ?? ""}” serão apagadas. Esta ação não pode ser desfeita.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={pending}
-              onClick={(e) => {
-                e.preventDefault();
-                discard();
-              }}
-            >
-              Descartar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DiscardMeetingDialog meeting={discarding} onOpenChange={(o) => !o && setDiscarding(null)} />
     </>
   );
 }

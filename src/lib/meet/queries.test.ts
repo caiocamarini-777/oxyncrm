@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import type { TimelineItem } from "@/lib/timeline/queries";
-import { hideMeetingNotes, meetingTab, toMeetingListRow, toRecordMeeting } from "./queries";
+import { hideMeetingNotes, meetingTab, toEndedMeeting, toMeetingListRow, toRecordMeeting } from "./queries";
 
 const note = (id: string, externalId?: string): TimelineItem => ({
   kind: "note",
@@ -265,5 +265,54 @@ describe("toMeetingListRow", () => {
     expect(toMeetingListRow(null, alive, viewer, NOW)).toBeNull();
     expect(toMeetingListRow({ ...raw, status: "estranho" }, alive, viewer, NOW)).toBeNull();
     expect(toMeetingListRow({ ...raw, owner_id: undefined }, alive, viewer, NOW)).toBeNull();
+  });
+});
+
+describe("toEndedMeeting", () => {
+  const raw = {
+    id: "m1",
+    title: "  Reunião com a Ana ",
+    status: "done",
+    ended_at: "2026-11-05T17:45:00Z",
+    entity: "deals",
+    record_id: "d1",
+    company: { name: "Volt", slug: "volt" },
+    meeting_notes: { summary: "Resumo da conversa" },
+  };
+  const alive = new Map([["deals:d1", { title: "Negócio Ana", trashed: false }]]);
+
+  it("reunião concluída com registro vivo: título, fim, resumo, empresa e registro com link", () => {
+    expect(toEndedMeeting(raw, alive)).toEqual({
+      id: "m1",
+      title: "Reunião com a Ana",
+      endedAt: "2026-11-05T17:45:00Z",
+      status: "done",
+      summary: "Resumo da conversa",
+      companyName: "Volt",
+      record: { entity: "deals", id: "d1", title: "Negócio Ana", href: "/volt/negocios/d1" },
+    });
+  });
+
+  it("em processamento: sem notas, resumo vazio; notas e empresa podem vir como lista", () => {
+    const m = toEndedMeeting({ ...raw, status: "processing", meeting_notes: null }, alive);
+    expect(m).toMatchObject({ status: "processing", summary: "" });
+    const asList = toEndedMeeting({ ...raw, meeting_notes: [{ summary: "Da lista" }], company: [{ name: "Volt", slug: "volt" }], title: "" }, alive);
+    expect(asList).toMatchObject({ summary: "Da lista", companyName: "Volt", title: "Reunião do Meet" });
+  });
+
+  it("registro na lixeira ou que não volta na consulta: fica de fora (a reunião cai em Sem vínculo)", () => {
+    const trashed = new Map([["deals:d1", { title: "Negócio Ana", trashed: true }]]);
+    expect(toEndedMeeting(raw, trashed)).toBeNull();
+    expect(toEndedMeeting(raw, new Map())).toBeNull();
+  });
+
+  it("sem vínculo, sem fim, status que não mostra no card ou linha inválida: nulo", () => {
+    expect(toEndedMeeting({ ...raw, entity: null, record_id: null }, alive)).toBeNull();
+    expect(toEndedMeeting({ ...raw, ended_at: null }, alive)).toBeNull();
+    for (const status of ["unlinked", "failed", "ignored", "waiting_transcript", "estranho"]) {
+      expect(toEndedMeeting({ ...raw, status }, alive)).toBeNull();
+    }
+    expect(toEndedMeeting(null, alive)).toBeNull();
+    expect(toEndedMeeting({ ...raw, company: { name: "Volt" } }, alive)).toBeNull();
   });
 });

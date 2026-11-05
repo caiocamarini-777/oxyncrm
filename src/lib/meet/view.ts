@@ -124,3 +124,6 @@ export function meetingSituation(status: MeetingStatus, tab: MeetingTabKey | nul
   if (tab === "com-erro") return "Com erro";
   return STATUS_LABELS[status];
 }
+
+/** Id do bloco da reunião no histórico do card (destino do link `#...` da tela inicial). */
+export const meetingAnchor = (meetingId: string): string => `reuniao-${meetingId}`;

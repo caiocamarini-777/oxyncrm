@@ -17,6 +17,7 @@ import {
   describeSuggestion,
   FORM_FIELDS,
   formValuesFor,
+  meetingAnchor,
   payloadFromForm,
   SUGGESTION_LABELS,
   type FormValues,
@@ -292,7 +293,7 @@ function TranscriptToggle({ meetingId }: { meetingId: string }) {
  */
 export function MeetingBlock({ meeting }: { meeting: RecordMeeting }) {
   return (
-    <div className="rounded-md border bg-card" data-testid="meeting-block">
+    <div id={meetingAnchor(meeting.id)} className="scroll-mt-4 rounded-md border bg-card" data-testid="meeting-block">
       <div className="flex flex-col gap-3 p-3">
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline justify-between gap-3">

@@ -486,3 +486,117 @@ export async function countMyPending(userId: string): Promise<number> {
     return 0;
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Tela inicial
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Mais reuniões do que isso encerradas num mesmo dia não cabem na tela inicial. */
+const ENDED_LIMIT = 50;
+
+/**
+ * Reuniões sem vínculo do próprio usuário nas empresas dadas: a mesma conta da aba Sem vínculo da página Reuniões
+ * (`unlinked`, ou `done` com o registro na lixeira), só que sempre do usuário, mesmo para o admin geral. Falha em
+ * silêncio (log e lista vazia), porque as tabelas podem não existir ainda.
+ */
+export async function listOwnUnlinkedMeetings(userId: string, companyIds: string[]): Promise<MeetingListRow[]> {
+  if (companyIds.length === 0) return [];
+  try {
+    const supabase = await createServerClient();
+    const { data, error } = await supabase
+      .from("meetings")
+      .select(`${LIST_COLUMNS}, meeting_suggestions(status)`)
+      .in("status", ["unlinked", "done"])
+      .eq("owner_id", userId)
+      .in("company_id", companyIds)
+      .order("started_at", { ascending: false, nullsFirst: false })
+      .order("id")
+      .limit(WINDOW);
+    if (error) {
+      console.error("[reunioes] tela inicial, sem vínculo:", error.code, error.message);
+      return [];
+    }
+    const raw = (data ?? []) as unknown as Record<string, unknown>[];
+    const records = await resolveRecords(raw.flatMap((r) => recordRef(r) ?? []));
+    const viewer: MeetingViewer = { id: userId, isSuperAdmin: false };
+    const nowMs = Date.now();
+    return raw.flatMap((r) => toMeetingListRow(r, records, viewer, nowMs) ?? []).filter((r) => r.tab === "sem-vinculo");
+  } catch (e) {
+    console.error("[reunioes] tela inicial, sem vínculo:", e);
+    return [];
+  }
+}
+
+/** Reunião do Meet já encerrada, vinculada a um registro vivo, para a lista "Realizadas hoje" da tela inicial. */
+export type EndedMeeting = {
+  id: string;
+  title: string;
+  endedAt: string;
+  status: "done" | "processing";
+  /** Resumo das notas; vazio enquanto elas ainda não foram geradas. */
+  summary: string;
+  companyName: string;
+  record: MeetingListRecord;
+};
+
+/**
+ * Linha de `meetings` (com `company` e `meeting_notes(summary)` embutidos) -> reunião encerrada. Fica de fora a
+ * que não aparece no card: sem vínculo, com o registro na lixeira (cai em Sem vínculo), sem fim, ou com status
+ * que o card não mostra.
+ */
+export function toEndedMeeting(row: unknown, records: Map<string, RecordInfo>): EndedMeeting | null {
+  if (!isObject(row) || typeof row.id !== "string" || typeof row.ended_at !== "string" || row.ended_at === "") return null;
+  const status = VISIBLE_STATUSES.find((s) => s === row.status);
+  const ref = recordRef(row);
+  const info = ref ? records.get(recordKey(ref.entity, ref.id)) : undefined;
+  const company = one(row.company);
+  const companySlug = isObject(company) ? str(company.slug) : "";
+  if (!status || !ref || !info || info.trashed || !companySlug) return null;
+  const notes = one(row.meeting_notes);
+  return {
+    id: row.id,
+    title: str(row.title).trim() || "Reunião do Meet",
+    endedAt: row.ended_at,
+    status,
+    summary: isObject(notes) ? str(notes.summary) : "",
+    companyName: isObject(company) ? str(company.name) : "",
+    record: { entity: ref.entity, id: ref.id, title: info.title, href: recordHref(ref.entity, companySlug, ref.id) },
+  };
+}
+
+/**
+ * Reuniões do usuário nas empresas dadas que terminaram entre `start` (inclusive) e `end` (exclusive), as mais
+ * recentes primeiro. Só as que o card mostra (concluídas ou em processamento, com registro vivo). Falha em
+ * silêncio (log e lista vazia).
+ */
+export async function listOwnEndedMeetings(
+  userId: string,
+  companyIds: string[],
+  range: { start: string; end: string },
+): Promise<EndedMeeting[]> {
+  if (companyIds.length === 0) return [];
+  try {
+    const supabase = await createServerClient();
+    const { data, error } = await supabase
+      .from("meetings")
+      .select("id, title, status, ended_at, entity, record_id, company:companies(name, slug), meeting_notes(summary)")
+      .eq("owner_id", userId)
+      .in("company_id", companyIds)
+      .in("status", [...VISIBLE_STATUSES])
+      .gte("ended_at", range.start)
+      .lt("ended_at", range.end)
+      .order("ended_at", { ascending: false })
+      .order("id")
+      .limit(ENDED_LIMIT);
+    if (error) {
+      console.error("[reunioes] tela inicial, realizadas:", error.code, error.message);
+      return [];
+    }
+    const raw = (data ?? []) as unknown as Record<string, unknown>[];
+    const records = await resolveRecords(raw.flatMap((r) => recordRef(r) ?? []));
+    return raw.flatMap((r) => toEndedMeeting(r, records) ?? []);
+  } catch (e) {
+    console.error("[reunioes] tela inicial, realizadas:", e);
+    return [];
+  }
+}

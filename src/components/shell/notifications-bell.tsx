@@ -8,12 +8,14 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatDateTime } from "@/lib/activities/time";
-import { reminderPath, type ReminderLinks } from "@/lib/notifications/link";
+import { notificationPath, type ReminderLinks } from "@/lib/notifications/link";
 import { createBrowserClient } from "@/lib/supabase/client";
 
 type Item = {
   id: number;
   title: string;
+  /** Só a reunião sem vínculo mostra o texto: diz qual reunião é. */
+  detail: string | null;
   due_at: string | null;
   read_at: string | null;
   href: string;
@@ -21,21 +23,24 @@ type Item = {
 
 type Raw = {
   id: number;
+  kind: string;
   title: string;
+  body: string | null;
   due_at: string | null;
   read_at: string | null;
   companies: { slug: string } | null;
   activities: ReminderLinks | null;
 };
 
-const SELECT = "id, title, due_at, read_at, companies(slug), activities(deal_id, lead_id, person_id, organization_id)";
+const SELECT = "id, kind, title, body, due_at, read_at, companies(slug), activities(deal_id, lead_id, person_id, organization_id)";
 
 const toItem = (r: Raw): Item => ({
   id: r.id,
   title: r.title,
+  detail: r.kind === "meeting_unlinked" ? r.body : null,
   due_at: r.due_at,
   read_at: r.read_at,
-  href: reminderPath(r.companies?.slug ?? null, r.activities),
+  href: notificationPath(r.kind, r.companies?.slug ?? null, r.activities),
 });
 
 export function NotificationsBell() {
@@ -77,7 +82,7 @@ export function NotificationsBell() {
             void load().then((list) => {
               if (payload.eventType !== "INSERT" || row.id === undefined) return;
               const href = list?.find((i) => i.id === row.id)?.href;
-              toast(row.title ?? "Lembrete", {
+              toast(row.title ?? "Notificação", {
                 action: href ? { label: "Abrir", onClick: () => router.push(href) } : undefined,
               });
             });
@@ -138,6 +143,7 @@ export function NotificationsBell() {
                   className="flex flex-col gap-0.5 px-3 py-2 text-sm hover:bg-accent"
                 >
                   <span className={n.read_at ? "text-muted-foreground" : "font-medium"}>{n.title}</span>
+                  {n.detail && <span className="text-xs text-muted-foreground">{n.detail}</span>}
                   {n.due_at && <span className="text-xs text-muted-foreground">{formatDateTime(n.due_at)}</span>}
                 </Link>
               </li>

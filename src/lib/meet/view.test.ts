@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { validateEdited } from "./decisions";
-import { describeNextStep, describeSuggestion, FORM_FIELDS, formatIsoDate, formValuesFor, payloadFromForm, SUGGESTION_LABELS } from "./view";
+import {
+  describeNextStep,
+  describeSuggestion,
+  FORM_FIELDS,
+  formatIsoDate,
+  formValuesFor,
+  isPendingOverdue,
+  MEETING_TABS,
+  meetingSituation,
+  parseMeetingTab,
+  payloadFromForm,
+  SUGGESTION_LABELS,
+} from "./view";
 
 describe("formatIsoDate", () => {
   it("AAAA-MM-DD vira DD/MM/AAAA", () => {
@@ -95,5 +107,50 @@ describe("describeNextStep", () => {
   });
   it("prazo fora do formato AAAA-MM-DD é mostrado como veio", () => {
     expect(describeNextStep({ what: "Ligar", owner: "", due: "semana que vem" })).toBe("Ligar (até semana que vem)");
+  });
+});
+
+describe("parseMeetingTab", () => {
+  it("aceita as chaves das abas", () => {
+    expect(parseMeetingTab("pendentes")).toBe("pendentes");
+    expect(parseMeetingTab("sem-vinculo")).toBe("sem-vinculo");
+    expect(parseMeetingTab("com-erro")).toBe("com-erro");
+    expect(parseMeetingTab("todas")).toBe("todas");
+  });
+  it("valor ausente ou desconhecido cai em Pendentes", () => {
+    expect(parseMeetingTab(undefined)).toBe("pendentes");
+    expect(parseMeetingTab("outra")).toBe("pendentes");
+    expect(parseMeetingTab("")).toBe("pendentes");
+  });
+  it("as abas aparecem na ordem Pendentes, Sem vínculo, Com erro e Todas", () => {
+    expect(MEETING_TABS.map((t) => t.label)).toEqual(["Pendentes", "Sem vínculo", "Com erro", "Todas"]);
+  });
+});
+
+describe("isPendingOverdue", () => {
+  const now = Date.parse("2026-11-06T12:00:00Z");
+  it("pendente há mais de 24 h", () => {
+    expect(isPendingOverdue("2026-11-05T11:59:59Z", now)).toBe(true);
+  });
+  it("exatamente 24 h ainda não é atraso", () => {
+    expect(isPendingOverdue("2026-11-05T12:00:00Z", now)).toBe(false);
+  });
+  it("menos de 24 h e data inválida não destacam", () => {
+    expect(isPendingOverdue("2026-11-06T08:00:00Z", now)).toBe(false);
+    expect(isPendingOverdue("não é data", now)).toBe(false);
+  });
+});
+
+describe("meetingSituation", () => {
+  it("aba calculada tem prioridade sobre o status", () => {
+    expect(meetingSituation("done", "sem-vinculo")).toBe("Sem vínculo");
+    expect(meetingSituation("done", "pendentes")).toBe("Sugestões pendentes");
+  });
+  it("sem aba, o status em português", () => {
+    expect(meetingSituation("done", null)).toBe("Concluída");
+    expect(meetingSituation("waiting_transcript", null)).toBe("Aguardando transcrição");
+    expect(meetingSituation("processing", null)).toBe("Processando");
+    expect(meetingSituation("failed", "com-erro")).toBe("Com erro");
+    expect(meetingSituation("unlinked", "sem-vinculo")).toBe("Sem vínculo");
   });
 });

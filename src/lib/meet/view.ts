@@ -2,7 +2,7 @@
  * Textos e formulário das sugestões do assistente no card (puro, sem banco nem rede: roda no navegador).
  * A validação de verdade é a de `decisions.ts`, a mesma que o servidor aplica ao confirmar.
  */
-import { validateEdited, type SuggestionKind } from "./decisions";
+import { validateEdited, type MeetingStatus, type SuggestionKind } from "./decisions";
 
 export const SUGGESTION_LABELS: Record<SuggestionKind, string> = {
   meeting_outcome: "Resultado da reunião",
@@ -77,4 +77,50 @@ export function payloadFromForm(kind: SuggestionKind, values: FormValues): unkno
     due_date: values.due_date ?? "",
     due_time: values.due_time?.trim() ? values.due_time.trim() : null,
   };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Página Reuniões
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Abas calculadas da página Reuniões (ver `meetingTab` em `queries.ts`). */
+export type MeetingTabKey = "pendentes" | "sem-vinculo" | "com-erro";
+export type MeetingListTab = MeetingTabKey | "todas";
+
+export const MEETING_TABS: { key: MeetingListTab; label: string }[] = [
+  { key: "pendentes", label: "Pendentes" },
+  { key: "sem-vinculo", label: "Sem vínculo" },
+  { key: "com-erro", label: "Com erro" },
+  { key: "todas", label: "Todas" },
+];
+
+/** Aba pedida na URL (`?aba=`); ausente ou desconhecida abre Pendentes. */
+export function parseMeetingTab(v: string | null | undefined): MeetingListTab {
+  return MEETING_TABS.find((t) => t.key === v)?.key ?? "pendentes";
+}
+
+/** Sugestão sem resposta há mais disso aparece em destaque para a gestão. */
+export const PENDING_OVERDUE_MS = 24 * 3600_000;
+
+/** Pendente há mais de 24 h (exatamente 24 h ainda não). Data inválida não destaca. */
+export function isPendingOverdue(since: string, nowMs: number): boolean {
+  const t = Date.parse(since);
+  return Number.isFinite(t) && nowMs - t > PENDING_OVERDUE_MS;
+}
+
+const STATUS_LABELS: Record<MeetingStatus, string> = {
+  waiting_transcript: "Aguardando transcrição",
+  processing: "Processando",
+  unlinked: "Sem vínculo",
+  done: "Concluída",
+  failed: "Com erro",
+  ignored: "Descartada",
+};
+
+/** Situação mostrada na lista: a aba calculada (sem vínculo, pendente, erro) vale mais que o status gravado. */
+export function meetingSituation(status: MeetingStatus, tab: MeetingTabKey | null): string {
+  if (tab === "sem-vinculo") return "Sem vínculo";
+  if (tab === "pendentes") return "Sugestões pendentes";
+  if (tab === "com-erro") return "Com erro";
+  return STATUS_LABELS[status];
 }

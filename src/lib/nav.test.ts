@@ -48,6 +48,14 @@ describe("nav", () => {
     expect(scopeCanViewReports("volt", "todas", ["volt"])).toBe(true);
     expect(scopeCanViewReports(null, "todas", ["volt"])).toBe(false);
   });
+  it("reuniões vem logo depois de atividades, com escopo de empresa, e fica habilitada", () => {
+    const keys = NAV_ITEMS.map((i) => i.key);
+    expect(keys.indexOf("reunioes")).toBe(keys.indexOf("atividades") + 1);
+    expect(get("reunioes").scoped).toBe(true);
+    expect(get("reunioes").availableFromPhase).toBe(5);
+    expect(isNavItemEnabled(get("reunioes"), false)).toBe(true);
+    expect(navHref(get("reunioes"), "volt")).toBe("/volt/reunioes");
+  });
   it("configurações só para admin geral", () => {
     expect(isNavItemEnabled(get("configuracoes"), false)).toBe(false);
     expect(isNavItemEnabled(get("configuracoes"), true)).toBe(true);

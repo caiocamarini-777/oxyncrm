@@ -2,15 +2,23 @@ import "server-only";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createServerClient } from "@/lib/supabase/server";
 import type { RecordEntity } from "@/lib/records/types";
-import { getRecordEmailEvents } from "@/lib/gmail/queries";
-import { describeEvent, emailTimelineItem, sortByAtDesc } from "./describe";
+import { activityTimelineItem, describeEvent, sortByAtDesc } from "./describe";
 
 export type TimelineItem = {
   kind: string;
   at: string;
   actorName: string;
   text: string;
+  /** Nota de conclusão da atividade. */
+  detail?: string | null;
   note?: { id: string; body: string; canEdit: boolean };
+};
+
+const ACTIVITY_COLUMN: Record<RecordEntity, string> = {
+  deals: "deal_id",
+  leads: "lead_id",
+  persons: "person_id",
+  organizations: "organization_id",
 };
 
 function fail(what: string, error: { message: string; code?: string }): never {
@@ -18,11 +26,15 @@ function fail(what: string, error: { message: string; code?: string }): never {
   throw new Error(`Falha ao carregar a linha do tempo (${what}).`);
 }
 
-/** Eventos e anotações do registro, mais recente primeiro. */
+/**
+ * Histórico do registro, mais recente primeiro: eventos, anotações e atividades concluídas. Anotações e
+ * atividades vêm das próprias tabelas (as importadas do Pipedrive não têm evento). Os e-mails entram como
+ * conversas no RecordHistory.
+ */
 export async function getTimeline(entity: RecordEntity, recordId: string): Promise<TimelineItem[]> {
   const supabase = await createServerClient();
   const profile = await getCurrentProfile();
-  const [events, notes, emails] = await Promise.all([
+  const [events, notes, done] = await Promise.all([
     supabase
       .from("timeline_events")
       .select("id, kind, actor_id, data, created_at")
@@ -37,14 +49,30 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
       .eq("entity", entity)
       .eq("record_id", recordId)
       .is("deleted_at", null),
-    // Se a parte de e-mail falhar, o card segue sem os e-mails na linha do tempo.
-    getRecordEmailEvents(entity, recordId, 200).catch((e: unknown) => {
-      console.error("[timeline] e-mails:", e);
-      return [] as Awaited<ReturnType<typeof getRecordEmailEvents>>;
-    }),
+    supabase
+      .from("activities")
+      .select("id, subject, owner_id, completed_at, due_at, created_at, meeting_outcome, completion_note, type:activity_types(name)")
+      .eq(ACTIVITY_COLUMN[entity], recordId)
+      .eq("done", true)
+      .is("deleted_at", null)
+      .order("completed_at", { ascending: false, nullsFirst: false })
+      .limit(300),
   ]);
   if (events.error) fail("eventos", events.error);
   if (notes.error) fail("anotações", notes.error);
+  if (done.error) fail("atividades concluídas", done.error);
+  type DoneRow = {
+    id: string;
+    subject: string;
+    owner_id: string | null;
+    completed_at: string | null;
+    due_at: string | null;
+    created_at: string;
+    meeting_outcome: string | null;
+    completion_note: string | null;
+    type: { name: string } | { name: string }[] | null;
+  };
+  const doneRows = (done.data ?? []) as unknown as DoneRow[];
 
   const ids = new Set<string>();
   const reasonIds = new Set<string>();
@@ -55,14 +83,15 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     const d = (e.data ?? {}) as Record<string, unknown>;
     for (const k of ["from", "to"]) if (e.kind === "owner_changed" && typeof d[k] === "string") ids.add(d[k] as string);
     if (typeof d.reason_id === "string") reasonIds.add(d.reason_id);
-    if ((e.kind === "activity_scheduled" || e.kind === "activity_completed") && typeof d.activity_id === "string") {
+    if (e.kind === "activity_scheduled" && typeof d.activity_id === "string") {
       activityIds.add(d.activity_id);
     }
     if (e.kind === "stage_changed") {
       for (const k of ["from", "to"]) if (typeof d[k] === "string") stageIds.add(d[k] as string);
     }
   }
-  for (const n of notes.data) ids.add(n.created_by);
+  for (const n of notes.data) if (n.created_by) ids.add(n.created_by);
+  for (const a of doneRows) if (a.owner_id) ids.add(a.owner_id);
 
   const names: Record<string, string> = {};
   if (ids.size > 0) {
@@ -97,29 +126,26 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     }
   }
 
-  const noteMap = new Map(notes.data.map((n) => [n.id, n]));
   const items: TimelineItem[] = [];
   for (const e of events.data) {
+    // Anotações e atividades concluídas entram pelas tabelas, abaixo (sem duplicar com o evento).
+    if (e.kind === "note_added" || e.kind === "activity_completed") continue;
     const data = (e.data ?? {}) as Record<string, unknown>;
     const actorName = e.actor_id ? (names[e.actor_id] ?? "Alguém") : "Sistema";
-    if (e.kind === "note_added") {
-      const n = noteMap.get(String(data.note_id));
-      if (!n) continue; // nota excluída ou removida
-      items.push({
-        kind: "note",
-        at: e.created_at,
-        actorName,
-        text: "",
-        note: {
-          id: n.id,
-          body: n.body,
-          canEdit: n.created_by === profile?.id || Boolean(profile?.isSuperAdmin),
-        },
-      });
-      continue;
-    }
     items.push({ kind: e.kind, at: e.created_at, actorName, text: describeEvent({ kind: e.kind, entity, data }, names) });
   }
-  for (const m of emails) items.push(emailTimelineItem(m));
+  for (const n of notes.data) {
+    items.push({
+      kind: "note",
+      at: n.created_at,
+      actorName: (n.created_by && names[n.created_by]) || "Alguém",
+      text: "",
+      note: { id: n.id, body: n.body, canEdit: n.created_by === profile?.id || Boolean(profile?.isSuperAdmin) },
+    });
+  }
+  for (const a of doneRows) {
+    const t = Array.isArray(a.type) ? a.type[0] : a.type;
+    items.push(activityTimelineItem({ ...a, typeName: t?.name ?? null, ownerName: a.owner_id ? (names[a.owner_id] ?? null) : null }));
+  }
   return sortByAtDesc(items);
 }

@@ -1,7 +1,9 @@
 import type { GmailThread } from "./client";
 import { parseGmailMessage, type GmailMessage, type ParsedMessage } from "./parse";
 import { directionOf, skipByLabels } from "./sync-core";
-import type { ThreadMessageView } from "./thread-view";
+import { decodeSnippet, type ThreadMessageView } from "./thread-view";
+
+export { decodeSnippet };
 
 // Formas puras (sem rede nem banco) do módulo E-mail ao vivo.
 
@@ -21,17 +23,6 @@ export type LiveThreadSummary = {
   messageCount: number;
 };
 
-/** O trecho do Gmail vem com entidades HTML (`&#39;`, `&amp;`...). */
-export function decodeSnippet(s: string): string {
-  return s
-    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&");
-}
 
 const REPLY_PREFIX = /^\s*((re|res|enc|fw|fwd|aw|wg)\s*:\s*)+/i;
 
@@ -115,7 +106,7 @@ export function toMessageView(p: ParsedMessage, accountEmail: string): ThreadMes
     to: p.to,
     cc: p.cc,
     sentAt: p.sentAt,
-    snippet: p.snippet,
+    snippet: decodeSnippet(p.snippet),
     bodyHtml: p.html,
     bodyText: p.text,
     attachments: p.attachments.map((a) => ({ filename: a.filename || "(sem nome)" })),

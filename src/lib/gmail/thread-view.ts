@@ -5,6 +5,18 @@ import type { Address } from "./addresses";
  * A lista leva só metadados e trecho; o corpo é buscado ao abrir a mensagem (`getEmailMessageBody`).
  */
 
+/** O trecho do Gmail vem com entidades HTML (`&#39;`, `&amp;`...). */
+export function decodeSnippet(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
 export type ThreadMessageView = {
   id: string;
   gmailMessageId: string;
@@ -115,7 +127,7 @@ export function buildRecordThreads(input: {
       to: addresses(m.to),
       cc: addresses(m.cc),
       sentAt: m.sent_at,
-      snippet: m.snippet,
+      snippet: decodeSnippet(m.snippet),
       attachments: attachmentNames(m.attachments),
       direction: m.direction,
     }));
@@ -151,6 +163,33 @@ export function threadParticipants(messages: ThreadMessageView[], max = 3): stri
   const names = [...seen.values()];
   if (names.length <= max) return names.join(", ");
   return `${names.slice(0, max).join(", ")} e mais ${names.length - max}`;
+}
+
+export type ThreadSummary = {
+  /** Quem mandou a última mensagem e para quem (até 2 nomes, depois "e mais N"). */
+  from: string;
+  to: string;
+  messages: number;
+  attachments: number;
+  at: string;
+  snippet: string;
+  direction: "in" | "out";
+};
+
+/** Resumo do card da conversa no histórico, a partir da última mensagem. */
+export function threadSummary(thread: RecordThread): ThreadSummary {
+  const last = thread.messages[thread.messages.length - 1];
+  const label = (a: { email: string; name: string | null }) => a.name?.trim() || a.email;
+  const to = (last?.to ?? []).map(label);
+  return {
+    from: last ? label({ email: last.fromEmail, name: last.fromName }) : "",
+    to: to.length <= 2 ? to.join(", ") : `${to.slice(0, 2).join(", ")} e mais ${to.length - 2}`,
+    messages: thread.messages.length,
+    attachments: thread.messages.reduce((n, m) => n + m.attachments.length, 0),
+    at: thread.lastMessageAt ?? last?.sentAt ?? "",
+    snippet: last?.snippet ?? "",
+    direction: last?.direction ?? "in",
+  };
 }
 
 /** "Nome <e-mail>" ou só o e-mail. */

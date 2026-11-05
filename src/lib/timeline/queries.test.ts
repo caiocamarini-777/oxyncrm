@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeEvent, emailTimelineItem, joinList, linkify, sortByAtDesc } from "./describe";
+import { activityTimelineItem, describeEvent, joinList, linkify, noteText, sortByAtDesc, timelineCategory } from "./describe";
 
 const names = { u1: "Ana", u2: "Bruno", r1: "Sem orçamento" };
 
@@ -85,22 +85,66 @@ describe("describeEvent com nomes de atividade (como monta timeline/queries)", (
   });
 });
 
-describe("emailTimelineItem", () => {
-  const base = { fromEmail: "ana@x.com", fromName: "Ana", subject: "Proposta", sentAt: "2026-05-01T12:00:00Z" };
-  it("recebido usa o nome do remetente", () => {
-    expect(emailTimelineItem({ ...base, direction: "in" })).toEqual({
-      kind: "email_in",
-      at: "2026-05-01T12:00:00Z",
-      actorName: "Ana",
-      text: "E-mail recebido: Proposta",
+describe("timelineCategory", () => {
+  it("separa anotações, atividades e alterações", () => {
+    expect(timelineCategory("note")).toBe("note");
+    expect(timelineCategory("activity_scheduled")).toBe("activity");
+    expect(timelineCategory("activity_completed")).toBe("activity");
+    expect(timelineCategory("stage_changed")).toBe("change");
+    expect(timelineCategory("updated")).toBe("change");
+    expect(timelineCategory("algo_novo")).toBe("change");
+  });
+});
+
+describe("activityTimelineItem", () => {
+  const base = {
+    id: "a1",
+    subject: "Reunião de diagnóstico",
+    typeName: "Reunião",
+    ownerName: "Caio",
+    completed_at: "2026-10-28T15:00:00Z",
+    due_at: "2026-10-28T14:00:00Z",
+    created_at: "2026-10-20T10:00:00Z",
+    meeting_outcome: "held",
+    completion_note: " Cliente pediu proposta ",
+  };
+  it("usa a data de conclusão, o tipo, o resultado e a nota", () => {
+    expect(activityTimelineItem(base)).toEqual({
+      kind: "activity_completed",
+      at: "2026-10-28T15:00:00Z",
+      actorName: "Caio",
+      text: "Reunião: Reunião de diagnóstico (Realizada)",
+      detail: "Cliente pediu proposta",
     });
   });
-  it("enviado, sem nome cai no e-mail e sem assunto avisa", () => {
-    expect(emailTimelineItem({ ...base, direction: "out", fromName: null, subject: " " })).toMatchObject({
-      kind: "email_out",
-      actorName: "ana@x.com",
-      text: "E-mail enviado: (sem assunto)",
+  it("sem conclusão cai no prazo e depois na criação; sem tipo, nota ou resultado fica enxuto", () => {
+    expect(
+      activityTimelineItem({ ...base, completed_at: null, typeName: null, meeting_outcome: null, completion_note: " " }),
+    ).toMatchObject({ at: "2026-10-28T14:00:00Z", text: "Atividade: Reunião de diagnóstico", detail: null });
+    expect(activityTimelineItem({ ...base, completed_at: null, due_at: null, ownerName: null })).toMatchObject({
+      at: "2026-10-20T10:00:00Z",
+      actorName: "Alguém",
     });
+  });
+});
+
+describe("noteText", () => {
+  it("texto simples fica como está", () => {
+    expect(noteText("Ligar amanhã\na < b &amp; c")).toBe("Ligar amanhã\na < b &amp; c");
+  });
+  it("HTML do Pipedrive vira texto com quebras, sem tags e com entidades decodificadas", () => {
+    expect(
+      noteText("Reunião com Bruno&nbsp;(Broto) <div><br></div><div>Próximos passos:</div><ul><li>Proposta</li><li>Visita</li></ul>"),
+    ).toBe("Reunião com Bruno (Broto)\n\nPróximos passos:\n• Proposta\n• Visita");
+    expect(noteText("<b><u>Formulário</u></b><br><br><b>Nome</b><br>Bruno")).toBe("Formulário\n\nNome\nBruno");
+  });
+  it("links: mantém a URL visível para virar link; texto diferente leva a URL entre parênteses", () => {
+    expect(noteText('PROPOSTA -&nbsp;<a href="https://docs.google.com/d/1?a=1&amp;b=2" target="_blank">https://docs.google.com/d/1?a=1&amp;b=2</a>')).toBe(
+      "PROPOSTA - https://docs.google.com/d/1?a=1&b=2",
+    );
+    expect(noteText('Veja <a href="https://x.com/p">a proposta</a> e <a href="mailto:a@b.com">a@b.com</a>')).toBe(
+      "Veja a proposta (https://x.com/p) e a@b.com",
+    );
   });
 });
 

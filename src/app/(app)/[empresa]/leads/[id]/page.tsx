@@ -7,7 +7,7 @@ import { RecordHeader } from "@/components/records/record-header";
 import { RecordLayout } from "@/components/records/record-layout";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
-import { Timeline } from "@/components/records/timeline";
+import { RecordHistory } from "@/components/records/record-history";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
@@ -98,7 +98,7 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
           notes={<NoteComposer entity="leads" recordId={lead.id} />}
           activity={<ActivityTab data={activity} />}
           email={<RecordEmail entity="leads" recordId={lead.id} />}
-          timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
+          timeline={<RecordHistory entity="leads" recordId={lead.id} items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }
     />

@@ -5,7 +5,7 @@ import { RecordHeader } from "@/components/records/record-header";
 import { NoteComposer } from "@/components/records/note-composer";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
-import { Timeline } from "@/components/records/timeline";
+import { RecordHistory } from "@/components/records/record-history";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
@@ -78,7 +78,7 @@ export default async function OrganizationPage({
           notes={<NoteComposer entity="organizations" recordId={organization.id} />}
           activity={<ActivityTab data={activity} />}
           email={<RecordEmail entity="organizations" recordId={organization.id} />}
-          timeline={<Timeline items={timeline} planned={<PlannedList data={activity} />} />}
+          timeline={<RecordHistory entity="organizations" recordId={organization.id} items={timeline} planned={<PlannedList data={activity} />} />}
         />
       }
     />

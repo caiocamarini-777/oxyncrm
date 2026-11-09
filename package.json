@@ -20,6 +20,7 @@
     "sync:pipedrive": "tsx --conditions=react-server scripts/sync-pipedrive.ts",
     "sync:gmail": "tsx --conditions=react-server scripts/sync-gmail.ts",
     "import:pipedrive-etapas": "tsx scripts/import-pipedrive-stage-history.ts",
+    "import:pipedrive-arquivos": "tsx --conditions=react-server scripts/import-pipedrive-files.ts",
     "insights:pipedrive": "tsx scripts/insights-pipedrive.ts"
   },
   "dependencies": {

@@ -76,16 +76,17 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
 
   /**
    * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de REQUEST_TOTAL_MS somando
-   * tentativas e esperas. Nunca inclui headers em erros.
+   * tentativas e esperas. Nunca inclui headers em erros. `read` extrai o corpo de uma resposta 2xx (JSON ou bytes);
+   * se ele falhar, vira PipedriveError sem nova tentativa.
    */
-  async function request(path: string): Promise<Envelope> {
+  async function fetchWithRetry<T>(path: string, accept: string, read: (res: Response) => Promise<T>): Promise<T> {
     const url = `${base}${path}`;
     const deadline = now() + REQUEST_TOTAL_MS;
     for (let attempt = 0; ; attempt++) {
       let res: Response | null = null;
       try {
         res = await doFetch(url, {
-          headers: { "x-api-token": opts.token, accept: "application/json" },
+          headers: { "x-api-token": opts.token, accept },
           signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - now()))),
         });
       } catch {
@@ -98,7 +99,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       const retryable = res === null || res.status === 429 || res.status >= 500;
       if (res && res.ok) {
         try {
-          return (await res.json()) as Envelope;
+          return await read(res);
         } catch {
           throw new PipedriveError(`Resposta inválida do Pipedrive em ${path.split("?")[0]}`, res.status);
         }
@@ -120,6 +121,10 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     }
   }
 
+  function request(path: string): Promise<Envelope> {
+    return fetchWithRetry(path, "application/json", async (res) => (await res.json()) as Envelope);
+  }
+
   async function list<T = PdItem>(path: string): Promise<T[]> {
     const sep = path.includes("?") ? "&" : "?";
     const body = await request(`${path}${sep}limit=500`);
@@ -127,6 +132,20 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   }
 
   return {
+    /** GET genérico (caminho com a query). `nextStart` vem da paginação do Pipedrive, ou `null` se não há mais itens. */
+    async get(path: string): Promise<{ data: unknown; nextStart: number | null }> {
+      const body = await request(path);
+      const pg = body.additional_data?.pagination;
+      const nextStart = pg?.more_items_in_collection && typeof pg.next_start === "number" ? pg.next_start : null;
+      return { data: body.data, nextStart };
+    },
+    /** Baixa um arquivo (bytes) com as mesmas tentativas, esperas e limites das demais chamadas. */
+    download(path: string): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+      return fetchWithRetry(path, "*/*", async (res) => ({
+        bytes: new Uint8Array(await res.arrayBuffer()),
+        contentType: res.headers.get("content-type"),
+      }));
+    },
     async me(): Promise<PdItem> {
       const body = await request("/v1/users/me");
       return (body.data ?? {}) as PdItem;

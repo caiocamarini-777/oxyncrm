@@ -151,6 +151,85 @@ describe("cliente do Pipedrive", () => {
     expect((fetchImpl.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("get devolve data e nextStart da paginação", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        json({ success: true, data: [{ id: 1 }], additional_data: { pagination: { more_items_in_collection: true, next_start: 100 } } }),
+      )
+      .mockResolvedValueOnce(
+        json({ success: true, data: [{ id: 2 }], additional_data: { pagination: { more_items_in_collection: false, next_start: 200 } } }),
+      )
+      .mockResolvedValueOnce(json({ success: true, data: { id: 3 } }));
+    const c = createPipedriveClient({ token: "SEGREDO", baseUrl: "https://x.test", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await c.get("/v1/persons/5/mailMessages?start=0&limit=100")).toEqual({ data: [{ id: 1 }], nextStart: 100 });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("https://x.test/v1/persons/5/mailMessages?start=0&limit=100");
+    expect((init as RequestInit).headers).toMatchObject({ "x-api-token": "SEGREDO" });
+    expect(String(url)).not.toContain("SEGREDO");
+    // sem mais itens: nextStart nulo, mesmo com next_start presente
+    expect(await c.get("/v1/persons/5/mailMessages?start=100&limit=100")).toEqual({ data: [{ id: 2 }], nextStart: null });
+    // sem paginação: nextStart nulo
+    expect(await c.get("/v1/files/9")).toEqual({ data: { id: 3 }, nextStart: null });
+  });
+
+  it("get tenta de novo no 429", async () => {
+    const waits: number[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "1" } }))
+      .mockResolvedValueOnce(json({ success: true, data: [{ id: 1 }] }));
+    const c = createPipedriveClient({
+      token: "t", fetchImpl: fetchImpl as unknown as typeof fetch, sleepImpl: async (ms) => void waits.push(ms),
+    });
+    expect(await c.get("/v1/files?start=0")).toEqual({ data: [{ id: 1 }], nextStart: null });
+    expect(waits).toEqual([1000]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("download devolve os bytes e o content-type", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "application/pdf" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([4])));
+    const c = createPipedriveClient({ token: "SEGREDO", baseUrl: "https://x.test/", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await c.download("/v1/files/7/download");
+    expect(Array.from(out.bytes)).toEqual([1, 2, 3]);
+    expect(out.contentType).toBe("application/pdf");
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("https://x.test/v1/files/7/download");
+    expect((init as RequestInit).headers).toMatchObject({ "x-api-token": "SEGREDO" });
+    // sem content-type na resposta
+    expect((await c.download("/v1/files/8/download")).contentType).toBeNull();
+  });
+
+  it("download lança PipedriveAuthError no 401", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
+    const c = createPipedriveClient({ token: "SEGREDO", fetchImpl: fetchImpl as unknown as typeof fetch, sleepImpl: async () => {} });
+    await expect(c.download("/v1/files/7/download")).rejects.toBeInstanceOf(PipedriveAuthError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("download tenta de novo no 5xx e desiste sem vazar o token", async () => {
+    const waits: number[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([9])));
+    const c = createPipedriveClient({
+      token: "SEGREDO", fetchImpl: fetchImpl as unknown as typeof fetch, sleepImpl: async (ms) => void waits.push(ms),
+    });
+    expect(Array.from((await c.download("/v1/files/7/download")).bytes)).toEqual([9]);
+    expect(waits).toEqual([1000]);
+
+    const sempre500 = vi.fn().mockImplementation(async () => new Response("", { status: 500 }));
+    const c2 = createPipedriveClient({ token: "SEGREDO", fetchImpl: sempre500 as unknown as typeof fetch, sleepImpl: async () => {} });
+    const err = await c2.download("/v1/files/7/download").catch((e) => e);
+    expect(err).toBeInstanceOf(PipedriveError);
+    expect(String(err.message)).not.toContain("SEGREDO");
+    expect(sempre500).toHaveBeenCalledTimes(6);
+  });
+
   it("next_start que não avança cai em start + itens", async () => {
     const fetchImpl = vi
       .fn()

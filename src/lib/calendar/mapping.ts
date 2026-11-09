@@ -141,7 +141,7 @@ export function classifyInbound(
 }
 
 /** Link da videochamada do evento (Meet ou outro), se houver. */
-function meetingLink(ev: CalendarEvent): string | null {
+export function meetingLink(ev: CalendarEvent): string | null {
   if (ev.hangoutLink) return ev.hangoutLink;
   const points = ev.conferenceData?.entryPoints ?? [];
   return (points.find((p) => p.entryPointType === "video" && p.uri) ?? points.find((p) => p.uri))?.uri ?? null;

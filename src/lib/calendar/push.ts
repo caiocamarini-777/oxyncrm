@@ -17,7 +17,7 @@ export type CalendarDeps = { db: SupabaseClient; clientFor(accountId: string): C
 export const MAX_CALENDAR_ATTEMPTS = 3;
 
 /** Escopo de leitura e escrita de eventos que a caixa precisa ter concedido. */
-const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 /** Limite do texto de erro gravado (como o `last_error` das caixas). */
 const MAX_ERROR = 500;
 const MINUTE_MS = 60_000;
@@ -81,7 +81,7 @@ function check(error: { message: string } | null, what: string): void {
 const isGone = (e: unknown) => e instanceof GmailApiError && (e.status === 404 || e.status === 410);
 
 /** Só o booleano `true` liga a Agenda na empresa (como `calendar_sync_enabled` no banco). */
-function calendarEnabled(settings: unknown): boolean {
+export function calendarEnabled(settings: unknown): boolean {
   const sync = (settings as { calendar_sync?: { enabled?: unknown } } | null)?.calendar_sync;
   return sync?.enabled === true;
 }
@@ -137,7 +137,7 @@ async function markSynced(db: SupabaseClient, activityId: string, fields: Calend
 }
 
 /** Token recusado mesmo depois de renovar: a caixa vai para "reconectar", como na sincronização do Gmail. */
-async function markReconnect(db: SupabaseClient, accountId: string, msg: string): Promise<void> {
+export async function markReconnect(db: SupabaseClient, accountId: string, msg: string): Promise<void> {
   const { error } = await db
     .from("email_accounts")
     .update({ status: "reconnect", last_error: msg.slice(0, MAX_ERROR) })

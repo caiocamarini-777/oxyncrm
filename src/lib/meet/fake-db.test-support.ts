@@ -55,6 +55,52 @@ const CALENDAR_FIELDS = [
   "meet_url",
 ];
 
+/** Colunas que `calendar_apply_inbound` grava (horário, título, conclusão, lixeira e vínculo com o evento). */
+const INBOUND_FIELDS = [
+  "subject",
+  "due_at",
+  "duration_minutes",
+  "deleted_at",
+  "done",
+  "completed_at",
+  "meeting_outcome",
+  "calendar_account_id",
+  "calendar_event_id",
+  "calendar_etag",
+  "calendar_state",
+  "meet_url",
+];
+
+/** Colunas que `calendar_insert_inbound` aceita; as demais ficam com o padrão da tabela. */
+const INSERT_INBOUND_FIELDS = [
+  "company_id",
+  "owner_id",
+  "type_id",
+  "channel_id",
+  "subject",
+  "description",
+  "due_at",
+  "duration_minutes",
+  "lead_id",
+  "deal_id",
+  "person_id",
+  "organization_id",
+  "calendar_account_id",
+  "calendar_event_id",
+  "calendar_etag",
+  "calendar_state",
+  "calendar_error",
+  "calendar_attempts",
+  "meet_url",
+];
+
+/** Check `done = (completed_at is not null)` da tabela `activities`. */
+function checkCompletion(row: Row): void {
+  if ((row.done === true) !== (row.completed_at != null)) {
+    throw new Error("violação do check activities: done e completed_at precisam andar juntos");
+  }
+}
+
 /**
  * Funções do banco (`db.rpc`) que os testes usam: recebem as tabelas e os argumentos e devolvem o `data`. O banco
  * falso não tem gatilhos, então a marca de sessão (`oxyn.calendar_inbound`) não tem efeito aqui; quem testa confere
@@ -67,6 +113,46 @@ const RPCS: Record<string, (tables: Tables, args: Row) => unknown> = {
     const fields = (args.p_fields ?? {}) as Row;
     if (row) for (const k of CALENDAR_FIELDS) if (k in fields) row[k] = structuredClone(fields[k]);
     return null;
+  },
+  // Entrada da Agenda numa atividade que existe: mesma regra de chave ausente / null; confere o check de conclusão.
+  calendar_apply_inbound: (tables, args) => {
+    const row = (tables.activities ?? []).find((r) => r.id === args.p_activity);
+    const patch = (args.p_patch ?? {}) as Row;
+    if (!row) return null;
+    const next = { ...row };
+    for (const k of INBOUND_FIELDS) if (k in patch) next[k] = structuredClone(patch[k]);
+    checkCompletion(next);
+    Object.assign(row, next);
+    return null;
+  },
+  // Evento novo da Agenda: insere com os padrões da tabela e devolve o id.
+  calendar_insert_inbound: (tables, args) => {
+    const input = (args.p_row ?? {}) as Row;
+    const row: Row = {
+      id: `ga${++seq}`,
+      source: "google_calendar",
+      created_by: input.owner_id ?? null,
+      description: null,
+      duration_minutes: 30,
+      done: false,
+      completed_at: null,
+      meeting_outcome: null,
+      deleted_at: null,
+      lead_id: null,
+      deal_id: null,
+      person_id: null,
+      organization_id: null,
+      calendar_account_id: null,
+      calendar_event_id: null,
+      calendar_etag: null,
+      calendar_state: "none",
+      calendar_error: null,
+      calendar_attempts: 0,
+      meet_url: null,
+    };
+    for (const k of INSERT_INBOUND_FIELDS) if (k in input && input[k] != null) row[k] = structuredClone(input[k]);
+    (tables.activities ??= []).push(row);
+    return row.id;
   },
 };
 
@@ -86,7 +172,7 @@ const unquote = (s: string) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1
  * `onConflict`/`ignoreDuplicates`, update, delete e o `.or` do lease). Chave única violada devolve 23505.
  * Com `clock`, imita o trigger `set_updated_at` de `meetings` (insert e update gravam a hora do relógio).
  * `.rpc` executa as funções de `RPCS` (função desconhecida devolve o erro PGRST202) e entra no `log` como
- * `{ table: <função>, op: "rpc", values: <argumentos> }`.
+ * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa.
  */
 export function fakeDb(tables: Tables, clock?: () => Date) {
   const log: { table: string; op: string; values?: unknown }[] = [];

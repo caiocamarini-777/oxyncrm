@@ -77,6 +77,10 @@
   - no insert, põe `calendar_state = 'pending'`, `calendar_attempts = 0` e `calendar_error = null`;
   - no update, faz o mesmo quando muda alguma destas colunas: `subject`, `description`, `due_at`, `duration_minutes`, `done`, `meeting_outcome`, `deleted_at`, `owner_id`, `person_id`, `type_id`;
   - mudanças só nas colunas `calendar_*` e `meet_url` não marcam.
+- Funções `security definer` só para o service role (`revoke ... from public, anon, authenticated; grant execute ... to service_role`), todas com `perform set_config('oxyn.calendar_inbound','on', true)` antes de gravar:
+  - `calendar_mark_synced(p_activity uuid, p_fields jsonb) returns void` — grava só as chaves presentes entre `calendar_account_id, calendar_event_id, calendar_etag, calendar_state, calendar_error, calendar_attempts, meet_url`;
+  - `calendar_apply_inbound(p_activity uuid, p_patch jsonb) returns void` — grava só as chaves presentes entre `subject, due_at, duration_minutes, deleted_at, done, completed_at, meeting_outcome, calendar_account_id, calendar_event_id, calendar_etag, calendar_state, meet_url`;
+  - `calendar_insert_inbound(p_row jsonb) returns uuid` — insere a atividade com `source = 'google_calendar'` e `created_by = owner_id`, com as colunas presentes em `p_row` (company_id, owner_id, type_id, channel_id, subject, description, due_at, duration_minutes, lead_id, deal_id, person_id, organization_id, `calendar_*`, meet_url), e devolve o id.
 - **Comentário no topo:** o que é cada coluna e que a entrada grava com `set_config('oxyn.calendar_inbound','on', true)`.
 
 - [ ] **Step 2: Conferir sem aplicar**
@@ -287,7 +291,7 @@ Run: `pnpm vitest run src/lib/calendar/push.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implementar**
 
 - **Leitura:** a atividade vem com o tipo (`is_meeting`), o e-mail principal da pessoa (o primeiro de `persons.emails`, no formato que o banco usa; conferir na tabela) e a URL do registro, que é `{appUrl}/{slug da empresa}/{negocios|leads|contatos/pessoas|contatos/organizacoes}/{id}`, pelo vínculo de maior precedência.
-- **Gravação de volta:** para não disparar o gatilho, usar uma função `calendar_mark_synced(p_activity uuid, p_fields jsonb)`. Ela é `security definer`, só para o service role, faz o `set_config('oxyn.calendar_inbound','on', true)` e grava as colunas `calendar_*` e `meet_url`. Ela entra na migration da Task 1 por um commit extra nesta tarefa, criando uma migration nova `20261111000002_calendar_mark_synced.sql`.
+- **Gravação de volta:** para não disparar o gatilho, usar a RPC `calendar_mark_synced` (Task 1).
 
 - [ ] **Step 4: Rodar e ver passar**
 
@@ -354,7 +358,7 @@ Run: `pnpm vitest run src/lib/calendar/sync.test.ts`. Expected: FAIL.
 
 - [ ] **Step 3: Implementar `sync.ts` e o cron**
 
-- **Gravações com a marca de entrada:** criar, aplicar horário e título, concluir como cancelada, mandar para a lixeira e adotar passam pela função `calendar_apply_inbound(p_activity uuid, p_patch jsonb)`, e a criação por `calendar_insert_inbound(p_row jsonb) returns uuid`. As duas são `security definer`, só para o service role, e fazem o `set_config`. Elas vão numa migration nova, `20261111000003_calendar_inbound.sql`.
+- **Gravações com a marca de entrada:** aplicar horário e título, concluir como cancelada, mandar para a lixeira e adotar usam a RPC `calendar_apply_inbound`; criar usa `calendar_insert_inbound` (as duas da Task 1).
 - **Rota:** igual à de `src/app/api/cron/meet/route.ts`, com `BUDGET_MS = 240_000` e `maxDuration = 300`. `appUrl` vem de `process.env.NEXT_PUBLIC_APP_URL` (conferir o nome usado no projeto) e `clientFor` de `calendarClientForAccount`.
 - **Agendamento:** `vercel.json` ganha `{ "path": "/api/cron/agenda", "schedule": "*/5 * * * *" }`, e `SELF_AUTH` ganha `"/api/cron/agenda"`.
 

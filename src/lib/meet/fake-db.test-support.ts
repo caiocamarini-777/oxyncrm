@@ -44,6 +44,32 @@ const DEFAULTS: Record<string, () => Row> = {
   notifications: () => ({ id: ++seq, read_at: null }),
 };
 
+/** Colunas que `calendar_mark_synced` grava; as demais chaves de `p_fields` são ignoradas, como no banco. */
+const CALENDAR_FIELDS = [
+  "calendar_account_id",
+  "calendar_event_id",
+  "calendar_etag",
+  "calendar_state",
+  "calendar_error",
+  "calendar_attempts",
+  "meet_url",
+];
+
+/**
+ * Funções do banco (`db.rpc`) que os testes usam: recebem as tabelas e os argumentos e devolvem o `data`. O banco
+ * falso não tem gatilhos, então a marca de sessão (`oxyn.calendar_inbound`) não tem efeito aqui; quem testa confere
+ * pelo `log` que a gravação passou pela função.
+ */
+const RPCS: Record<string, (tables: Tables, args: Row) => unknown> = {
+  // Volta do envio à Agenda: só as colunas da Agenda; chave ausente mantém o valor, chave com null grava null.
+  calendar_mark_synced: (tables, args) => {
+    const row = (tables.activities ?? []).find((r) => r.id === args.p_activity);
+    const fields = (args.p_fields ?? {}) as Row;
+    if (row) for (const k of CALENDAR_FIELDS) if (k in fields) row[k] = structuredClone(fields[k]);
+    return null;
+  },
+};
+
 const time = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
 function cmp(a: unknown, b: unknown): number {
   if (typeof a === "number" && typeof b === "number") return a - b;
@@ -59,6 +85,8 @@ const unquote = (s: string) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1
  * construtor de consultas entende o vocabulário que a rodada usa (filtros, ordem, insert, upsert com
  * `onConflict`/`ignoreDuplicates`, update, delete e o `.or` do lease). Chave única violada devolve 23505.
  * Com `clock`, imita o trigger `set_updated_at` de `meetings` (insert e update gravam a hora do relógio).
+ * `.rpc` executa as funções de `RPCS` (função desconhecida devolve o erro PGRST202) e entra no `log` como
+ * `{ table: <função>, op: "rpc", values: <argumentos> }`.
  */
 export function fakeDb(tables: Tables, clock?: () => Date) {
   const log: { table: string; op: string; values?: unknown }[] = [];
@@ -189,6 +217,16 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
         }
       };
       return chain;
+    },
+    rpc(name: string, args: Row = {}) {
+      log.push({ table: name, op: "rpc", values: args });
+      const fn = RPCS[name];
+      if (!fn) return Promise.resolve({ data: null, error: { code: "PGRST202", message: `função ${name} não existe` } });
+      try {
+        return Promise.resolve({ data: fn(tables, args), error: null });
+      } catch (e) {
+        return Promise.reject(e);
+      }
     },
   } as unknown as SupabaseClient;
   return { db, tables, log };

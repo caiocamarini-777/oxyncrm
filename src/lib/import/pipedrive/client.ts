@@ -58,6 +58,20 @@ const REQUEST_TIMEOUT_MS = 30_000;
  */
 export const REQUEST_TOTAL_MS = 90_000;
 
+type FetchMode = {
+  accept: string;
+  /** Teto de cada tentativa. */
+  timeoutMs: number;
+  /** Teto da chamada inteira, somando tentativas e esperas. */
+  totalMs: number;
+  /** Método HTTP (GET quando ausente). */
+  method?: string;
+  /** Corpo já serializado em JSON; manda `content-type: application/json` junto. */
+  body?: string;
+};
+
+const JSON_MODE: FetchMode = { accept: "application/json", timeoutMs: REQUEST_TIMEOUT_MS, totalMs: REQUEST_TOTAL_MS };
+
 /** Retry-After em segundos ou em data HTTP; ms de espera (0 se ausente/inválido). */
 export function retryAfterMs(res: Response, now = Date.now()): number {
   const raw = res.headers.get("retry-after")?.trim();
@@ -75,18 +89,25 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   const now = opts.nowImpl ?? Date.now;
 
   /**
-   * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de REQUEST_TOTAL_MS somando
-   * tentativas e esperas. Nunca inclui headers em erros.
+   * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de `mode.totalMs` somando
+   * tentativas e esperas. Nunca inclui headers em erros. `mode.method` e `mode.body` (JSON) servem às escritas;
+   * `read` extrai o resultado de uma resposta 2xx e, se falhar, vira PipedriveError sem nova tentativa.
    */
-  async function request(path: string): Promise<Envelope> {
+  async function fetchWithRetry<T>(path: string, mode: FetchMode, read: (res: Response) => Promise<T>): Promise<T> {
     const url = `${base}${path}`;
-    const deadline = now() + REQUEST_TOTAL_MS;
+    const deadline = now() + mode.totalMs;
     for (let attempt = 0; ; attempt++) {
       let res: Response | null = null;
       try {
         res = await doFetch(url, {
-          headers: { "x-api-token": opts.token, accept: "application/json" },
-          signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - now()))),
+          method: mode.method ?? "GET",
+          headers: {
+            "x-api-token": opts.token,
+            accept: mode.accept,
+            ...(mode.body !== undefined ? { "content-type": "application/json" } : {}),
+          },
+          ...(mode.body !== undefined ? { body: mode.body } : {}),
+          signal: AbortSignal.timeout(Math.max(1, Math.min(mode.timeoutMs, deadline - now()))),
         });
       } catch {
         res = null;
@@ -98,7 +119,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       const retryable = res === null || res.status === 429 || res.status >= 500;
       if (res && res.ok) {
         try {
-          return (await res.json()) as Envelope;
+          return await read(res);
         } catch {
           throw new PipedriveError(`Resposta inválida do Pipedrive em ${path.split("?")[0]}`, res.status);
         }
@@ -120,6 +141,17 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     }
   }
 
+  function request(path: string): Promise<Envelope> {
+    return fetchWithRetry(path, JSON_MODE, async (res) => (await res.json()) as Envelope);
+  }
+
+  /** Escrita em JSON (POST/PUT/PATCH) com as mesmas tentativas, esperas e tetos da leitura; devolve o `data` do envelope. */
+  async function write(method: "POST" | "PUT" | "PATCH", path: string, body: unknown): Promise<unknown> {
+    const mode: FetchMode = { ...JSON_MODE, method, body: JSON.stringify(body) };
+    const envelope = await fetchWithRetry(path, mode, async (res) => (await res.json()) as Envelope);
+    return envelope.data;
+  }
+
   async function list<T = PdItem>(path: string): Promise<T[]> {
     const sep = path.includes("?") ? "&" : "?";
     const body = await request(`${path}${sep}limit=500`);
@@ -127,6 +159,20 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   }
 
   return {
+    post: (path: string, body: unknown): Promise<unknown> => write("POST", path, body),
+    put: (path: string, body: unknown): Promise<unknown> => write("PUT", path, body),
+    patch: (path: string, body: unknown): Promise<unknown> => write("PATCH", path, body),
+    /** DELETE com as mesmas tentativas; 404 não é erro (o registro já foi apagado). O corpo da resposta é ignorado. */
+    async del(path: string): Promise<void> {
+      try {
+        await fetchWithRetry(path, { ...JSON_MODE, method: "DELETE" }, async (res) => {
+          await res.body?.cancel().catch(() => {});
+        });
+      } catch (e) {
+        if (e instanceof PipedriveError && e.status === 404) return;
+        throw e;
+      }
+    },
     async me(): Promise<PdItem> {
       const body = await request("/v1/users/me");
       return (body.data ?? {}) as PdItem;

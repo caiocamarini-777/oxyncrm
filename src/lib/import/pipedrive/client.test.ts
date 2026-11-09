@@ -159,4 +159,169 @@ describe("cliente do Pipedrive", () => {
     expect((await c.page("persons", 10, 2)).nextStart).toBe(12);
     expect((await c.page("persons", 20, 2)).nextStart).toBe(22);
   });
+
+  describe("escritas", () => {
+    const mk = (fetchImpl: unknown, extra: Partial<Parameters<typeof createPipedriveClient>[0]> = {}) =>
+      createPipedriveClient({
+        token: "SEGREDO", baseUrl: "https://x.test/", fetchImpl: fetchImpl as typeof fetch, sleepImpl: async () => {}, ...extra,
+      });
+
+    it("post, put e patch mandam método, JSON e headers certos e devolvem o data do envelope", async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(json({ success: true, data: { id: 10 } }, { status: 201 }))
+        .mockResolvedValueOnce(json({ success: true, data: { id: 10, name: "B" } }))
+        .mockResolvedValueOnce(json({ success: true, data: { id: "uuid" } }));
+      const c = mk(fetchImpl);
+      expect(await c.post("/v1/persons", { name: "A", email: ["a@x.com"] })).toEqual({ id: 10 });
+      expect(await c.put("/v1/persons/10", { name: "B" })).toEqual({ id: 10, name: "B" });
+      expect(await c.patch("/v1/leads/uuid", { title: "L" })).toEqual({ id: "uuid" });
+
+      const calls = fetchImpl.mock.calls.map(([url, init]) => [url, init as RequestInit]);
+      expect(calls.map(([url, init]) => [init.method, url])).toEqual([
+        ["POST", "https://x.test/v1/persons"],
+        ["PUT", "https://x.test/v1/persons/10"],
+        ["PATCH", "https://x.test/v1/leads/uuid"],
+      ]);
+      expect(calls.map(([, init]) => init.body)).toEqual([
+        JSON.stringify({ name: "A", email: ["a@x.com"] }),
+        JSON.stringify({ name: "B" }),
+        JSON.stringify({ title: "L" }),
+      ]);
+      for (const [url, init] of calls) {
+        expect(init.headers).toMatchObject({
+          "x-api-token": "SEGREDO", "content-type": "application/json", accept: "application/json",
+        });
+        expect(String(url)).not.toContain("SEGREDO");
+        expect(init.signal).toBeInstanceOf(AbortSignal);
+      }
+    });
+
+    it("data ausente no envelope vira undefined", async () => {
+      const c = mk(vi.fn().mockResolvedValue(json({ success: true })));
+      expect(await c.post("/v1/notes", { content: "x" })).toBeUndefined();
+    });
+
+    it("429 com Retry-After e depois 200: espera, repete o mesmo corpo e dá sucesso", async () => {
+      const waits: number[] = [];
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "3" } }))
+        .mockResolvedValueOnce(new Response("", { status: 503 }))
+        .mockResolvedValueOnce(json({ data: { id: 7 } }));
+      const c = mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) });
+      expect(await c.post("/v1/deals", { title: "N" })).toEqual({ id: 7 });
+      expect(waits).toEqual([3000, 2000]);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      for (const [, init] of fetchImpl.mock.calls) {
+        expect((init as RequestInit).method).toBe("POST");
+        expect((init as RequestInit).body).toBe(JSON.stringify({ title: "N" }));
+      }
+    });
+
+    it("401 em qualquer escrita vira PipedriveAuthError sem tentar de novo", async () => {
+      for (const call of [
+        (c: ReturnType<typeof mk>) => c.post("/v1/persons", {}),
+        (c: ReturnType<typeof mk>) => c.put("/v1/persons/1", {}),
+        (c: ReturnType<typeof mk>) => c.patch("/v1/leads/u", {}),
+        (c: ReturnType<typeof mk>) => c.del("/v1/persons/1"),
+      ]) {
+        const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
+        await expect(call(mk(fetchImpl))).rejects.toBeInstanceOf(PipedriveAuthError);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("erro 4xx não repete, leva o status e não vaza token nem corpo", async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(new Response("segredo no corpo", { status: 400 }));
+      const err = (await mk(fetchImpl).post("/v1/persons?x=1", { name: "A" }).catch((e: unknown) => e)) as PipedriveError;
+      expect(err).toBeInstanceOf(PipedriveError);
+      expect(err.status).toBe(400);
+      expect(String(err.message)).toContain("/v1/persons");
+      expect(String(err.message)).not.toContain("SEGREDO");
+      expect(String(err.message)).not.toContain("segredo no corpo");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("escrita desiste após 5 novas tentativas no 5xx, mesmas esperas da leitura", async () => {
+      const waits: number[] = [];
+      const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
+      const c = mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) });
+      await expect(c.put("/v1/deals/1", { title: "x" })).rejects.toBeInstanceOf(PipedriveError);
+      expect(waits).toEqual([1000, 2000, 4000, 8000, 16000]);
+      expect(fetchImpl).toHaveBeenCalledTimes(6);
+    });
+
+    it("escrita respeita o teto total de 90 s", async () => {
+      let clock = 0;
+      const waits: number[] = [];
+      const fetchImpl = vi.fn().mockImplementation(async () => {
+        clock += 20_000;
+        return new Response("", { status: 503 });
+      });
+      const c = mk(fetchImpl, {
+        nowImpl: () => clock,
+        sleepImpl: async (ms) => {
+          waits.push(ms);
+          clock += ms;
+        },
+      });
+      await expect(c.post("/v1/notes", { content: "x" })).rejects.toBeInstanceOf(PipedriveError);
+      expect(clock).toBeLessThanOrEqual(REQUEST_TOTAL_MS);
+      expect(waits).toEqual([1000, 2000, 4000]);
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+    });
+
+    it("del usa DELETE sem corpo nem content-type e devolve void", async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(json({ success: true, data: { id: 5 } }));
+      expect(await mk(fetchImpl).del("/v1/persons/5")).toBeUndefined();
+      const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://x.test/v1/persons/5");
+      expect(init.method).toBe("DELETE");
+      expect(init.body).toBeUndefined();
+      expect(init.headers).toMatchObject({ "x-api-token": "SEGREDO" });
+      expect(init.headers).not.toHaveProperty("content-type");
+    });
+
+    it("del tolera corpo vazio ou fora do padrão em 2xx", async () => {
+      for (const res of [() => new Response(null, { status: 204 }), () => new Response("não é json", { status: 200 })]) {
+        const fetchImpl = vi.fn().mockImplementation(async () => res());
+        await expect(mk(fetchImpl).del("/v1/notes/1")).resolves.toBeUndefined();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("404 no del não lança (já apagado) e não repete", async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 404 }));
+      await expect(mk(fetchImpl).del("/v1/persons/9")).resolves.toBeUndefined();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("404 em post, put e patch continua sendo erro", async () => {
+      for (const call of [
+        (c: ReturnType<typeof mk>) => c.post("/v1/x", {}),
+        (c: ReturnType<typeof mk>) => c.put("/v1/x/1", {}),
+        (c: ReturnType<typeof mk>) => c.patch("/v1/x/1", {}),
+      ]) {
+        const err = await call(mk(vi.fn().mockResolvedValue(new Response("", { status: 404 })))).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(PipedriveError);
+        expect((err as PipedriveError).status).toBe(404);
+      }
+    });
+
+    it("del repete em 429 e em erro de rede, e outros erros (500 esgotado, 403) continuam lançando", async () => {
+      const waits: number[] = [];
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "2" } }))
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce(json({ data: { id: 1 } }));
+      await mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) }).del("/v1/deals/1");
+      expect(waits).toEqual([2000, 2000]);
+
+      const forbidden = vi.fn().mockResolvedValue(new Response("", { status: 403 }));
+      await expect(mk(forbidden).del("/v1/deals/1")).rejects.toMatchObject({ status: 403 });
+      expect(forbidden).toHaveBeenCalledTimes(1);
+    });
+  });
 });

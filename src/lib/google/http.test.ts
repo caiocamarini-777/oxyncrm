@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { GmailApiError, GmailNetworkError } from "@/lib/gmail/client";
-import { buildUrl, googleRequest } from "./http";
+import { GmailApiError, GmailNetworkError, GmailRateLimitError } from "@/lib/gmail/client";
+import { buildUrl, googleRequest, isRateLimit } from "./http";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -67,5 +67,30 @@ describe("googleRequest", () => {
     await expect(googleRequest(token, "https://x.test/a")).rejects.toMatchObject({ status: 404, message: "nada" });
     fetchMock.mockResolvedValueOnce(json(404, {}));
     await expect(googleRequest(token, "https://x.test/a")).rejects.toBeInstanceOf(GmailApiError);
+  });
+});
+
+describe("isRateLimit", () => {
+  const forbidden = (reason: string) => ({ error: { code: 403, errors: [{ reason }] } });
+
+  it("429 e 403 por limite de uso (inclusive a cota diária da Agenda) contam como limite", () => {
+    expect(isRateLimit(429, null)).toBe(true);
+    expect(isRateLimit(403, forbidden("rateLimitExceeded"))).toBe(true);
+    expect(isRateLimit(403, forbidden("userRateLimitExceeded"))).toBe(true);
+    expect(isRateLimit(403, forbidden("quotaExceeded"))).toBe(true);
+    expect(isRateLimit(403, { error: { status: "RESOURCE_EXHAUSTED" } })).toBe(true);
+  });
+
+  it("403 por permissão não é limite", () => {
+    expect(isRateLimit(403, forbidden("forbidden"))).toBe(false);
+    expect(isRateLimit(403, null)).toBe(false);
+    expect(isRateLimit(400, forbidden("quotaExceeded"))).toBe(false);
+  });
+
+  it("o 403 quotaExceeded vira GmailRateLimitError (adiar, não erro)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      json(403, { error: { code: 403, message: "Calendar usage limits exceeded.", errors: [{ domain: "usageLimits", reason: "quotaExceeded" }] } }),
+    );
+    await expect(googleRequest(async () => "tok", "https://x.test/a")).rejects.toBeInstanceOf(GmailRateLimitError);
   });
 });

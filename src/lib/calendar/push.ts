@@ -6,7 +6,11 @@ import { recordHref, type RecordEntity } from "@/lib/records/types";
 import type { CalendarClient, CalendarEvent } from "./google";
 import {
   activityToEvent,
+  calendarEventId,
   DEFAULT_MINUTES,
+  eventGuests,
+  FROM_CALENDAR,
+  meetingLink,
   outboundOp,
   primaryEmail,
   wantsInvite,
@@ -59,12 +63,17 @@ type ActivityRow = {
   calendar_event_id: string | null;
   calendar_state: string;
   calendar_attempts: number;
+  source: string;
+  meet_url: string | null;
+  calendar_invited_email: string | null;
+  calendar_generation: number;
+  calendar_is_organizer: boolean | null;
 };
 
 const ACTIVITY_COLUMNS =
   "id, company_id, owner_id, type_id, person_id, deal_id, lead_id, organization_id, subject, description, due_at, " +
   "duration_minutes, done, meeting_outcome, deleted_at, updated_at, calendar_account_id, calendar_event_id, " +
-  "calendar_state, calendar_attempts";
+  "calendar_state, calendar_attempts, source, meet_url, calendar_invited_email, calendar_generation, calendar_is_organizer";
 
 /** Colunas que `calendar_mark_synced` grava (chave ausente mantém o valor). */
 type CalendarFields = {
@@ -75,9 +84,19 @@ type CalendarFields = {
   calendar_error?: string | null;
   calendar_attempts?: number;
   meet_url?: string | null;
+  calendar_invited_email?: string | null;
+  calendar_generation?: number;
 };
 
 const IN_SYNC: CalendarFields = { calendar_state: "synced", calendar_error: null, calendar_attempts: 0 };
+/** Vínculo desfeito: a atividade fica sem evento (o próximo envio, se houver, cria outro). */
+const UNLINKED: CalendarFields = {
+  calendar_account_id: null,
+  calendar_event_id: null,
+  calendar_etag: null,
+  meet_url: null,
+  calendar_invited_email: null,
+};
 
 /** Erro do banco: sobe para quem chamou (não é falha do Google, não vira `calendar_state = 'error'`). */
 class CalendarDbError extends Error {
@@ -93,6 +112,10 @@ function check(error: { message: string } | null, what: string): void {
 
 /** O evento não existe mais no Google (apagado de vez): o `patch` responde 404 ou 410. */
 const isGone = (e: unknown) => e instanceof GmailApiError && (e.status === 404 || e.status === 410);
+/** Já existe evento com o id enviado na criação. */
+const isConflict = (e: unknown) => e instanceof GmailApiError && e.status === 409;
+const sameEmail = (a: string | null | undefined, b: string | null | undefined) =>
+  !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /** URL do registro da atividade no CRM, pelo vínculo de maior precedência (negócio, lead, pessoa, organização). */
 function recordUrl(appUrl: string, slug: string | null, r: ActivityRow): string | null {
@@ -106,6 +129,24 @@ function recordUrl(appUrl: string, slug: string | null, r: ActivityRow): string 
   ];
   const link = links.find(([, id]) => id);
   return link ? `${base}${recordHref(link[0], slug, link[1]!)}` : null;
+}
+
+/**
+ * E-mail de quem a reunião convida: a pessoa da atividade; sem pessoa, a do negócio, senão a do lead. Vale para o
+ * convite, para o aviso de cancelamento e para o aviso do formulário (mesma regra).
+ */
+async function inviteeEmail(db: SupabaseClient, r: ActivityRow): Promise<string | null> {
+  let personId = r.person_id;
+  for (const [table, id] of [
+    ["deals", r.deal_id],
+    ["leads", r.lead_id],
+  ] as const) {
+    if (personId || !id) continue;
+    const { data, error } = await db.from(table).select("person_id").eq("id", id).maybeSingle();
+    check(error, table === "deals" ? "ler a pessoa do negócio" : "ler a pessoa do lead");
+    personId = (data as { person_id: string | null } | null)?.person_id ?? null;
+  }
+  return personEmail(db, personId);
 }
 
 async function personEmail(db: SupabaseClient, personId: string | null): Promise<string | null> {
@@ -184,11 +225,15 @@ export async function calendarAccountFor(
  *   na atividade concluída.
  * - `error`: o Google recusou. Grava a mensagem e conta a tentativa (o cron reenvia até `MAX_CALENDAR_ATTEMPTS`).
  *
- * Convidados e Meet só entram na criação; a atualização não mexe neles. Convite e avisos ao cliente
- * (`sendUpdates: "all"`) só valem para reunião que ainda não terminou, e nunca com `invite: false` (primeira rodada).
- * Evento apagado de vez no Google (404/410 no `patch`) é criado de novo, porque a atividade continua aberta.
- * Lança só por erro do banco. Se a gravação de volta falhar depois de criar o evento, ele fica na Agenda sem vínculo
- * (leva `oxynActivityId` nas propriedades privadas).
+ * Convidados e Meet entram na criação e, na atualização, só quando a reunião passa a convidar alguém que o evento
+ * ainda não convidou (pessoa escolhida depois, tipo trocado para reunião): o cliente entra nos convidados que o evento
+ * já tem, sem tirar ninguém. Convite e avisos ao cliente (`sendUpdates: "all"`) só valem para reunião que ainda não
+ * terminou, e nunca com `invite: false` (primeira rodada). Evento com convidado leva só o título (`activityToEvent`).
+ * A criação manda o id do evento (`calendarEventId`): repetida, responde 409 e o evento que já existe é religado.
+ * Evento apagado de vez no Google (404/410 no `patch`) é criado de novo, com a geração seguinte do id, porque a
+ * atividade continua aberta. Evento que nasceu na Agenda nunca é apagado nem criado: a lixeira e a conclusão só
+ * desfazem o vínculo (`outboundOp`). Lança só por erro do banco. Se a gravação de volta falhar depois de criar o
+ * evento, ele fica na Agenda sem vínculo (leva `oxynActivityId` e o id determinístico: o próximo envio o religa).
  */
 export async function pushActivity(
   deps: CalendarDeps,
@@ -208,7 +253,7 @@ export async function pushActivity(
   // Já em dia: a gravação não mudou nada que aparece no evento (o gatilho não a marcou como pendente).
   if (r.calendar_state === "synced") return "skipped";
 
-  const [isMeeting, email] = await Promise.all([isMeetingType(db, r.type_id), personEmail(db, r.person_id)]);
+  const [isMeeting, email] = await Promise.all([isMeetingType(db, r.type_id), inviteeEmail(db, r)]);
   const a: ActivityForCalendar = {
     id: r.id,
     companyId: r.company_id,
@@ -226,17 +271,26 @@ export async function pushActivity(
     calendarEventId: r.calendar_event_id,
     calendarAccountId: r.calendar_account_id,
     updatedAt: r.updated_at,
+    source: r.source,
+    isOrganizer: r.calendar_is_organizer === true,
+    invitedEmail: r.calendar_invited_email,
   };
 
-  const op = outboundOp(a);
+  const now = deps.now();
+  const op = outboundOp(a, now);
   if (op.op === "none") {
     await markSynced(db, a.id, IN_SYNC);
+    return "synced";
+  }
+  // Evento que nasceu na Agenda é do vendedor: a lixeira e a conclusão só desfazem o vínculo, sem chamar o Google.
+  if (op.op === "unlink") {
+    await markSynced(db, a.id, { ...IN_SYNC, ...UNLINKED });
     return "synced";
   }
 
   // Reunião que já terminou (registro de reunião passada) não convida nem avisa o cliente.
   const minutes = a.durationMinutes > 0 ? a.durationMinutes : DEFAULT_MINUTES;
-  const upcoming = Date.parse(a.dueAt) + minutes * MINUTE_MS > deps.now().getTime();
+  const upcoming = Date.parse(a.dueAt) + minutes * MINUTE_MS > now.getTime();
   const notifyClient = opts?.invite !== false && upcoming;
 
   // A apagada (lixeira, cancelada) não escolhe caixa nova nem convida: só desfaz o evento que já existe, então não
@@ -250,12 +304,20 @@ export async function pushActivity(
     target = account;
   }
 
+  // Dono trocado (o evento está noutra caixa). O evento que nasceu na Agenda fica onde está, ligado à atividade.
+  const moving = op.op === "update" && a.calendarAccountId !== target!.id;
+  if (moving && a.source === FROM_CALENDAR) {
+    await markSynced(db, a.id, IN_SYNC);
+    return "synced";
+  }
   // Caixa onde está o evento, quando é preciso apagá-lo lá (lixeira, cancelada ou dono trocado). Sem a linha (caixa
   // desconectada), o evento ficou fora de alcance e só o vínculo é desfeito.
-  const leaving = op.op === "delete" || (op.op === "update" && a.calendarAccountId !== target!.id);
+  const leaving = op.op === "delete" || moving;
   const eventAccount =
     leaving && a.calendarAccountId && (await accountExists(db, a.calendarAccountId)) ? a.calendarAccountId : null;
-  const unlinked: CalendarFields = { calendar_account_id: null, calendar_event_id: null, calendar_etag: null, meet_url: null };
+  // Geração do id do evento: um evento novo para a atividade (depois de apagar o anterior) usa a seguinte, porque o
+  // Google não reaproveita o id de um evento apagado.
+  let generation = r.calendar_generation ?? 0;
 
   let using: string | null = null;
   const calendar = (accountId: string): CalendarClient => {
@@ -268,46 +330,28 @@ export async function pushActivity(
     if (op.op === "delete") {
       const sendUpdates = op.notify && notifyClient ? "all" : "none";
       if (eventAccount) await calendar(eventAccount).deleteEvent(a.calendarEventId!, { sendUpdates });
-      fields = { ...IN_SYNC, ...unlinked };
+      fields = { ...IN_SYNC, ...UNLINKED, calendar_generation: generation + 1 };
     } else {
       const invite = notifyClient && wantsInvite(a);
       const sendUpdates = invite ? "all" : "none";
-      let patched: CalendarEvent | null = null;
-      if (op.op === "update" && !leaving) {
-        // Atualizar nunca mexe nos convidados nem no Meet (os dois só entram na criação): sem `attendees` e sem
-        // `conferenceData`, o `patch` mantém os do evento. Os convidados que já existem são avisados da mudança.
-        const changes = activityToEvent(a, { invite: false });
-        delete changes.attendees;
-        delete changes.conferenceData;
+      let patched: CalendarFields | null = null;
+      if (op.op === "update" && !moving) {
         try {
-          patched = await calendar(target!.id).patchEvent(a.calendarEventId!, changes, { sendUpdates });
+          patched = await updateEvent(calendar(target!.id), a, r.meet_url, { invite, sendUpdates, selfEmail: target!.email });
         } catch (e) {
           // Evento apagado de vez no Google: a atividade continua aberta, então o evento nasce de novo abaixo.
           if (!isGone(e)) throw e;
+          generation += 1;
         }
-      } else if (op.op === "update" && eventAccount) {
-        // Dono trocado: o evento sai da Agenda da caixa antiga antes de nascer na nova. O vínculo é desfeito já,
-        // para a entrada da caixa antiga não tratar o evento apagado como reunião cancelada se a criação falhar.
-        await calendar(eventAccount).deleteEvent(a.calendarEventId!, { sendUpdates });
-        await markSynced(db, a.id, unlinked);
+      } else if (moving) {
+        // Dono trocado: o vínculo é desfeito antes de apagar o evento na caixa antiga. Assim a entrada dela nunca trata
+        // o evento apagado como reunião cancelada; se a exclusão falhar, o evento fica sem vínculo na Agenda antiga.
+        generation += 1;
+        await markSynced(db, a.id, { ...UNLINKED, calendar_generation: generation });
+        if (eventAccount) await calendar(eventAccount).deleteEvent(a.calendarEventId!, { sendUpdates });
       }
-      if (patched) {
-        fields = { ...IN_SYNC, calendar_etag: patched.etag ?? null };
-        // Sem link no retorno, o que já estava gravado continua.
-        if (patched.hangoutLink) fields.meet_url = patched.hangoutLink;
-      } else {
-        const created = await calendar(target!.id).insertEvent(activityToEvent(a, { invite }), {
-          sendUpdates,
-          withMeet: invite,
-        });
-        fields = {
-          ...IN_SYNC,
-          calendar_account_id: target!.id,
-          calendar_event_id: created.id,
-          calendar_etag: created.etag ?? null,
-          meet_url: created.hangoutLink ?? null,
-        };
-      }
+      fields =
+        patched ?? (await createEvent(calendar(target!.id), a, { invite, sendUpdates, generation, accountId: target!.id }));
     }
   } catch (e) {
     if (e instanceof CalendarDbError) throw e;
@@ -316,6 +360,82 @@ export async function pushActivity(
 
   await markSynced(db, a.id, fields);
   return "synced";
+}
+
+/**
+ * Atualiza o evento ligado. Convidados e Meet ficam como estão, a não ser que a reunião passe a convidar alguém que o
+ * evento ainda não convidou: aí o evento é lido, o cliente entra nos convidados que ele já tem (sem tirar ninguém),
+ * o Meet é pedido se ainda não houver, e a descrição interna que o CRM pôs no evento sem convidados sai.
+ */
+async function updateEvent(
+  cal: CalendarClient,
+  a: ActivityForCalendar,
+  meetUrl: string | null,
+  o: { invite: boolean; sendUpdates: "all" | "none"; selfEmail: string },
+): Promise<CalendarFields> {
+  const email = a.personEmail?.trim() ?? "";
+  if (o.invite && a.source !== FROM_CALENDAR && email && !sameEmail(email, a.invitedEmail)) {
+    const current = await cal.getEvent(a.calendarEventId!);
+    const changes = activityToEvent(a, { invite: false, guests: true });
+    const attendees = current.attendees ?? [];
+    if (!attendees.some((g) => sameEmail(g.email, email))) changes.attendees = [...attendees, { email }];
+    if (eventGuests(current, o.selfEmail).length === 0) changes.description = "";
+    const link = meetingLink(current);
+    const patched = await cal.patchEvent(a.calendarEventId!, changes, { sendUpdates: "all", withMeet: !meetUrl && !link });
+    const fields: CalendarFields = { ...IN_SYNC, calendar_etag: patched.etag ?? null, calendar_invited_email: email };
+    const newLink = patched.hangoutLink ?? (meetUrl ? null : link);
+    if (newLink) fields.meet_url = newLink;
+    return fields;
+  }
+  // Sem `attendees` e sem `conferenceData`, o `patch` mantém os do evento. Os convidados que já existem são avisados.
+  const patched = await cal.patchEvent(a.calendarEventId!, activityToEvent(a, { invite: false }), {
+    sendUpdates: o.sendUpdates,
+  });
+  const fields: CalendarFields = { ...IN_SYNC, calendar_etag: patched.etag ?? null };
+  // Sem link no retorno, o que já estava gravado continua.
+  if (patched.hangoutLink) fields.meet_url = patched.hangoutLink;
+  return fields;
+}
+
+/**
+ * Cria o evento com o id da atividade e da geração. 409 (o id já existe: envio anterior cuja volta se perdeu, ou dois
+ * envios ao mesmo tempo) lê o evento e o trata como criado; se ele foi apagado, cria com a geração seguinte.
+ */
+async function createEvent(
+  cal: CalendarClient,
+  a: ActivityForCalendar,
+  o: { invite: boolean; sendUpdates: "all" | "none"; generation: number; accountId: string },
+): Promise<CalendarFields> {
+  let generation = o.generation;
+  const insert = () =>
+    cal.insertEvent(
+      { ...activityToEvent(a, { invite: o.invite }), id: calendarEventId(a.id, generation) },
+      { sendUpdates: o.sendUpdates, withMeet: o.invite },
+    );
+  let created: CalendarEvent;
+  let invited = o.invite ? a.personEmail!.trim() : null;
+  try {
+    created = await insert();
+  } catch (e) {
+    if (!isConflict(e)) throw e;
+    created = await cal.getEvent(calendarEventId(a.id, generation));
+    if (created.status === "cancelled") {
+      generation += 1;
+      created = await insert();
+    } else {
+      // Criado antes por outro envio: convidado é só quem o evento já tem.
+      invited = (created.attendees ?? []).find((g) => sameEmail(g.email, a.personEmail))?.email.trim() ?? null;
+    }
+  }
+  return {
+    ...IN_SYNC,
+    calendar_account_id: o.accountId,
+    calendar_event_id: created.id,
+    calendar_etag: created.etag ?? null,
+    meet_url: created.hangoutLink ?? null,
+    calendar_invited_email: invited,
+    calendar_generation: generation,
+  };
 }
 
 /**

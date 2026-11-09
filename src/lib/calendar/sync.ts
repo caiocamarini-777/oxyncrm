@@ -8,7 +8,9 @@ import { SyncTokenExpiredError, type CalendarClient, type CalendarEvent } from "
 import {
   classifyInbound,
   DEFAULT_MINUTES,
+  eventGuests,
   eventTimes,
+  isPipedriveEvent,
   meetingLink,
   newActivityFields,
   newerSide,
@@ -19,13 +21,15 @@ import { readCalendarSettings } from "./settings";
 
 /**
  * Rodada da sincronização com a Agenda do Google (cron `/api/cron/agenda`, a cada 5 min). Regras na spec, seções
- * "Entrada", "Ligar na virada" e "Erros". Uma caixa de cada vez, enquanto houver orçamento: as ativas, com o escopo
- * da Agenda, numa empresa (não arquivada) com a Agenda ligada, e com o lease `calendar_lock_until`.
+ * "Entrada", "Ligar na virada" e "Erros". Uma caixa de cada vez, enquanto houver orçamento, a parada há mais tempo
+ * primeiro: as ativas, com o escopo da Agenda, cujo dono é membro de uma empresa (não arquivada) com a Agenda ligada, e
+ * com o lease `calendar_lock_until`.
  *
- * - **Primeira rodada** (`calendar_since` nulo): adota os eventos que o Pipedrive deixou (mesmo início até o minuto e
- *   mesmo título), aplica as regras de entrada ao resto da lista, cria os eventos que faltam **sem convidar** e só então
- *   grava `calendar_since` e o token. Se algo ficou por fazer, nada é gravado e a primeira rodada recomeça na próxima
- *   (é idempotente: o que já foi ligado é reconhecido pelo vínculo).
+ * - **Primeira rodada** (`calendar_since` nulo): adota os eventos que o Pipedrive deixou (início a até 5 min e o mesmo
+ *   título, sem diferenciar maiúsculas, acentos e espaços), aplica as regras de entrada ao resto da lista (o evento do
+ *   Pipedrive que não foi adotado fica de fora), cria os eventos que faltam **sem convidar** e só então grava
+ *   `calendar_since` e o token. Se algo ficou por fazer, nada é gravado e a primeira rodada recomeça na próxima (é
+ *   idempotente: o que já foi ligado é reconhecido pelo vínculo).
  * - **Rodadas seguintes:** lê as mudanças desde o token (410 recomeça a lista a partir de agora, sem adoção), aplica e
  *   grava o token novo; depois envia as pendentes e faz a passada de janela das recorrentes. A entrada vem antes do
  *   envio para religar o evento órfão (criado no Google sem a gravação de volta) antes que o envio crie outro, e para o
@@ -40,6 +44,8 @@ import { readCalendarSettings } from "./settings";
 export const LEASE_MS = 300_000;
 /** Pendente gravada há menos que isto fica com a ação do vendedor, que envia na hora (dois envios criariam dois eventos). */
 export const FRESH_PENDING_MS = 2 * 60_000;
+/** Diferença de início aceita na adoção do evento do Pipedrive (arredondamentos e pequenos ajustes de horário). */
+export const ADOPT_TOLERANCE_MS = 5 * 60_000;
 /** Atividades enviadas por caixa numa rodada, em cada fila (pendentes e com erro). */
 const PUSH_BATCH = 100;
 /** Teto de atividades abertas lidas na primeira rodada (o PostgREST devolve no máximo 1.000 linhas). */
@@ -48,7 +54,6 @@ const FIRST_RUN_LIMIT = 1000;
 const CHUNK = 100;
 const MAX_SUBJECT = 200;
 const DAY_MS = 24 * 3600_000;
-const MINUTE_MS = 60_000;
 /** Nome do tipo usado nos compromissos sem convidados nem link. */
 const TASK_TYPE = "Tarefa";
 /** Canal de cada tipo de evento; sem canal claro (ou sem esse nome na empresa), vale o canal legado ("Não informado"). */
@@ -67,6 +72,10 @@ export type CalendarRunResult = {
   pulled: number;
   /** Atividades criadas a partir de eventos novos. */
   created: number;
+  /** Eventos da entrada que falharam e foram pulados (o token avança; o detalhe vai para o log). */
+  eventErrors?: number;
+  /** Primeira rodada: eventos do Pipedrive que não casaram com nenhuma atividade e ficaram de fora (para conferir). */
+  unmatchedPipedrive?: number;
   /** Falha da caixa (Google ou banco); as outras caixas seguem. */
   error?: string;
 };
@@ -79,6 +88,7 @@ type AccountRow = {
   scopes: string[] | null;
   calendar_since: string | null;
   calendar_sync_token: string | null;
+  calendar_lock_until: string | null;
 };
 
 /** Atividade ligada (ou que pode ser religada) a um evento. */
@@ -96,10 +106,13 @@ type LinkedRow = {
   calendar_event_id: string | null;
   calendar_etag: string | null;
   meet_url: string | null;
+  calendar_state: string;
+  calendar_local_changed_at: string | null;
+  calendar_invited_email: string | null;
 };
 const LINKED_COLUMNS =
   "id, owner_id, type_id, subject, due_at, duration_minutes, done, deleted_at, updated_at, calendar_account_id, " +
-  "calendar_event_id, calendar_etag, meet_url";
+  "calendar_event_id, calendar_etag, meet_url, calendar_state, calendar_local_changed_at, calendar_invited_email";
 
 /** Atividade aberta do dono, candidata à adoção na primeira rodada. */
 type OpenRow = {
@@ -109,7 +122,6 @@ type OpenRow = {
   due_at: string;
   calendar_state: string;
   calendar_attempts: number;
-  updated_at: string;
 };
 
 /**
@@ -137,6 +149,7 @@ type InboundPatch = {
   calendar_etag?: string | null;
   calendar_state?: "pending" | "synced";
   meet_url?: string;
+  calendar_invited_email?: string;
 };
 
 type TypeRow = { id: string; name: string; is_meeting: boolean; active: boolean };
@@ -171,19 +184,24 @@ function chunks<T>(list: T[]): T[][] {
 
 /** Corta em `max` caracteres (pontos de código, como o check do banco conta). */
 const truncate = (text: string, max: number) => (text.length <= max ? text : Array.from(text).slice(0, max).join(""));
-/** Título comparável: sem diferenciar maiúsculas e espaços (pontas e repetidos). */
-const titleKey = (s: string | undefined) => (s ?? "").trim().replace(/\s+/g, " ").toLowerCase();
-const minuteOf = (iso: string) => Math.floor(Date.parse(iso) / MINUTE_MS);
+/** Título comparável: sem diferenciar maiúsculas, acentos e espaços (pontas e repetidos). */
+const titleKey = (s: string | undefined) =>
+  (s ?? "").normalize("NFD").replace(/\p{M}/gu, "").trim().replace(/\s+/g, " ").toLowerCase();
 const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const isPrivate = (ev: CalendarEvent) => ev.visibility === "private" || ev.visibility === "confidential";
 
 // ---- rodada ----------------------------------------------------------------------------------------------------
 
-/** Caixas ativas com o escopo da Agenda, nas empresas (não arquivadas) com a Agenda ligada. */
+/**
+ * Caixas ativas com o escopo da Agenda cujo dono é membro de alguma empresa (não arquivada) com a Agenda ligada: a
+ * atividade do dono sem caixa na empresa dela vai para a caixa mais antiga dele, que pode ser de uma empresa com a
+ * Agenda desligada. Ordem: a parada há mais tempo primeiro (`calendar_lock_until` guarda o fim da última rodada; a
+ * que nunca rodou vem antes), para o orçamento não ficar sempre com as mesmas.
+ */
 async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[]; enabled: Set<string> }> {
   const { data, error } = await db
     .from("email_accounts")
-    .select("id, user_id, company_id, email, scopes, calendar_since, calendar_sync_token")
+    .select("id, user_id, company_id, email, scopes, calendar_since, calendar_sync_token, calendar_lock_until")
     .eq("status", "active")
     .order("created_at", { ascending: true })
     .limit(200);
@@ -200,7 +218,25 @@ async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[
       .filter((c) => !c.archived_at && readCalendarSettings(c.settings).enabled)
       .map((c) => c.id),
   );
-  return { accounts: accounts.filter((a) => enabled.has(a.company_id)), enabled };
+  if (enabled.size === 0) return { accounts: [], enabled };
+
+  const members = await db
+    .from("memberships")
+    .select("user_id, company_id")
+    .in("user_id", [...new Set(accounts.map((a) => a.user_id))]);
+  check(members.error, "ler as empresas dos donos das caixas");
+  const serving = new Set(
+    ((members.data ?? []) as { user_id: string; company_id: string }[])
+      .filter((m) => enabled.has(m.company_id))
+      .map((m) => m.user_id),
+  );
+  const lastRun = (a: AccountRow) => (a.calendar_lock_until ? Date.parse(a.calendar_lock_until) : -Infinity);
+  return {
+    accounts: accounts
+      .filter((a) => enabled.has(a.company_id) || serving.has(a.user_id))
+      .sort((a, b) => lastRun(a) - lastRun(b)),
+    enabled,
+  };
 }
 
 /**
@@ -247,10 +283,11 @@ export async function runCalendarSync(deps: CalendarDeps, opts: { budgetMs: numb
       if (e instanceof GmailAuthError) await markReconnect(db, acc.id, msg);
       console.error("agenda: falha na caixa", acc.id, msg);
     } finally {
-      // Solta só o próprio lease (se venceu e outra rodada pegou a caixa, o dela fica).
+      // Solta só o próprio lease (se venceu e outra rodada pegou a caixa, o dela fica). Solta com a hora do fim da
+      // rodada (já vencida para a próxima), que ordena as caixas na rodada seguinte.
       const released = await db
         .from("email_accounts")
-        .update({ calendar_lock_until: null })
+        .update({ calendar_lock_until: new Date(nowMs()).toISOString() })
         .eq("id", acc.id)
         .eq("calendar_lock_until", leaseUntil);
       if (released.error) console.error("agenda: falha ao soltar a caixa", acc.id, released.error.message);
@@ -360,13 +397,16 @@ async function pushQueue(run: AccountRun): Promise<boolean> {
 /**
  * Primeira rodada da caixa (a virada): ninguém é convidado de novo e nenhum evento do Pipedrive é duplicado.
  *
- * 1. Adota: cada atividade aberta do dono, futura e ainda sem evento, fica com o evento da lista que tem o mesmo início
- *    (até o minuto) e o mesmo título (sem diferenciar maiúsculas e espaços). Cada evento é adotado uma vez só.
- * 2. Os eventos não adotados seguem as regras de entrada (inclusive religar órfãos).
- * 3. Cria, sem convite, o evento das atividades que sobraram.
- * 4. Grava `calendar_since` e o token, só se tudo foi feito. Envio adiado, com erro, ou atividade recém-gravada (a ação
- *    do vendedor está enviando) deixam a primeira rodada para a próxima, que repete sem convite. A atividade que já
- *    falhou 3 vezes fica só no "Tentar de novo" e não segura a virada.
+ * 1. Adota: cada atividade aberta do dono, futura e ainda sem evento, fica com o evento da lista de início mais próximo,
+ *    a até 5 min, e com o mesmo título (sem diferenciar maiúsculas, acentos e espaços). Cada evento é adotado uma vez
+ *    só. O convidado que o evento já tem fica registrado (o evento dele não recebe a descrição interna).
+ * 2. Os eventos não adotados seguem as regras de entrada (inclusive religar órfãos), menos os do Pipedrive: o que não
+ *    casou com nenhuma atividade fica de fora (viraria a mesma reunião duas vezes) e é contado no resultado.
+ * 3. Cria, sem convite, o evento das atividades que sobraram (inclusive as recém-gravadas: até a primeira rodada
+ *    terminar, o envio na hora não passa por esta caixa, então ninguém mais está enviando).
+ * 4. Grava `calendar_since` e o token, só se tudo foi feito. Envio adiado ou com erro deixa a primeira rodada para a
+ *    próxima, que repete sem convite. A atividade que já falhou 3 vezes fica só no "Tentar de novo" e não segura a
+ *    virada.
  */
 async function firstRun(run: AccountRun): Promise<void> {
   const { db } = run.deps;
@@ -376,7 +416,7 @@ async function firstRun(run: AccountRun): Promise<void> {
 
   const { data, error } = await db
     .from("activities")
-    .select("id, company_id, subject, due_at, calendar_state, calendar_attempts, updated_at")
+    .select("id, company_id, subject, due_at, calendar_state, calendar_attempts")
     .eq("owner_id", run.acc.user_id)
     .eq("done", false)
     .is("deleted_at", null)
@@ -393,12 +433,16 @@ async function firstRun(run: AccountRun): Promise<void> {
   const adopted = new Set<string>();
   const claimed = new Set<string>();
   for (const a of open) {
-    const ev = events.find((e) => {
-      if (claimed.has(e.id) || e.status === "cancelled" || resolved.get(e.id)?.kind !== "unknown") return false;
+    let best: { ev: CalendarEvent; diff: number } | null = null;
+    for (const e of events) {
+      if (claimed.has(e.id) || e.status === "cancelled" || resolved.get(e.id)?.kind !== "unknown") continue;
       const times = eventTimes(e);
-      return !!times && minuteOf(times.dueAt) === minuteOf(a.due_at) && titleKey(e.summary) === titleKey(a.subject);
-    });
-    if (!ev) continue;
+      if (!times || titleKey(e.summary) !== titleKey(a.subject)) continue;
+      const diff = Math.abs(Date.parse(times.dueAt) - Date.parse(a.due_at));
+      if (diff <= ADOPT_TOLERANCE_MS && (!best || diff < best.diff)) best = { ev: e, diff };
+    }
+    if (!best) continue;
+    const ev = best.ev;
     claimed.add(ev.id);
     adopted.add(a.id);
     const patch: InboundPatch = { calendar_account_id: run.acc.id, calendar_event_id: ev.id, calendar_etag: ev.etag ?? null };
@@ -406,12 +450,18 @@ async function firstRun(run: AccountRun): Promise<void> {
     if (a.calendar_state !== "pending") patch.calendar_state = "synced";
     const link = meetingLink(ev);
     if (link) patch.meet_url = link;
+    const guest = eventGuests(ev, run.acc.email)[0];
+    if (guest) patch.calendar_invited_email = guest;
     await applyInbound(db, a.id, patch);
     run.result.pulled++;
   }
 
-  // 2. Regras de entrada para o resto da lista.
-  const rest = events.filter((e) => !claimed.has(e.id));
+  // 2. Regras de entrada para o resto da lista. O evento do Pipedrive que não foi adotado fica de fora.
+  const leftover = (e: CalendarEvent) =>
+    resolved.get(e.id)?.kind === "unknown" && e.status !== "cancelled" && isPipedriveEvent(e);
+  const unmatched = events.filter((e) => !claimed.has(e.id) && leftover(e)).length;
+  if (unmatched > 0) run.result.unmatchedPipedrive = unmatched;
+  const rest = events.filter((e) => !claimed.has(e.id) && !leftover(e));
   if (!(await applyEvents(run, rest, now, now, resolved))) return;
 
   // 3. Cria o que falta, sem convite.
@@ -419,10 +469,6 @@ async function firstRun(run: AccountRun): Promise<void> {
   for (const a of open) {
     if (adopted.has(a.id) || run.relinked.has(a.id)) continue;
     if (a.calendar_state === "error" && a.calendar_attempts >= MAX_CALENDAR_ATTEMPTS) continue;
-    if (a.calendar_state === "pending" && Date.parse(a.updated_at) > now.getTime() - FRESH_PENDING_MS) {
-      finished = false;
-      continue;
-    }
     if (!run.timeLeft()) return;
     const r = await pushActivity(run.deps, a.id, { invite: false });
     if (r === "synced") run.result.pushed++;
@@ -492,7 +538,12 @@ async function resolveEvents(run: AccountRun, events: CalendarEvent[]): Promise<
   return out;
 }
 
-/** Aplica as regras de entrada a uma lista. Devolve `false` se o orçamento acabou no meio (o token não é gravado). */
+/**
+ * Aplica as regras de entrada a uma lista. Devolve `false` se o orçamento acabou no meio (o token não é gravado).
+ * Evento novo só vira atividade com a Agenda ligada na empresa da caixa; a mudança num evento já ligado vale sempre.
+ * Um evento que falha (banco, regra) vai para o resultado e o log e é pulado: o token avança, para um erro fixo num
+ * evento não travar a caixa.
+ */
 async function applyEvents(
   run: AccountRun,
   events: CalendarEvent[],
@@ -501,17 +552,29 @@ async function applyEvents(
   resolved?: Map<string, Resolved>,
 ): Promise<boolean> {
   const map = resolved ?? (await resolveEvents(run, events));
+  const createsNew = run.enabled.has(run.acc.company_id);
   for (const ev of events) {
     if (!run.timeLeft()) return false;
-    const res = map.get(ev.id) ?? { kind: "unknown" };
-    if (res.kind === "foreign") continue;
-    const known = res.kind === "known" ? res.row : null;
-    const c = classifyInbound(ev, { knownActivityId: known?.id ?? null, since, now });
-    if (c.kind === "linked") await applyLinked(run, ev, known!, res.kind === "known" && res.relink);
-    else if (c.kind === "cancelled") await applyCancelled(run, known!, now);
-    else if (c.kind === "new") map.set(ev.id, { kind: "known", row: await createFromEvent(run, ev), relink: false });
+    try {
+      const res = map.get(ev.id) ?? { kind: "unknown" };
+      if (res.kind === "foreign") continue;
+      const known = res.kind === "known" ? res.row : null;
+      const c = classifyInbound(ev, { knownActivityId: known?.id ?? null, since, now });
+      if (c.kind === "linked") await applyLinked(run, ev, known!, res.kind === "known" && res.relink);
+      else if (c.kind === "cancelled") await applyCancelled(run, known!, now);
+      else if (c.kind === "new" && createsNew) {
+        map.set(ev.id, { kind: "known", row: await createFromEvent(run, ev), relink: false });
+      }
+    } catch (e) {
+      eventFailed(run, ev, e);
+    }
   }
   return true;
+}
+
+function eventFailed(run: AccountRun, ev: CalendarEvent, e: unknown): void {
+  run.result.eventErrors = (run.result.eventErrors ?? 0) + 1;
+  console.error("agenda: falha no evento; pulado", run.acc.id, ev.id, errorMessage(e));
 }
 
 /** Horário, duração e título do evento que diferem da atividade (duração 0 no CRM vale os 15 min do evento). */
@@ -533,11 +596,16 @@ function eventChanges(row: LinkedRow, ev: CalendarEvent): InboundPatch {
 /**
  * Evento ligado a uma atividade:
  * - mesmo `etag` que o CRM gravou: é o eco do próprio envio, ignora;
- * - horário ou título diferentes: vale o lado mais recente. Agenda → aplica com a marca de entrada; CRM → a atividade
- *   volta a ser pendente e o envio leva a versão do CRM;
+ * - horário ou título diferentes: com a atividade em dia (`synced` ou `none`), não há mudança do CRM por enviar e a
+ *   Agenda vence. Com mudança do CRM por enviar (`pending` ou `error`), vale o lado mais recente: a hora da mudança no
+ *   CRM (`calendar_local_changed_at`) contra o `updated` do evento. Agenda → aplica com a marca de entrada (a pendente
+ *   continua pendente, e o envio leva o estado já mesclado); CRM → a atividade volta a ser pendente e o envio leva a
+ *   versão do CRM;
  * - só o `etag` mudou (convidado respondeu, descrição, Meet criado depois): grava o `etag` e preenche o Meet vazio,
  *   sem marcar pendente (um envio à toa mandaria e-mail ao cliente).
- * Atividade concluída ou na lixeira não muda de horário nem de título: o evento ficou como histórico.
+ * O primeiro convidado lido fica registrado quando a atividade ainda não tinha nenhum: o evento com convidado não
+ * recebe mais a descrição interna. Atividade concluída ou na lixeira não muda de horário nem de título: o evento ficou
+ * como histórico.
  */
 async function applyLinked(run: AccountRun, ev: CalendarEvent, row: LinkedRow, relink: boolean): Promise<void> {
   const { db } = run.deps;
@@ -548,6 +616,8 @@ async function applyLinked(run: AccountRun, ev: CalendarEvent, row: LinkedRow, r
   base.calendar_etag = ev.etag ?? null;
   const link = meetingLink(ev);
   if (!row.meet_url && link) base.meet_url = link;
+  const guest = row.calendar_invited_email ? undefined : eventGuests(ev, run.acc.email)[0];
+  if (guest) base.calendar_invited_email = guest;
   if (relink) run.relinked.add(row.id);
 
   const changes = row.done || row.deleted_at ? {} : eventChanges(row, ev);
@@ -556,7 +626,8 @@ async function applyLinked(run: AccountRun, ev: CalendarEvent, row: LinkedRow, r
     Object.assign(row, base);
     return;
   }
-  if (newerSide(row.updated_at, ev.updated) === "google") {
+  const crmChanged = row.calendar_state === "pending" || row.calendar_state === "error";
+  if (!crmChanged || newerSide(row.calendar_local_changed_at, ev.updated) === "google") {
     await applyInbound(db, row.id, { ...base, ...changes });
     Object.assign(row, base, changes);
     run.result.pulled++;
@@ -565,7 +636,7 @@ async function applyLinked(run: AccountRun, ev: CalendarEvent, row: LinkedRow, r
   const fields = { ...base, calendar_state: "pending" as const, calendar_attempts: 0, calendar_error: null };
   const { error } = await db.rpc("calendar_mark_synced", { p_activity: row.id, p_fields: fields });
   check(error, "marcar a atividade para reenviar à Agenda");
-  Object.assign(row, base);
+  Object.assign(row, base, { calendar_state: "pending" });
 }
 
 /**
@@ -673,6 +744,7 @@ async function createFromEvent(run: AccountRun, ev: CalendarEvent): Promise<Link
       calendar_etag: ev.etag ?? null,
       calendar_state: "synced",
       meet_url: f.meetUrl,
+      calendar_is_organizer: ev.organizer?.self === true,
     },
   });
   check(error, "criar a atividade do evento da Agenda");
@@ -692,14 +764,18 @@ async function createFromEvent(run: AccountRun, ev: CalendarEvent): Promise<Link
     calendar_event_id: ev.id,
     calendar_etag: ev.etag ?? null,
     meet_url: f.meetUrl,
+    calendar_state: "synced",
+    calendar_local_changed_at: null,
+    calendar_invited_email: null,
   };
 }
 
 /**
  * Passada de janela: as ocorrências de recorrentes desconhecidas que agora estão a até 7 dias viram atividade. As
- * conhecidas ficam com a leitura incremental.
+ * conhecidas ficam com a leitura incremental. Só cria com a Agenda ligada na empresa da caixa.
  */
 async function windowPass(run: AccountRun, since: Date, now: Date): Promise<void> {
+  if (!run.enabled.has(run.acc.company_id)) return;
   const until = new Date(now.getTime() + RECURRING_WINDOW_DAYS * DAY_MS);
   const events = (await run.calendar.listWindow(now, until)).filter((e) => e.recurringEventId);
   if (events.length === 0) return;
@@ -708,7 +784,11 @@ async function windowPass(run: AccountRun, since: Date, now: Date): Promise<void
     if (!run.timeLeft()) return;
     if (resolved.get(ev.id)?.kind !== "unknown") continue;
     if (classifyInbound(ev, { knownActivityId: null, since, now }).kind !== "new") continue;
-    resolved.set(ev.id, { kind: "known", row: await createFromEvent(run, ev), relink: false });
+    try {
+      resolved.set(ev.id, { kind: "known", row: await createFromEvent(run, ev), relink: false });
+    } catch (e) {
+      eventFailed(run, ev, e);
+    }
   }
 }
 

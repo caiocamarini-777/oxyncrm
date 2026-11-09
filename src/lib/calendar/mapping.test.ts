@@ -6,8 +6,11 @@ import {
   RECURRING_WINDOW_DAYS,
   SKIPPED_EVENT_TYPES,
   activityToEvent,
+  calendarEventId,
   classifyInbound,
+  eventGuests,
   eventTimes,
+  isPipedriveEvent,
   newActivityFields,
   newerSide,
   outboundOp,
@@ -33,6 +36,9 @@ const activity = (over: Partial<ActivityForCalendar> = {}): ActivityForCalendar 
   calendarEventId: null,
   calendarAccountId: null,
   updatedAt: "2026-11-09T12:00:00Z",
+  source: "crm",
+  isOrganizer: true,
+  invitedEmail: null,
   ...over,
 });
 
@@ -108,6 +114,44 @@ describe("activityToEvent", () => {
   it("com invite mas sem e-mail, não leva convidados", () => {
     expect(activityToEvent(activity({ personEmail: null }), { invite: true })).not.toHaveProperty("attendees");
   });
+
+  describe("conteúdo que o cliente vê", () => {
+    it("evento com convite: só o título, sem a descrição interna nem o link do CRM", () => {
+      const ev = activityToEvent(activity(), { invite: true });
+      expect(ev.summary).toBe("Demo com a Acme");
+      expect(ev).not.toHaveProperty("description");
+      expect(JSON.stringify(ev)).not.toContain("oxyn.app/acme");
+    });
+
+    it("evento que já tem convidado (ou que vai ter): a atualização também não leva a descrição", () => {
+      expect(activityToEvent(activity({ invitedEmail: "cliente@acme.com" }), { invite: false })).not.toHaveProperty("description");
+      expect(activityToEvent(activity(), { invite: false, guests: true })).not.toHaveProperty("description");
+    });
+
+    it("evento sem convidados: descrição e link do CRM", () => {
+      expect(activityToEvent(activity({ isMeeting: false }), { invite: false }).description).toBe(
+        "Levar a proposta\n\nNo CRM: https://oxyn.app/acme/negocios/d1",
+      );
+    });
+
+    it("evento que nasceu na Agenda: nunca leva descrição; o título Ocupado não volta para ele", () => {
+      const fromCalendar = activity({ source: "google_calendar", invitedEmail: null });
+      expect(activityToEvent(fromCalendar, { invite: false })).not.toHaveProperty("description");
+      expect(activityToEvent(fromCalendar, { invite: false }).summary).toBe("Demo com a Acme");
+      const busy = activityToEvent(activity({ source: "google_calendar", subject: "Ocupado" }), { invite: false });
+      expect(busy).not.toHaveProperty("summary");
+      expect(busy.start?.dateTime).toBe("2026-11-10T17:00:00+00:00");
+    });
+  });
+});
+
+describe("calendarEventId", () => {
+  it("é o uuid sem hífens mais a geração (só letras e números que o Google aceita)", () => {
+    const id = calendarEventId("AAAAAAAA-0000-4000-8000-00000000000F", 0);
+    expect(id).toBe("aaaaaaaa00004000800000000000000fg0");
+    expect(id).toMatch(/^[0-9a-v]{5,1024}$/);
+    expect(calendarEventId("aaaaaaaa-0000-4000-8000-00000000000f", 2)).toBe("aaaaaaaa00004000800000000000000fg2");
+  });
 });
 
 describe("wantsInvite", () => {
@@ -129,12 +173,12 @@ describe("wantsInvite", () => {
 describe("outboundOp", () => {
   it("na lixeira e com evento: apaga, avisando se é reunião com e-mail", () => {
     const deletedAt = "2026-11-09T10:00:00Z";
-    expect(outboundOp(activity({ deletedAt, calendarEventId: "ev-1" }))).toEqual({ op: "delete", notify: true });
-    expect(outboundOp(activity({ deletedAt, calendarEventId: "ev-1", isMeeting: false }))).toEqual({
+    expect(outboundOp(activity({ deletedAt, calendarEventId: "ev-1" }), NOW)).toEqual({ op: "delete", notify: true });
+    expect(outboundOp(activity({ deletedAt, calendarEventId: "ev-1", isMeeting: false }), NOW)).toEqual({
       op: "delete",
       notify: false,
     });
-    expect(outboundOp(activity({ deletedAt, calendarEventId: "ev-1", personEmail: null }))).toEqual({
+    expect(outboundOp(activity({ deletedAt, calendarEventId: "ev-1", personEmail: null }), NOW)).toEqual({
       op: "delete",
       notify: false,
     });
@@ -142,27 +186,62 @@ describe("outboundOp", () => {
 
   it("concluída como cancelada e com evento: apaga, com o mesmo critério de aviso", () => {
     const base = { done: true, meetingOutcome: "canceled", calendarEventId: "ev-1" };
-    expect(outboundOp(activity(base))).toEqual({ op: "delete", notify: true });
-    expect(outboundOp(activity({ ...base, personEmail: null }))).toEqual({ op: "delete", notify: false });
+    expect(outboundOp(activity(base), NOW)).toEqual({ op: "delete", notify: true });
+    expect(outboundOp(activity({ ...base, personEmail: null }), NOW)).toEqual({ op: "delete", notify: false });
   });
 
   it("na lixeira e sem evento: nada", () => {
-    expect(outboundOp(activity({ deletedAt: "2026-11-09T10:00:00Z" }))).toEqual({ op: "none" });
+    expect(outboundOp(activity({ deletedAt: "2026-11-09T10:00:00Z" }), NOW)).toEqual({ op: "none" });
   });
 
   it("cancelada e sem evento: nada", () => {
-    expect(outboundOp(activity({ done: true, meetingOutcome: "canceled" }))).toEqual({ op: "none" });
+    expect(outboundOp(activity({ done: true, meetingOutcome: "canceled" }), NOW)).toEqual({ op: "none" });
   });
 
   it("concluída com outro resultado: nada (o evento fica como histórico)", () => {
-    for (const meetingOutcome of ["held", "no_show", "rescheduled", null]) {
-      expect(outboundOp(activity({ done: true, meetingOutcome, calendarEventId: "ev-1" }))).toEqual({ op: "none" });
+    for (const meetingOutcome of ["held", "no_show", null]) {
+      expect(outboundOp(activity({ done: true, meetingOutcome, calendarEventId: "ev-1" }), NOW)).toEqual({ op: "none" });
     }
   });
 
+  it("remarcada antes de o evento terminar: apaga avisando, como a cancelada", () => {
+    const base = { done: true, meetingOutcome: "rescheduled", calendarEventId: "ev-1" };
+    expect(outboundOp(activity(base), NOW)).toEqual({ op: "delete", notify: true });
+    // Em andamento (começou às 14:30, 45 min): ainda não terminou.
+    expect(outboundOp(activity({ ...base, dueAt: "2026-11-09T14:30:00Z" }), NOW)).toEqual({ op: "delete", notify: true });
+    expect(outboundOp(activity({ ...base, calendarEventId: null }), NOW)).toEqual({ op: "none" });
+  });
+
+  it("remarcada depois do horário: o evento fica como histórico", () => {
+    const past = { done: true, meetingOutcome: "rescheduled", calendarEventId: "ev-1", dueAt: "2026-11-09T14:00:00Z" };
+    expect(outboundOp(activity(past), NOW)).toEqual({ op: "none" });
+  });
+
+  describe("evento que nasceu na Agenda (google_calendar)", () => {
+    const fromCalendar = (over: Partial<ActivityForCalendar> = {}) =>
+      activity({ source: "google_calendar", calendarEventId: "ev-g", ...over });
+
+    it("lixeira, cancelada ou concluída: só desfaz o vínculo, nunca apaga o evento", () => {
+      expect(outboundOp(fromCalendar({ deletedAt: "2026-11-09T10:00:00Z" }), NOW)).toEqual({ op: "unlink" });
+      expect(outboundOp(fromCalendar({ done: true, meetingOutcome: "canceled" }), NOW)).toEqual({ op: "unlink" });
+      expect(outboundOp(fromCalendar({ done: true, meetingOutcome: "rescheduled" }), NOW)).toEqual({ op: "unlink" });
+      expect(outboundOp(fromCalendar({ done: true, meetingOutcome: "held" }), NOW)).toEqual({ op: "unlink" });
+    });
+
+    it("aberta: atualiza só quando o vendedor é o organizador", () => {
+      expect(outboundOp(fromCalendar(), NOW)).toEqual({ op: "update" });
+      expect(outboundOp(fromCalendar({ isOrganizer: false }), NOW)).toEqual({ op: "none" });
+    });
+
+    it("sem vínculo (já desfeito): nunca cria outro evento", () => {
+      expect(outboundOp(fromCalendar({ calendarEventId: null }), NOW)).toEqual({ op: "none" });
+      expect(outboundOp(fromCalendar({ calendarEventId: null, deletedAt: "2026-11-09T10:00:00Z" }), NOW)).toEqual({ op: "none" });
+    });
+  });
+
   it("aberta sem evento cria; aberta com evento atualiza", () => {
-    expect(outboundOp(activity())).toEqual({ op: "create" });
-    expect(outboundOp(activity({ calendarEventId: "ev-1" }))).toEqual({ op: "update" });
+    expect(outboundOp(activity(), NOW)).toEqual({ op: "create" });
+    expect(outboundOp(activity({ calendarEventId: "ev-1" }), NOW)).toEqual({ op: "update" });
   });
 });
 
@@ -394,6 +473,11 @@ describe("newerSide", () => {
     expect(newerSide("2026-11-09T12:00:01Z", "2026-11-09T12:00:00Z")).toBe("crm");
   });
 
+  it("sem a hora da mudança no CRM, a Agenda vence", () => {
+    expect(newerSide(null, "2026-11-09T12:00:00Z")).toBe("google");
+    expect(newerSide(null, undefined)).toBe("crm");
+  });
+
   it("compara instantes, não textos (fusos diferentes)", () => {
     expect(newerSide("2026-11-09T12:00:00+00:00", "2026-11-09T10:00:00-03:00")).toBe("google");
     expect(newerSide("2026-11-09T12:00:00+00:00", "2026-11-09T08:00:00-03:00")).toBe("crm");
@@ -402,6 +486,38 @@ describe("newerSide", () => {
   it("empate ou evento sem updated: CRM", () => {
     expect(newerSide("2026-11-09T12:00:00Z", "2026-11-09T12:00:00Z")).toBe("crm");
     expect(newerSide("2026-11-09T12:00:00Z", undefined)).toBe("crm");
+  });
+});
+
+describe("eventGuests", () => {
+  it("convidados sem o vendedor (pela marca ou pelo e-mail) e sem salas, em minúsculas e sem repetir", () => {
+    const ev = event({
+      attendees: [
+        { email: "caio@oxyn.com.br", self: true },
+        { email: " Cliente@Acme.com " },
+        { email: "cliente@acme.com" },
+        { email: "Caio@Oxyn.com.br" },
+        { email: "sala@resource.calendar.google.com", resource: true },
+      ],
+    });
+    expect(eventGuests(ev, "caio@oxyn.com.br")).toEqual(["cliente@acme.com"]);
+    expect(eventGuests(event(), "caio@oxyn.com.br")).toEqual([]);
+  });
+});
+
+describe("isPipedriveEvent", () => {
+  it.each([
+    ["descrição", { description: "Atividade criada no Pipedrive: https://acme.pipedrive.com/activities/1" }],
+    ["origem", { source: { title: "Pipedrive", url: "https://acme.pipedrive.com" } }],
+    ["propriedades privadas", { extendedProperties: { private: { pipedriveActivityId: "123" } } }],
+    ["propriedades compartilhadas", { extendedProperties: { shared: { origin: "PIPEDRIVE" } } }],
+  ])("reconhece pela %s, sem diferenciar maiúsculas", (_, over) => {
+    expect(isPipedriveEvent(event(over as Partial<CalendarEvent>))).toBe(true);
+  });
+
+  it("evento comum não é do Pipedrive", () => {
+    expect(isPipedriveEvent(event({ description: "Pauta da reunião" }))).toBe(false);
+    expect(isPipedriveEvent(event())).toBe(false);
   });
 });
 

@@ -41,15 +41,14 @@ export function buildUrl(base: string, path: string, query?: GoogleQuery): strin
   return `${base}${path}${qs ? `?${qs}` : ""}`;
 }
 
+/** Motivos do 403 que são limite de uso (passageiro: adiar), e não falta de permissão. */
+const RATE_LIMIT_REASONS = ["rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"];
+
 export function isRateLimit(status: number, body: ApiErrorBody | null): boolean {
   if (status === 429) return true;
   if (status !== 403) return false;
   const reasons = body?.error?.errors?.map((e) => e.reason) ?? [];
-  return (
-    reasons.includes("rateLimitExceeded") ||
-    reasons.includes("userRateLimitExceeded") ||
-    body?.error?.status === "RESOURCE_EXHAUSTED"
-  );
+  return reasons.some((r) => r !== undefined && RATE_LIMIT_REASONS.includes(r)) || body?.error?.status === "RESOURCE_EXHAUSTED";
 }
 
 /**

@@ -39,7 +39,11 @@ export type CalendarEvent = {
   };
   recurringEventId?: string;
   updated?: string;
-  extendedProperties?: { private?: Record<string, string> };
+  /** Quem organiza o evento; `self` é o dono da Agenda. */
+  organizer?: { email?: string; displayName?: string; self?: boolean };
+  /** Origem do evento (o app que o criou, como o Pipedrive), visível só para quem o criou. */
+  source?: { title?: string; url?: string };
+  extendedProperties?: { private?: Record<string, string>; shared?: Record<string, string> };
 };
 
 type SendUpdates = "all" | "none";
@@ -120,37 +124,40 @@ export class CalendarClient {
     return events;
   }
 
+  /** Um evento pelo id (inclusive o cancelado). 404 e 410 seguem como `GmailApiError`. */
+  getEvent(id: string): Promise<CalendarEvent> {
+    return this.request<CalendarEvent>(buildUrl(CALENDAR_BASE, `${EVENTS_PATH}/${encodeURIComponent(id)}`));
+  }
+
   /**
    * Cria o evento. Com `withMeet`, pede o link do Meet (`conferenceDataVersion=1` e um `createRequest` com `requestId`
-   * novo, a não ser que o chamador já tenha mandado o seu).
+   * novo, a não ser que o chamador já tenha mandado o seu). Com `id` no corpo, um id que já existe responde 409.
    */
   insertEvent(
     ev: Partial<CalendarEvent>,
     opts: { sendUpdates: SendUpdates; withMeet: boolean },
   ): Promise<CalendarEvent> {
-    const body: Partial<CalendarEvent> =
-      opts.withMeet && !ev.conferenceData?.createRequest
-        ? {
-            ...ev,
-            conferenceData: {
-              ...ev.conferenceData,
-              createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } },
-            },
-          }
-        : ev;
     return this.request<CalendarEvent>(
       buildUrl(CALENDAR_BASE, EVENTS_PATH, {
         sendUpdates: opts.sendUpdates,
         conferenceDataVersion: opts.withMeet ? 1 : undefined,
       }),
-      { method: "POST", body },
+      { method: "POST", body: withMeetRequest(ev, opts.withMeet) },
     );
   }
 
-  patchEvent(id: string, ev: Partial<CalendarEvent>, opts: { sendUpdates: SendUpdates }): Promise<CalendarEvent> {
+  /** Atualiza o evento. Com `withMeet`, pede o link do Meet, como na criação. */
+  patchEvent(
+    id: string,
+    ev: Partial<CalendarEvent>,
+    opts: { sendUpdates: SendUpdates; withMeet?: boolean },
+  ): Promise<CalendarEvent> {
     return this.request<CalendarEvent>(
-      buildUrl(CALENDAR_BASE, `${EVENTS_PATH}/${encodeURIComponent(id)}`, { sendUpdates: opts.sendUpdates }),
-      { method: "PATCH", body: ev },
+      buildUrl(CALENDAR_BASE, `${EVENTS_PATH}/${encodeURIComponent(id)}`, {
+        sendUpdates: opts.sendUpdates,
+        conferenceDataVersion: opts.withMeet ? 1 : undefined,
+      }),
+      { method: "PATCH", body: withMeetRequest(ev, opts.withMeet === true) },
     );
   }
 
@@ -167,6 +174,18 @@ export class CalendarClient {
       throw e;
     }
   }
+}
+
+/** Corpo com o pedido de criação do Meet (`requestId` novo), a não ser que o chamador já tenha mandado o seu. */
+function withMeetRequest(ev: Partial<CalendarEvent>, withMeet: boolean): Partial<CalendarEvent> {
+  if (!withMeet || ev.conferenceData?.createRequest) return ev;
+  return {
+    ...ev,
+    conferenceData: {
+      ...ev.conferenceData,
+      createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } },
+    },
+  };
 }
 
 /** Cliente da Agenda com o token da caixa do Gmail (renovado a cada 401). */

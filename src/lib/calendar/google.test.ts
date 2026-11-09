@@ -201,6 +201,35 @@ describe("CalendarClient.patchEvent", () => {
     expect(headersOf(0)["Content-Type"]).toBe("application/json");
     expect(bodyOf(0)).toEqual({ summary: "Novo título" });
   });
+
+  it("com withMeet pede o link do Meet (conferenceDataVersion=1 e createRequest)", async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { id: "ev1", hangoutLink: "https://meet.google.com/x" }));
+    await client().cal.patchEvent("ev1", { attendees: [{ email: "c@acme.com" }] }, { sendUpdates: "all", withMeet: true });
+    expect(urlOf(0).searchParams.get("conferenceDataVersion")).toBe("1");
+    expect(urlOf(0).searchParams.get("sendUpdates")).toBe("all");
+    expect(bodyOf(0)).toMatchObject({
+      attendees: [{ email: "c@acme.com" }],
+      conferenceData: { createRequest: { requestId: expect.any(String), conferenceSolutionKey: { type: "hangoutsMeet" } } },
+    });
+  });
+});
+
+describe("CalendarClient.getEvent", () => {
+  it("usa GET em /calendars/primary/events/{id} e devolve o evento", async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { id: "ev/1", status: "confirmed", attendees: [{ email: "a@x.com" }] }));
+    const r = await client().cal.getEvent("ev/1");
+    expect(r).toEqual({ id: "ev/1", status: "confirmed", attendees: [{ email: "a@x.com" }] });
+    expect(initOf(0).method).toBe("GET");
+    expect(urlOf(0).pathname).toBe(`${CAL_EVENTS}/ev%2F1`);
+    expect(initOf(0).body).toBeUndefined();
+  });
+
+  it("404 lança GmailApiError (o evento não existe mais)", async () => {
+    fetchMock.mockResolvedValueOnce(json(404, { error: { message: "Not Found" } }));
+    const e = await client().cal.getEvent("x").catch((x) => x);
+    expect(e).toBeInstanceOf(GmailApiError);
+    expect(e.status).toBe(404);
+  });
 });
 
 describe("CalendarClient.deleteEvent", () => {

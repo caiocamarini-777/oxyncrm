@@ -21,7 +21,7 @@ type Listing = { events: CalendarEvent[]; nextSyncToken: string };
 type Script = { changes?: Listing | Error; from?: Listing | Error; window?: CalendarEvent[] | Error };
 type Call = {
   account: string;
-  op: "listChanges" | "listFrom" | "listWindow" | "insert" | "patch" | "delete";
+  op: "listChanges" | "listFrom" | "listWindow" | "insert" | "patch" | "delete" | "get";
   arg?: unknown;
   ev?: Partial<CalendarEvent>;
   opts?: Record<string, unknown>;
@@ -62,6 +62,10 @@ function fakeGoogle(scripts: Record<string, Script>, fail: { insert?: Error } = 
       },
       deleteEvent: async (id: string, opts: Record<string, unknown>) => {
         calls.push({ account, op: "delete", arg: id, opts });
+      },
+      getEvent: async (id: string) => {
+        calls.push({ account, op: "get", arg: id });
+        return { id, etag: '"etag-get"', status: "confirmed" };
       },
     } as unknown as CalendarClient;
   };
@@ -118,6 +122,10 @@ const activity = (over: Row = {}): Row => ({
   calendar_error: null,
   calendar_attempts: 0,
   meet_url: null,
+  calendar_local_changed_at: null,
+  calendar_invited_email: null,
+  calendar_generation: 0,
+  calendar_is_organizer: null,
   ...over,
 });
 
@@ -134,7 +142,14 @@ const event = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
 
 const PERSON: Row = { id: "p-1", deleted_at: null, emails: [{ value: "cliente@acme.com", primary: true }] };
 
-function baseTables(o: { accounts?: Row[]; activities?: Row[]; companies?: Row[]; types?: Row[]; channels?: Row[] }): Tables {
+function baseTables(o: {
+  accounts?: Row[];
+  activities?: Row[];
+  companies?: Row[];
+  types?: Row[];
+  channels?: Row[];
+  memberships?: Row[];
+}): Tables {
   return {
     companies: o.companies ?? [
       { id: "co-1", slug: "acme", archived_at: null, settings: { calendar_sync: { enabled: true, enabled_at: "2026-11-09T12:00:00Z" } } },
@@ -154,6 +169,7 @@ function baseTables(o: { accounts?: Row[]; activities?: Row[]; companies?: Row[]
     persons: [PERSON],
     email_accounts: o.accounts ?? [account()],
     activities: o.activities ?? [],
+    memberships: o.memberships ?? [],
   };
 }
 
@@ -164,6 +180,7 @@ function setup(
     companies?: Row[];
     types?: Row[];
     channels?: Row[];
+    memberships?: Row[];
     google?: Record<string, Script>;
     fail?: { insert?: Error };
     clock?: () => Date;
@@ -235,7 +252,8 @@ describe("runCalendarSync: caixas da rodada", () => {
     const t = setup({ accounts: [account({ calendar_lock_until: ago(MIN) })] });
     const res = await t.run();
     expect(res).toEqual([{ accountId: "acc-1", pushed: 0, pulled: 0, created: 0 }]);
-    expect(t.acc().calendar_lock_until).toBeNull();
+    // Solta com a hora do fim da rodada (já vencida para a próxima).
+    expect(t.acc().calendar_lock_until).toBe(NOW.toISOString());
     const claim = t.log.find((l) => l.table === "email_accounts" && l.op === "update");
     expect(claim?.values).toEqual([{ calendar_lock_until: new Date(NOW.getTime() + 300_000).toISOString() }]);
   });
@@ -257,8 +275,68 @@ describe("runCalendarSync: caixas da rodada", () => {
       { accountId: "acc-b", pushed: 0, pulled: 0, created: 1 },
     ]);
     expect(t.acc("acc-a").calendar_sync_token).toBe("tok-1");
-    expect(t.acc("acc-a").calendar_lock_until).toBeNull();
+    expect(t.acc("acc-a").calendar_lock_until).toBe(NOW.toISOString());
     expect(t.acc("acc-b").calendar_sync_token).toBe("tok-b2");
+  });
+
+  it("começa pela caixa parada há mais tempo (a que nunca rodou primeiro), para as últimas não ficarem sem vez", async () => {
+    const t = setup({
+      accounts: [
+        account({ id: "acc-a", created_at: "2026-01-01T00:00:00Z", calendar_lock_until: ago(5 * MIN) }),
+        account({ id: "acc-b", user_id: "u-2", created_at: "2026-02-01T00:00:00Z", calendar_lock_until: ago(30 * MIN) }),
+        account({ id: "acc-c", user_id: "u-3", created_at: "2026-03-01T00:00:00Z", calendar_lock_until: null }),
+      ],
+    });
+    const res = await t.run();
+    expect(res.map((r) => r.accountId)).toEqual(["acc-c", "acc-b", "acc-a"]);
+  });
+
+  describe("caixa de reserva numa empresa com a Agenda desligada", () => {
+    // O dono não tem caixa na co-1 (ligada): as atividades dele de lá vão para a caixa da co-2 (desligada).
+    const reserve = () =>
+      setup({
+        accounts: [account({ id: "acc-off", company_id: "co-2", calendar_sync_token: "tok-off" })],
+        memberships: [{ user_id: "u-1", company_id: "co-1" }, { user_id: "u-1", company_id: "co-2" }],
+        activities: [
+          activity({ id: "a-ligada", calendar_account_id: null, calendar_event_id: null, calendar_state: "pending", updated_at: ago(10 * MIN) }),
+          activity({ id: "a-velha", calendar_account_id: "acc-off", calendar_event_id: "ev-1", calendar_etag: '"etag-1"' }),
+        ],
+        google: {
+          "acc-off": {
+            changes: {
+              events: [
+                event({ id: "ev-1", start: { dateTime: "2026-11-12T10:00:00Z" }, end: { dateTime: "2026-11-12T10:45:00Z" } }),
+                event({ id: "ev-novo", summary: "Almoço" }),
+              ],
+              nextSyncToken: "tok-off-2",
+            },
+          },
+        },
+      });
+
+    it("entra na rodada porque o dono é membro de uma empresa ligada, e envia as atividades dela", async () => {
+      const t = reserve();
+      const res = await t.run();
+      expect(res.map((r) => r.accountId)).toEqual(["acc-off"]);
+      expect(t.act("a-ligada")).toMatchObject({ calendar_state: "synced", calendar_account_id: "acc-off" });
+    });
+
+    it("evento novo não vira atividade (a empresa da caixa está desligada); a mudança no evento ligado vale", async () => {
+      const t = reserve();
+      const res = await t.run();
+      expect(res[0].created).toBe(0);
+      expect(t.tables.activities.some((a) => a.calendar_event_id === "ev-novo")).toBe(false);
+      expect(t.act("a-velha").due_at).toBe("2026-11-12T10:00:00.000Z");
+      expect(ops(t.calls, "listWindow")).toEqual([]);
+    });
+
+    it("dono sem nenhuma empresa ligada: a caixa fica de fora", async () => {
+      const t = setup({
+        accounts: [account({ id: "acc-off", company_id: "co-2" })],
+        memberships: [{ user_id: "u-1", company_id: "co-2" }],
+      });
+      expect(await t.run()).toEqual([]);
+    });
   });
 
   it("sem orçamento, as caixas restantes ficam para a próxima rodada", async () => {
@@ -398,9 +476,9 @@ describe("runCalendarSync: evento ligado a uma atividade", () => {
     });
   });
 
-  it("CRM mais recente: marca a atividade como pendente para reenviar, sem mudar o horário", async () => {
+  it("mudança do CRM por enviar, CRM mais recente: marca a atividade como pendente para reenviar, sem mudar o horário", async () => {
     const t = setup({
-      activities: [activity({ updated_at: "2026-11-09T14:50:00+00:00" })],
+      activities: [activity({ calendar_state: "pending", calendar_local_changed_at: "2026-11-09T14:50:00+00:00" })],
       google: changes(event({ start: { dateTime: "2026-11-12T10:00:00Z" }, end: { dateTime: "2026-11-12T11:00:00Z" } })),
     });
     const res = await t.run();
@@ -412,6 +490,74 @@ describe("runCalendarSync: evento ligado a uma atividade", () => {
     });
     expect(t.act("a-1").due_at).toBe("2026-11-10T17:00:00+00:00");
     expect(directWrites(t.log)).toEqual([]);
+  });
+
+  it("atividade em dia (synced) com updated_at mais novo (lembrete enviado): a remarcação da Agenda vale", async () => {
+    // Remarcada na Agenda às 14:43; às 14:45 o cron de lembretes gravou reminder_sent_at (updated_at = 14:45).
+    const t = setup({
+      activities: [activity({ updated_at: "2026-11-09T14:45:00+00:00", calendar_local_changed_at: "2026-11-09T12:00:00+00:00" })],
+      google: changes(
+        event({
+          updated: "2026-11-09T14:43:00.000Z",
+          start: { dateTime: "2026-11-10T17:30:00Z" },
+          end: { dateTime: "2026-11-10T18:15:00Z" },
+        }),
+      ),
+    });
+    const res = await t.run();
+    expect(res[0].pulled).toBe(1);
+    expect(rpcs(t.log, "calendar_mark_synced")).toEqual([]);
+    expect(t.act("a-1")).toMatchObject({ due_at: "2026-11-10T17:30:00.000Z", calendar_state: "synced" });
+    // Nada para enviar: o cliente não recebe o horário antigo.
+    expect(ops(t.calls, "patch")).toEqual([]);
+  });
+
+  it("atividade sem fila (none) também fica com a mudança da Agenda", async () => {
+    const t = setup({
+      activities: [activity({ calendar_state: "none", calendar_local_changed_at: "2026-11-09T14:59:00+00:00" })],
+      google: changes(event({ summary: "Demo nova" })),
+    });
+    await t.run();
+    expect(t.act("a-1")).toMatchObject({ subject: "Demo nova", calendar_state: "none" });
+  });
+
+  it("mudança do CRM por enviar, Agenda mais recente: aplica a da Agenda e a atividade continua pendente", async () => {
+    const t = setup({
+      activities: [
+        activity({
+          calendar_state: "error",
+          calendar_attempts: 1,
+          description: "Nova pauta",
+          calendar_local_changed_at: "2026-11-09T14:00:00+00:00",
+          updated_at: "2026-11-09T14:55:00+00:00",
+        }),
+      ],
+      google: changes(event({ updated: "2026-11-09T14:30:00.000Z", start: { dateTime: "2026-11-11T10:00:00Z" }, end: { dateTime: "2026-11-11T10:45:00Z" } })),
+    });
+    const res = await t.run();
+    expect(res[0].pulled).toBe(1);
+    // A entrada não mexe no estado: a atividade segue na fila, e o envio da mesma rodada leva o estado já mesclado.
+    const inbound = rpcs(t.log, "calendar_apply_inbound").map((l) => (l.values as Row).p_patch as Row);
+    expect(inbound[0]).toMatchObject({ due_at: "2026-11-11T10:00:00.000Z" });
+    expect(inbound[0]).not.toHaveProperty("calendar_state");
+    expect(ops(t.calls, "patch")[0].ev?.start?.dateTime).toBe("2026-11-11T10:00:00.000Z");
+    expect(t.act("a-1")).toMatchObject({ due_at: "2026-11-11T10:00:00.000Z", description: "Nova pauta", calendar_state: "synced" });
+  });
+
+  it("guarda o primeiro convidado que o evento passou a ter (o evento com convidado não recebe a descrição interna)", async () => {
+    const t = setup({
+      activities: [activity()],
+      google: changes(event({ attendees: [{ email: "caio@oxyn.com.br", self: true }, { email: "Cliente@Acme.com" }] })),
+    });
+    await t.run();
+    expect(t.act("a-1").calendar_invited_email).toBe("cliente@acme.com");
+
+    const kept = setup({
+      activities: [activity({ calendar_invited_email: "antes@acme.com" })],
+      google: changes(event({ attendees: [{ email: "outro@acme.com" }] })),
+    });
+    await kept.run();
+    expect(kept.act("a-1").calendar_invited_email).toBe("antes@acme.com");
   });
 
   it("etag novo sem mudança de horário nem título: só grava o etag e preenche o Meet vazio, sem pendente", async () => {
@@ -737,6 +883,33 @@ describe("runCalendarSync: evento novo criado na Agenda", () => {
     expect(t.acc().calendar_sync_token).toBe("tok-2");
   });
 
+  it("guarda se o vendedor organiza o evento (sem isso, o CRM não mexe nele)", async () => {
+    const t = setup({
+      google: changes(
+        event({ id: "ev-meu", organizer: { email: "caio@oxyn.com.br", self: true } }),
+        event({ id: "ev-de-outro", summary: "Convite", organizer: { email: "cliente@acme.com" } }),
+      ),
+    });
+    await t.run();
+    const by = (id: string) => t.tables.activities.find((a) => a.calendar_event_id === id)!;
+    expect(by("ev-meu").calendar_is_organizer).toBe(true);
+    expect(by("ev-de-outro").calendar_is_organizer).toBe(false);
+  });
+
+  it("um evento que falha é pulado: os outros seguem e o token avança", async () => {
+    // Sem tipo de atividade ativo, o evento novo não vira atividade (erro de regra); a mudança no ligado vale.
+    const t = setup({
+      types: [{ id: "t-meet", company_id: "co-1", name: "Reunião", is_meeting: true, active: false, position: 0 }],
+      activities: [activity()],
+      google: changes(event({ id: "ev-novo", summary: "Almoço" }), event({ summary: "Demo renomeada" })),
+    });
+    const res = await t.run();
+    expect(res[0]).toMatchObject({ eventErrors: 1, pulled: 1, created: 0 });
+    expect(res[0].error).toBeUndefined();
+    expect(t.act("a-1").subject).toBe("Demo renomeada");
+    expect(t.acc().calendar_sync_token).toBe("tok-2");
+  });
+
   it("o mesmo evento duas vezes na rodada não cria duas atividades", async () => {
     const t = setup({ google: changes(event({ id: "ev-new" }), event({ id: "ev-new", etag: '"etag-3"' })) });
     const res = await t.run();
@@ -889,7 +1062,7 @@ describe("runCalendarSync: primeira rodada", () => {
     expect(ops(t.calls, "insert").map((c) => c.ev?.extendedProperties?.private?.oxynActivityId)).toEqual(["a-2"]);
   });
 
-  it("não adota pelo título diferente nem pelo minuto diferente", async () => {
+  it("não adota pelo título diferente nem com mais de 5 min de diferença", async () => {
     const t = first({
       activities: [open()],
       google: {
@@ -897,7 +1070,8 @@ describe("runCalendarSync: primeira rodada", () => {
           from: {
             events: [
               event({ id: "ev-titulo", summary: "Demo com a Acme 2" }),
-              event({ id: "ev-hora", start: { dateTime: "2026-11-10T17:01:00Z" } }),
+              event({ id: "ev-hora", start: { dateTime: "2026-11-10T17:06:00Z" } }),
+              event({ id: "ev-antes", start: { dateTime: "2026-11-10T16:54:00Z" } }),
               event({ id: "ev-cancelado", status: "cancelled" }),
             ],
             nextSyncToken: "tok-first",
@@ -943,11 +1117,95 @@ describe("runCalendarSync: primeira rodada", () => {
     expect(t.acc().calendar_since).toBe(NOW.toISOString());
   });
 
-  it("pendente recém-gravada (a ação do vendedor está enviando): não envia e a primeira rodada recomeça", async () => {
+  it("pendente recém-gravada também é criada (o envio na hora não passa pela caixa antes da primeira rodada)", async () => {
     const t = first({ activities: [open({ calendar_state: "pending", updated_at: ago(MIN) })] });
     await t.run();
+    expect(ops(t.calls, "insert")).toHaveLength(1);
+    expect(ops(t.calls, "insert")[0].opts).toEqual({ sendUpdates: "none", withMeet: false });
+    expect(t.acc().calendar_since).toBe(NOW.toISOString());
+  });
+
+  it("adota com título de acento diferente e 3 min de diferença", async () => {
+    const t = first({
+      activities: [open({ subject: "Reuniao de alinhamento  com a Acme" })],
+      google: {
+        "acc-1": {
+          from: {
+            events: [event({ id: "ev-pd", summary: "Reunião de Alinhamento com a ACME", start: { dateTime: "2026-11-10T17:03:00Z" }, end: { dateTime: "2026-11-10T17:48:00Z" } })],
+            nextSyncToken: "tok-first",
+          },
+        },
+      },
+    });
+    const res = await t.run();
+    expect(t.act("a-1")).toMatchObject({ calendar_event_id: "ev-pd", calendar_state: "synced" });
     expect(ops(t.calls, "insert")).toEqual([]);
-    expect(t.acc().calendar_since).toBeNull();
+    expect(res[0]).toMatchObject({ pulled: 1, created: 0 });
+  });
+
+  it("com dois eventos no limite, adota o de início mais próximo", async () => {
+    const t = first({
+      activities: [open()],
+      google: {
+        "acc-1": {
+          from: {
+            events: [
+              event({ id: "ev-4min", start: { dateTime: "2026-11-10T17:04:00Z" } }),
+              event({ id: "ev-1min", start: { dateTime: "2026-11-10T16:59:00Z" } }),
+            ],
+            nextSyncToken: "tok-first",
+          },
+        },
+      },
+    });
+    await t.run();
+    expect(t.act("a-1").calendar_event_id).toBe("ev-1min");
+  });
+
+  it("a adoção guarda o convidado que o evento do Pipedrive já tem", async () => {
+    const t = first({
+      activities: [open()],
+      google: {
+        "acc-1": {
+          from: { events: [event({ id: "ev-pd", attendees: [{ email: "caio@oxyn.com.br", self: true }, { email: "cliente@acme.com" }] })], nextSyncToken: "tok-first" },
+        },
+      },
+    });
+    await t.run();
+    expect(t.act("a-1")).toMatchObject({ calendar_event_id: "ev-pd", calendar_invited_email: "cliente@acme.com" });
+  });
+
+  it("evento do Pipedrive sem atividade correspondente não vira atividade (fica contado no resultado)", async () => {
+    const t = first({
+      google: {
+        "acc-1": {
+          from: {
+            events: [
+              event({ id: "ev-pd", summary: "Reunião com o Fulano", description: "Agendado pelo Pipedrive https://acme.pipedrive.com/deal/9" }),
+              event({ id: "ev-pd2", summary: "Ligação", source: { title: "Pipedrive", url: "https://acme.pipedrive.com" } }),
+              event({ id: "ev-comum", summary: "Almoço" }),
+            ],
+            nextSyncToken: "tok-first",
+          },
+        },
+      },
+    });
+    const res = await t.run();
+    expect(t.tables.activities.map((a) => a.calendar_event_id)).toEqual(["ev-comum"]);
+    expect(res[0]).toMatchObject({ created: 1, unmatchedPipedrive: 2 });
+    expect(t.acc().calendar_since).toBe(NOW.toISOString());
+  });
+
+  it("o evento do Pipedrive que casa com a atividade é adotado normalmente", async () => {
+    const t = first({
+      activities: [open()],
+      google: {
+        "acc-1": { from: { events: [event({ id: "ev-pd", description: "Pipedrive" })], nextSyncToken: "tok-first" } },
+      },
+    });
+    const res = await t.run();
+    expect(t.act("a-1").calendar_event_id).toBe("ev-pd");
+    expect(res[0].unmatchedPipedrive).toBeUndefined();
   });
 
   it("adoção mantém pendente a atividade que tem mudança do CRM para enviar", async () => {

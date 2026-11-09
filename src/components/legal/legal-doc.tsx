@@ -18,4 +18,4 @@ export function LegalSection({ title, children }: { title: string; children: Rea
 }
 
 export const LEGAL_CONTACT = "comercial@oxyngroup.com.br";
-export const LEGAL_UPDATED = "6 de novembro de 2026";
+export const LEGAL_UPDATED = "9 de novembro de 2026";

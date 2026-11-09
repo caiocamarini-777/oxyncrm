@@ -118,14 +118,17 @@ describe("hasRequiredScopes", () => {
 });
 
 describe("hasMeetScopes", () => {
-  it("exige os dois escopos do Meet", () => {
+  it("exige os três escopos do assistente", () => {
     expect(MEET_SCOPES).toEqual([
       "https://www.googleapis.com/auth/meetings.space.readonly",
       "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/drive.meet.readonly",
     ]);
     expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, ...MEET_SCOPES])).toBe(true);
     expect(hasMeetScopes(REQUIRED_GMAIL_SCOPES)).toBe(false);
     expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0]])).toBe(false);
+    // Conectada antes das anotações do Gemini: falta o escopo do Drive, precisa reconectar.
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], MEET_SCOPES[1]])).toBe(false);
     expect(hasMeetScopes([])).toBe(false);
   });
 });

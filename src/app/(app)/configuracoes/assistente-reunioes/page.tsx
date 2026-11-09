@@ -31,8 +31,10 @@ export default async function MeetingAssistantSettingsPage({
         </Suspense>
       </div>
       <p className="text-sm text-muted-foreground">
-        Depois de cada reunião do Google Meet com convidado externo, o assistente lê a transcrição, escreve as notas e
-        sugere atualizações no registro. A configuração vale para a empresa selecionada. Com o assistente ligado,
+        Depois de cada reunião do Google Meet com convidado externo, o assistente lê a transcrição (ou, quando a
+        reunião não teve transcrição, as anotações do Gemini), escreve as notas e sugere atualizações no registro.
+        Para não depender de lembrar na hora, ligue &quot;Fazer anotações com o Gemini&quot; ao criar o evento na
+        Agenda. A configuração vale para a empresa selecionada. Com o assistente ligado,
         cada vendedor precisa reconectar o Google uma vez pelo aviso que aparece no módulo E-mail da empresa, para o
         assistente enxergar as reuniões dele.
       </p>

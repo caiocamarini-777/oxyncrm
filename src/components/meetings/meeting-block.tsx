@@ -11,6 +11,7 @@ import { formatDateTime } from "@/lib/activities/time";
 import type { ActionResult } from "@/lib/db-errors";
 import { confirmSuggestion, dismissSuggestion, getMeetingTranscript } from "@/lib/meet/actions";
 import { validateEdited } from "@/lib/meet/decisions";
+import type { TranscriptSource } from "@/lib/meet/notes";
 import type { RecordMeeting, RecordMeetingNotes, RecordMeetingSuggestion } from "@/lib/meet/queries";
 import {
   describeNextStep,
@@ -237,8 +238,29 @@ type TranscriptState =
   | { status: "error" }
   | { status: "ready"; text: string | null };
 
-/** "Ver transcrição": expande e busca o texto só na primeira abertura (pode ter até 1 MB). */
-function TranscriptToggle({ meetingId }: { meetingId: string }) {
+const SOURCE_TEXT: Record<TranscriptSource, { show: string; hide: string; loading: string; error: string; missing: string }> = {
+  transcript: {
+    show: "Ver transcrição",
+    hide: "Ocultar transcrição",
+    loading: "Carregando transcrição…",
+    error: "Não foi possível carregar a transcrição. Feche e abra de novo para tentar outra vez.",
+    missing: "A transcrição não está disponível.",
+  },
+  gemini_notes: {
+    show: "Ver anotações do Gemini",
+    hide: "Ocultar anotações do Gemini",
+    loading: "Carregando anotações do Gemini…",
+    error: "Não foi possível carregar as anotações do Gemini. Feche e abra de novo para tentar outra vez.",
+    missing: "As anotações do Gemini não estão disponíveis.",
+  },
+};
+
+/**
+ * "Ver transcrição" (ou "Ver anotações do Gemini", quando a reunião não teve transcrição): expande e busca o
+ * texto só na primeira abertura (pode ter até 1 MB).
+ */
+function TranscriptToggle({ meetingId, source }: { meetingId: string; source: TranscriptSource }) {
+  const label = SOURCE_TEXT[source];
   const panelId = useId();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<TranscriptState>({ status: "idle" });
@@ -259,17 +281,17 @@ function TranscriptToggle({ meetingId }: { meetingId: string }) {
     <div className="flex flex-col gap-2">
       <div>
         <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={panelId} onClick={() => void toggle()}>
-          {open ? "Ocultar transcrição" : "Ver transcrição"}
+          {open ? label.hide : label.show}
           <ChevronDown className={cn("transition-transform", open && "rotate-180")} aria-hidden />
         </Button>
       </div>
       {open ? (
         <div id={panelId}>
           {state.status === "loading" || state.status === "idle" ? (
-            <p className="text-sm text-muted-foreground">Carregando transcrição…</p>
+            <p className="text-sm text-muted-foreground">{label.loading}</p>
           ) : state.status === "error" ? (
             <p role="alert" className="text-sm text-destructive">
-              Não foi possível carregar a transcrição. Feche e abra de novo para tentar outra vez.
+              {label.error}
             </p>
           ) : state.text?.trim() ? (
             <pre
@@ -279,7 +301,7 @@ function TranscriptToggle({ meetingId }: { meetingId: string }) {
               {state.text}
             </pre>
           ) : (
-            <p className="text-sm text-muted-foreground">A transcrição não está disponível.</p>
+            <p className="text-sm text-muted-foreground">{label.missing}</p>
           )}
         </div>
       ) : null}
@@ -289,7 +311,8 @@ function TranscriptToggle({ meetingId }: { meetingId: string }) {
 
 /**
  * Reunião do Meet no histórico do card: título e data, as notas do assistente (resumo, dores, objeções,
- * qualificação e próximos passos), as sugestões para decidir e a transcrição sob demanda.
+ * qualificação e próximos passos), as sugestões para decidir e a transcrição (ou as anotações do Gemini) sob
+ * demanda.
  */
 export function MeetingBlock({ meeting }: { meeting: RecordMeeting }) {
   return (
@@ -304,6 +327,7 @@ export function MeetingBlock({ meeting }: { meeting: RecordMeeting }) {
           </div>
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="rounded bg-muted px-1.5 py-0.5">Reunião (Meet)</span>
+            {meeting.transcriptSource === "gemini_notes" ? <span>Notas feitas a partir das anotações do Gemini</span> : null}
             {meeting.status === "processing" ? <span>Processando…</span> : null}
           </p>
         </div>
@@ -330,7 +354,7 @@ export function MeetingBlock({ meeting }: { meeting: RecordMeeting }) {
           </Section>
         ) : null}
 
-        {meeting.hasTranscript ? <TranscriptToggle meetingId={meeting.id} /> : null}
+        {meeting.transcriptSource ? <TranscriptToggle meetingId={meeting.id} source={meeting.transcriptSource} /> : null}
       </div>
     </div>
   );

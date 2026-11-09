@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerClient } from "@/lib/supabase/server";
 import type { TimelineItem } from "@/lib/timeline/queries";
 import { canDecide, type MeetingStatus, type SuggestionKind } from "./decisions";
-import type { MeetingNotes } from "./notes";
+import type { MeetingNotes, TranscriptSource } from "./notes";
 import { isPendingOverdue, type MeetingListTab, type MeetingTabKey } from "./view";
 
 /**
@@ -41,7 +41,8 @@ export type RecordMeeting = {
   /** Nulo enquanto as notas ainda não foram geradas. */
   notes: RecordMeetingNotes | null;
   suggestions: RecordMeetingSuggestion[];
-  hasTranscript: boolean;
+  /** Origem do texto guardado da reunião (transcrição ou anotações do Gemini); nulo quando não há texto. */
+  transcriptSource: TranscriptSource | null;
   /** O usuário pode decidir as sugestões (confirmar, editar, descartar). A ação confere de novo no servidor. */
   canEdit: boolean;
 };
@@ -93,6 +94,12 @@ function toSuggestions(rows: unknown): RecordMeetingSuggestion[] {
   return out.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
 }
 
+/** Texto guardado sem origem (linha anterior à coluna) conta como transcrição. */
+function transcriptSource(row: unknown): TranscriptSource | null {
+  if (!isObject(row)) return null;
+  return row.source === "gemini_notes" ? "gemini_notes" : "transcript";
+}
+
 /** Linha de `meetings` (com `meeting_notes`, `meeting_suggestions` e `meeting_transcripts` embutidos) -> reunião do card. */
 export function toRecordMeeting(row: unknown, canEdit: boolean): RecordMeeting | null {
   if (!isObject(row) || typeof row.id !== "string") return null;
@@ -106,17 +113,17 @@ export function toRecordMeeting(row: unknown, canEdit: boolean): RecordMeeting |
     status,
     notes: toNotes(one(row.meeting_notes)),
     suggestions: toSuggestions(row.meeting_suggestions),
-    hasTranscript: isObject(one(row.meeting_transcripts)),
+    transcriptSource: transcriptSource(one(row.meeting_transcripts)),
     canEdit,
   };
 }
 
-// `meeting_transcripts(meeting_id)`: só a chave, para saber se existe sem trazer o texto (até 1 MB).
+// `meeting_transcripts(meeting_id, source)`: só a chave e a origem, para saber se existe sem trazer o texto (até 1 MB).
 const MEETING_COLUMNS =
   "id, title, started_at, ended_at, created_at, status, " +
   "meeting_notes(summary, pains, objections, qualification, next_steps), " +
   "meeting_suggestions(id, kind, payload, status, last_error), " +
-  "meeting_transcripts(meeting_id)";
+  "meeting_transcripts(meeting_id, source)";
 
 /**
  * Reuniões do Meet mostradas no histórico do registro, da mais recente para a mais antiga. Falha em silêncio

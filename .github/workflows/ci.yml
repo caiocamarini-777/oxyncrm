@@ -5,18 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Cada execução tem o próprio Supabase (descartável, dentro do runner): execuções em paralelo não se atrapalham.
 concurrency:
-  group: ci-db
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
   NEXT_PUBLIC_SITE_URL: http://localhost:3000
-  # Projeto Supabase só de testes (oxyncrm-testes). O banco é recriado a cada execução; ver scripts/ci-db-reset.ts.
-  SUPABASE_TEST_PROJECT_REF: cvqaaipjdirbbwfdgjox
 
 jobs:
   ci:
@@ -29,22 +24,28 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Cadastro aberto desligado no Supabase
-        if: env.NEXT_PUBLIC_SUPABASE_URL != ''
-        run: pnpm check:auth
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - name: Recria o banco de testes
-        if: env.SUPABASE_DB_URL != ''
-        run: pnpm ci:db-reset
+      # Supabase local em Docker, com as migrations desta branch. Nada aqui toca a produção nem o banco de testes
+      # do site (oxyncrm-testes), que é atualizado pelo workflow banco-testes.yml.
+      - name: Sobe o Supabase local
+        run: pnpm exec supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,postgres-meta
+      - name: Variáveis do Supabase local
+        run: |
+          pnpm exec supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            --override-name db.url=SUPABASE_DB_URL \
+            | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL)=' \
+            | sed -E 's/^([A-Z_]+)="(.*)"$/\1=\2/' >> "$GITHUB_ENV"
+      - name: Cadastro aberto desligado no Supabase
+        run: pnpm check:auth
       - name: Testes de banco
-        if: env.SUPABASE_DB_URL != ''
         run: pnpm test:db
       - run: pnpm build
       - name: Playwright
-        if: env.SUPABASE_DB_URL != ''
         run: pnpm exec playwright install --with-deps chromium
       - name: E2E
-        if: env.SUPABASE_DB_URL != ''
         run: pnpm test:e2e

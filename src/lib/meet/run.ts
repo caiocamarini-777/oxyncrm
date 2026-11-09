@@ -8,13 +8,19 @@ import {
   type CalendarEvent,
   type MeetClient,
   type Participant,
-  type TranscriptEntry,
   meetClientForAccount,
 } from "./google";
 import { normalizeEmail, pickRecord, splitAttendees } from "./match";
 import { loadCandidates, loadInternalDomains } from "./match-loader";
 import { renderNoteHtml } from "./note-html";
-import { generateNotes, type MeetingNotes, MeetingNotesSchema, NOTES_MODEL, type NotesInput } from "./notes";
+import {
+  generateNotes,
+  type MeetingNotes,
+  MeetingNotesSchema,
+  NOTES_MODEL,
+  type NotesInput,
+  type TranscriptSource,
+} from "./notes";
 import { readMeetingSettings } from "./settings";
 import { type MeetingSink, pipedriveSink, pipedriveUserFor, SinkError, type SinkTarget } from "./sink";
 
@@ -37,7 +43,7 @@ import { type MeetingSink, pipedriveSink, pipedriveUserFor, SinkError, type Sink
 
 /** Limite do texto corrido da transcrição (o check do banco conta caracteres). */
 export const MAX_TRANSCRIPT_CHARS = 1_048_576;
-/** Prazo, depois do fim da reunião, para a transcrição aparecer. */
+/** Prazo, depois do fim da reunião, para a transcrição (ou as anotações do Gemini) aparecer. */
 export const TRANSCRIPT_DEADLINE_MS = 2 * 3600_000;
 /** Tentativas para o Claude e o Pipedrive antes de `failed`. */
 export const MAX_ATTEMPTS = 3;
@@ -63,6 +69,8 @@ export const PROCESSING_STALE_MS = 10 * 60_000;
 export const LEASE_MS = 300_000;
 
 export const NO_TRANSCRIPT = "reunião sem transcrição";
+/** Prazo esgotado sem transcrição e sem anotações do Gemini. */
+export const NO_MEETING_TEXT = "reunião sem transcrição nem anotações do Gemini";
 export const RECORD_DELETED = "registro excluído";
 const DEFAULT_TITLE = "Reunião do Meet";
 const UNKNOWN_SPEAKER = "Participante";
@@ -666,6 +674,8 @@ async function rereadMeeting(
 
 type TranscriptEntryRow = { speaker: string; text: string; start: string };
 
+type MeetingText = { source: TranscriptSource; entries: TranscriptEntryRow[]; text: string };
+
 /** Texto corrido ("Fulano: fala"), cortado no limite; as entradas param na que estourou o limite. */
 export function buildTranscript(entries: TranscriptEntryRow[]): { entries: TranscriptEntryRow[]; text: string } {
   const kept: TranscriptEntryRow[] = [];
@@ -684,9 +694,52 @@ export function buildTranscript(entries: TranscriptEntryRow[]): { entries: Trans
 }
 
 /**
- * Confere a transcrição de uma reunião em `waiting_transcript`. Pronta (`FILE_GENERATED`): grava e a reunião
- * vai para `processing`. Alguma ainda gerando: espera, até o prazo. Sem transcrição 2 h depois do fim, ou com
- * a leitura no Google falhando depois desse prazo: `failed`.
+ * Texto da reunião no Google. A transcrição é a fonte preferida: com alguma ainda gerando, espera por ela até o
+ * prazo. Sem transcrição pronta (ou pronta e vazia), usa as anotações do Gemini (os documentos gerados, juntos),
+ * com a mesma espera. `null`: nada pronto ainda (ou nada, depois do prazo).
+ */
+async function readMeetingText(meet: MeetClient, m: MeetingRow, late: boolean): Promise<MeetingText | null> {
+  const transcripts = await meet.listTranscripts(m.conference_record);
+  const ready = transcripts.filter((t) => t.state === "FILE_GENERATED");
+  if (ready.length < transcripts.length && !late) return null;
+  if (ready.length > 0) {
+    const [lists, participants] = await Promise.all([
+      Promise.all(ready.map((t) => meet.listTranscriptEntries(t.name))),
+      meet.listParticipants(m.conference_record),
+    ]);
+    const speakers = new Map(
+      participants.map((p) => [p.name, p.signedinUser?.displayName || p.anonymousUser?.displayName || UNKNOWN_SPEAKER]),
+    );
+    const entries = lists
+      .flat()
+      .sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime))
+      .map((e) => ({ speaker: speakers.get(e.participant) ?? UNKNOWN_SPEAKER, text: e.text, start: e.startTime }));
+    const transcript = buildTranscript(entries);
+    // Transcrição pronta mas sem fala nenhuma não serve para as notas: tenta as anotações do Gemini.
+    if (transcript.text.trim()) return { source: "transcript", ...transcript };
+  }
+
+  const notes = await meet.listSmartNotes(m.conference_record);
+  if (notes.some((n) => n.state !== "FILE_GENERATED") && !late) return null;
+  const docs = [
+    ...new Set(notes.flatMap((n) => (n.state === "FILE_GENERATED" && n.docsDestination?.document ? [n.docsDestination.document] : []))),
+  ];
+  if (docs.length === 0) return null;
+  // Um documento que não abre (apagado, sem acesso) não descarta os outros; só falha se nenhum abrir.
+  const exported = await Promise.allSettled(docs.map((d) => meet.exportDocText(d)));
+  const texts = exported.flatMap((r) => (r.status === "fulfilled" ? [r.value.trim()] : [])).filter(Boolean);
+  if (texts.length === 0) {
+    const failed = exported.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+    return null;
+  }
+  return { source: "gemini_notes", entries: [], text: texts.join("\n\n").slice(0, MAX_TRANSCRIPT_CHARS) };
+}
+
+/**
+ * Confere o texto de uma reunião em `waiting_transcript` (a transcrição ou, sem ela, as anotações do Gemini).
+ * Pronto: grava e a reunião vai para `processing`. Ainda gerando: espera, até o prazo. Sem nenhum dos dois 2 h
+ * depois do fim, ou com a leitura no Google falhando depois desse prazo: `failed`.
  */
 async function fetchTranscript(deps: MeetDeps, meet: MeetClient, m: MeetingRow): Promise<"ready" | "waiting" | "failed"> {
   const { db } = deps;
@@ -704,39 +757,19 @@ async function fetchTranscript(deps: MeetDeps, meet: MeetClient, m: MeetingRow):
   };
 
   // Leitura no Google. Se falhar depois do prazo, a reunião não fica esperando para sempre: vira `failed`.
-  let read: { lists: TranscriptEntry[][]; participants: Participant[] } | null;
+  let read: MeetingText | null;
   try {
-    const transcripts = await meet.listTranscripts(m.conference_record);
-    const ready = transcripts.filter((t) => t.state === "FILE_GENERATED");
-    const generating = ready.length < transcripts.length;
-    if (ready.length === 0 || (generating && !late)) {
-      read = null;
-    } else {
-      const [lists, participants] = await Promise.all([
-        Promise.all(ready.map((t) => meet.listTranscriptEntries(t.name))),
-        meet.listParticipants(m.conference_record),
-      ]);
-      read = { lists, participants };
-    }
+    read = await readMeetingText(meet, m, late);
   } catch (e) {
     if (!late) throw e;
     console.error("meet: transcrição ilegível depois do prazo", m.id, errorMessage(e));
-    return giveUp(`${NO_TRANSCRIPT} (${errorMessage(e)})`);
+    return giveUp(`${NO_MEETING_TEXT} (${errorMessage(e)})`);
   }
-  if (!read) return late ? giveUp(NO_TRANSCRIPT) : "waiting";
-  const { lists, participants } = read;
-  const speakers = new Map(
-    participants.map((p) => [p.name, p.signedinUser?.displayName || p.anonymousUser?.displayName || UNKNOWN_SPEAKER]),
-  );
-  const entries = lists
-    .flat()
-    .sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime))
-    .map((e) => ({ speaker: speakers.get(e.participant) ?? UNKNOWN_SPEAKER, text: e.text, start: e.startTime }));
-  const transcript = buildTranscript(entries);
+  if (!read) return late ? giveUp(NO_MEETING_TEXT) : "waiting";
 
   const saved = await db
     .from("meeting_transcripts")
-    .upsert({ meeting_id: m.id, ...transcript }, { onConflict: "meeting_id" });
+    .upsert({ meeting_id: m.id, ...read }, { onConflict: "meeting_id" });
   check(saved.error, "gravar a transcrição");
   const moved = await db
     .from("meetings")
@@ -872,12 +905,12 @@ function participantLabel(a: Attendee): string {
   return a.internal ? `${who} (interno)` : who;
 }
 
-/** Gera as notas com o Claude e guarda em `meeting_notes` (ainda sem `pipedrive_note_id`). */
+/** Gera as notas com o Claude (da transcrição ou das anotações do Gemini) e guarda em `meeting_notes` (ainda sem `pipedrive_note_id`). */
 async function generateAndStore(
   deps: MeetDeps,
   m: MeetingRow,
   ctx: RecordContext | null,
-  transcript: string,
+  transcript: { text: string; source: TranscriptSource },
 ): Promise<MeetingNotes> {
   const { db } = deps;
   const company = await db.from("companies").select("settings").eq("id", m.company_id).maybeSingle();
@@ -886,7 +919,8 @@ async function generateAndStore(
   const names = await namesLoader(deps)();
 
   const input: NotesInput = {
-    transcript,
+    transcript: transcript.text,
+    source: transcript.source,
     questions,
     title: m.title,
     startedAt: m.started_at ?? m.ended_at ?? "",
@@ -1029,12 +1063,13 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
     .maybeSingle();
   check(stored.error, "ler as notas guardadas");
   const notesRow = stored.data as NotesRow | null;
-  let transcript = "";
+  let transcript: { text: string; source: TranscriptSource } = { text: "", source: "transcript" };
   if (!notesRow) {
-    const t = await db.from("meeting_transcripts").select("text").eq("meeting_id", m.id).maybeSingle();
+    const t = await db.from("meeting_transcripts").select("text, source").eq("meeting_id", m.id).maybeSingle();
     check(t.error, "ler a transcrição");
     if (!t.data) throw new Error(NO_TRANSCRIPT);
-    transcript = (t.data as { text: string }).text;
+    const row = t.data as { text: string; source?: string | null };
+    transcript = { text: row.text, source: row.source === "gemini_notes" ? "gemini_notes" : "transcript" };
   }
 
   // 1. Vínculo: o já gravado (casado antes ou escolhido pelo vendedor) ou o casador.

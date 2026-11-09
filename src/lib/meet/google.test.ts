@@ -135,6 +135,50 @@ describe("demais chamadas do Meet", () => {
     expect(r[0].signedinUser?.displayName).toBe("Ana");
     expect(urlOf(0).pathname).toBe("/v2/conferenceRecords/a/participants");
   });
+
+  it("listSmartNotes pagina com pageSize=100 e traz o documento", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        json(200, {
+          smartNotes: [{ name: "conferenceRecords/a/smartNotes/1", state: "FILE_GENERATED", docsDestination: { document: "doc1" } }],
+          nextPageToken: "p2",
+        }),
+      )
+      .mockResolvedValueOnce(json(200, { smartNotes: [{ name: "conferenceRecords/a/smartNotes/2", state: "ENDED" }] }));
+    const r = await client().meet.listSmartNotes("conferenceRecords/a");
+    expect(r.map((n) => n.state)).toEqual(["FILE_GENERATED", "ENDED"]);
+    expect(r[0].docsDestination?.document).toBe("doc1");
+    expect(urlOf(0).origin + urlOf(0).pathname).toBe("https://meet.googleapis.com/v2/conferenceRecords/a/smartNotes");
+    expect(urlOf(0).searchParams.get("pageSize")).toBe("100");
+    expect(urlOf(1).searchParams.get("pageToken")).toBe("p2");
+  });
+});
+
+describe("MeetClient.exportDocText", () => {
+  it("exporta o documento do Drive como texto", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("Resumo\nPróximos passos", { status: 200, headers: { "Content-Type": "text/plain" } }));
+    const text = await client().meet.exportDocText("doc/1");
+    expect(text).toBe("Resumo\nPróximos passos");
+    expect(urlOf(0).origin + urlOf(0).pathname).toBe("https://www.googleapis.com/drive/v3/files/doc%2F1/export");
+    expect(urlOf(0).searchParams.get("mimeType")).toBe("text/plain");
+    expect((initOf(0).headers as Record<string, string>).Authorization).toBe("Bearer tok");
+  });
+
+  it("renova o token após 401", async () => {
+    fetchMock
+      .mockResolvedValueOnce(json(401, { error: { message: "expirou" } }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    const getToken = vi.fn(async (o?: { forceRefresh?: boolean }) => (o?.forceRefresh ? "novo" : "velho"));
+    expect(await new MeetClient(getToken).exportDocText("d")).toBe("ok");
+    expect((initOf(1).headers as Record<string, string>).Authorization).toBe("Bearer novo");
+  });
+
+  it("403 sem permissão vira GmailApiError com o status", async () => {
+    fetchMock.mockResolvedValueOnce(json(403, { error: { message: "insufficient scopes" } }));
+    await expect(client().meet.exportDocText("d")).rejects.toMatchObject({ status: 403 });
+    fetchMock.mockResolvedValueOnce(json(403, { error: { message: "insufficient scopes" } }));
+    await expect(client().meet.exportDocText("d")).rejects.toBeInstanceOf(GmailApiError);
+  });
 });
 
 describe("MeetClient.findEventByMeetingCode", () => {

@@ -86,8 +86,9 @@ export function MeetingAssistantForm({
             Assistente de reuniões ligado
           </Label>
           <p className="text-xs text-muted-foreground">
-            Lê a transcrição das reuniões do Google Meet com convidado externo, gera as notas e sugere os próximos
-            passos para o vendedor confirmar. Desligado, nenhuma transcrição desta empresa é lida.
+            Lê a transcrição (ou, sem ela, as anotações do Gemini) das reuniões do Google Meet com convidado externo,
+            gera as notas e sugere os próximos passos para o vendedor confirmar. Desligado, nada das reuniões desta
+            empresa é lido.
           </p>
         </div>
       </div>

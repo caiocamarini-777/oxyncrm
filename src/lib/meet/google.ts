@@ -10,6 +10,7 @@ import {
 
 const MEET_BASE = "https://meet.googleapis.com/v2";
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3";
+const DRIVE_BASE = "https://www.googleapis.com/drive/v3";
 
 /** Janela de busca do evento da agenda ao redor do horário da reunião. */
 const EVENT_WINDOW_MS = 12 * 3600_000;
@@ -17,6 +18,12 @@ const EVENT_WINDOW_MS = 12 * 3600_000;
 export type ConferenceRecord = { name: string; space: string; startTime: string; endTime: string | null };
 export type Transcript = { name: string; state: "STARTED" | "ENDED" | "FILE_GENERATED" | string };
 export type TranscriptEntry = { participant: string; text: string; startTime: string };
+/** Anotações do Gemini de uma reunião. `docsDestination.document` é o id do Google Doc gerado. */
+export type SmartNote = {
+  name: string;
+  state: "STARTED" | "ENDED" | "FILE_GENERATED" | string;
+  docsDestination?: { document?: string; exportUri?: string };
+};
 export type Participant = {
   name: string;
   signedinUser?: { user: string; displayName: string };
@@ -81,22 +88,18 @@ function isRateLimit(status: number, body: ApiErrorBody | null): boolean {
 }
 
 /**
- * Cliente REST do Google Meet e da Agenda (mesmo estilo do `GmailClient`). `getAccessToken` devolve o token
+ * Cliente REST do Google Meet, da Agenda e do Drive (mesmo estilo do `GmailClient`). `getAccessToken` devolve o token
  * vigente; após um 401 é chamado com `forceRefresh` e o token recusado em `rejected`.
  */
 export class MeetClient {
   constructor(private readonly getAccessToken: (opts?: TokenRequest) => Promise<string>) {}
 
-  private async request<T>(url: string): Promise<T> {
+  /** GET com o token; renova uma vez após 401. Devolve a resposta 2xx ou lança o erro do Google. */
+  private async send(url: string): Promise<Response> {
     let token = await this.getAccessToken();
     for (let attempt = 0; ; attempt++) {
       const res = await http(url, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) {
-        // 2xx sem JSON legível (resposta cortada no meio): rede, não erro do recurso.
-        const body = await readJson<T>(res);
-        if (body === null) throw new GmailNetworkError("Resposta incompleta do Google");
-        return body;
-      }
+      if (res.ok) return res;
       if (res.status === 401) {
         if (attempt === 0) {
           token = await this.getAccessToken({ forceRefresh: true, rejected: token });
@@ -108,6 +111,14 @@ export class MeetClient {
       if (isRateLimit(res.status, body)) throw new GmailRateLimitError(body?.error?.message);
       throw new GmailApiError(res.status, body?.error?.message ?? `O Google respondeu ${res.status}`);
     }
+  }
+
+  private async request<T>(url: string): Promise<T> {
+    const res = await this.send(url);
+    // 2xx sem JSON legível (resposta cortada no meio): rede, não erro do recurso.
+    const body = await readJson<T>(res);
+    if (body === null) throw new GmailNetworkError("Resposta incompleta do Google");
+    return body;
   }
 
   /** Percorre todas as páginas de uma listagem, juntando o campo `field` de cada uma. */
@@ -155,6 +166,25 @@ export class MeetClient {
     return this.listAll(MEET_BASE, `${resourcePath(transcript)}/entries`, "transcriptEntries", { pageSize: 100 });
   }
 
+  listSmartNotes(record: string): Promise<SmartNote[]> {
+    return this.listAll(MEET_BASE, `${resourcePath(record)}/smartNotes`, "smartNotes", { pageSize: 100 });
+  }
+
+  /**
+   * Texto de um Google Doc gerado pelo Meet (anotações do Gemini), exportado pelo Drive. Pede o escopo
+   * `drive.meet.readonly`, que só alcança arquivos criados ou editados pelo Meet.
+   */
+  async exportDocText(documentId: string): Promise<string> {
+    const res = await this.send(
+      buildUrl(DRIVE_BASE, `/files/${encodeURIComponent(documentId)}/export`, { mimeType: "text/plain" }),
+    );
+    try {
+      return await res.text();
+    } catch (e) {
+      throw new GmailNetworkError(e instanceof Error ? e.message : undefined);
+    }
+  }
+
   listParticipants(record: string): Promise<Participant[]> {
     return this.listAll(MEET_BASE, `${resourcePath(record)}/participants`, "participants", {});
   }
@@ -185,7 +215,7 @@ export class MeetClient {
   }
 }
 
-/** Cliente do Meet e da Agenda com o token da caixa do Gmail (renovado a cada 401). */
+/** Cliente do Meet, da Agenda e do Drive (arquivos do Meet) com o token da caixa do Gmail (renovado a cada 401). */
 export function meetClientForAccount(accountId: string): MeetClient {
   return new MeetClient((opts) => loadAccountToken(accountId, { forceRefresh: opts?.forceRefresh }));
 }

@@ -13,11 +13,26 @@ vi.mock("./match-loader", () => ({
 import { GmailApiError, GmailNetworkError, GmailRateLimitError } from "@/lib/gmail/client";
 import { loadCandidates } from "./match-loader";
 import { MEET_SCOPES } from "@/lib/gmail/connect";
-import type { CalendarEvent, ConferenceRecord, MeetClient, Participant, Transcript, TranscriptEntry } from "./google";
+import type {
+  CalendarEvent,
+  ConferenceRecord,
+  MeetClient,
+  Participant,
+  SmartNote,
+  Transcript,
+  TranscriptEntry,
+} from "./google";
 import { fakeDb, resetSeq, type Row, type Tables } from "./fake-db.test-support";
 import type { Candidate } from "./match";
 import type { MeetingNotes, NotesInput } from "./notes";
-import { isPermanentGoogleError, MAX_TRANSCRIPT_CHARS, type MeetDeps, processMeeting, runMeetSync } from "./run";
+import {
+  isPermanentGoogleError,
+  MAX_TRANSCRIPT_CHARS,
+  type MeetDeps,
+  NO_MEETING_TEXT,
+  processMeeting,
+  runMeetSync,
+} from "./run";
 import { type MeetingSink, SinkError } from "./sink";
 
 // ---- Meet falso ----------------------------------------------------------------------------------------------
@@ -29,10 +44,13 @@ type MeetData = {
   transcripts?: Record<string, Transcript[]>;
   entries?: Record<string, TranscriptEntry[]>;
   participants?: Record<string, Participant[]>;
+  smartNotes?: Record<string, SmartNote[]>;
+  /** Texto de cada documento do Drive (anotações do Gemini), pelo id. */
+  docs?: Record<string, string>;
 };
 
 function fakeMeet(d: MeetData) {
-  const calls = { list: [] as Date[], transcripts: 0, codes: 0, records: 0 };
+  const calls = { list: [] as Date[], transcripts: 0, codes: 0, records: 0, smartNotes: 0, exports: [] as string[] };
   const client = {
     listConferenceRecords: async (since: Date) => {
       calls.list.push(since);
@@ -49,6 +67,13 @@ function fakeMeet(d: MeetData) {
     listTranscripts: async (record: string) => (calls.transcripts++, d.transcripts?.[record] ?? []),
     listTranscriptEntries: async (t: string) => d.entries?.[t] ?? [],
     listParticipants: async (record: string) => d.participants?.[record] ?? [],
+    listSmartNotes: async (record: string) => (calls.smartNotes++, d.smartNotes?.[record] ?? []),
+    exportDocText: async (doc: string) => {
+      calls.exports.push(doc);
+      const text = d.docs?.[doc];
+      if (text === undefined) throw new GmailApiError(404, "File not found");
+      return text;
+    },
   };
   return { client: client as unknown as MeetClient, calls };
 }
@@ -546,7 +571,7 @@ describe("runMeetSync: transcrição", () => {
 
     t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
     const out = await t.run();
-    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: "reunião sem transcrição" });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: NO_MEETING_TEXT });
     expect(out[0]).toMatchObject({ failed: 1 });
     expect(t.notes).not.toHaveBeenCalled();
   });
@@ -568,7 +593,7 @@ describe("runMeetSync: transcrição", () => {
     const out = await t.run();
     expect(t.tables.meetings[0]).toMatchObject({
       status: "failed",
-      last_error: "reunião sem transcrição (The caller does not have permission)",
+      last_error: `${NO_MEETING_TEXT} (The caller does not have permission)`,
     });
     expect(out[0]).toMatchObject({ failed: 1 });
   });
@@ -580,7 +605,7 @@ describe("runMeetSync: transcrição", () => {
       throw new GmailNetworkError("socket hang up");
     };
     await t.run();
-    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: "reunião sem transcrição (socket hang up)" });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: `${NO_MEETING_TEXT} (socket hang up)` });
     expect(t.notes).not.toHaveBeenCalled();
   });
 
@@ -590,6 +615,7 @@ describe("runMeetSync: transcrição", () => {
     expect(t.tables.meeting_transcripts).toHaveLength(1);
     expect(t.tables.meeting_transcripts[0]).toMatchObject({
       meeting_id: "m1",
+      source: "transcript",
       entries: [
         { speaker: "Caio", text: "Bom dia!", start: "2026-11-05T14:00:10.000Z" },
         { speaker: "Cliente", text: "Precisamos automatizar.", start: "2026-11-05T14:01:00.000Z" },
@@ -616,6 +642,173 @@ describe("runMeetSync: transcrição", () => {
     expect(MAX_TRANSCRIPT_CHARS).toBe(1_048_576);
     expect((t.tables.meeting_transcripts[0].text as string).length).toBe(1_048_576);
     expect(t.notes.mock.calls[0][0].transcript.length).toBe(1_048_576);
+  });
+});
+
+describe("runMeetSync: anotações do Gemini", () => {
+  const N1 = `${R1}/smartNotes/n1`;
+  const gemini = (over: Partial<MeetData> = {}) =>
+    meetData({
+      transcripts: {},
+      smartNotes: { [R1]: [{ name: N1, state: "FILE_GENERATED", docsDestination: { document: "doc1" } }] },
+      docs: { doc1: "  Resumo: cliente quer automatizar a cobrança.\nPróximos passos: enviar proposta.  " },
+      ...over,
+    });
+
+  it("sem transcrição, usa as anotações do Gemini: grava com a origem e gera as notas a partir delas", async () => {
+    const t = setup({ meet: { acc1: gemini() } });
+    await t.run();
+    expect(t.tables.meeting_transcripts).toHaveLength(1);
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({
+      meeting_id: "m1",
+      source: "gemini_notes",
+      entries: [],
+      text: "Resumo: cliente quer automatizar a cobrança.\nPróximos passos: enviar proposta.",
+    });
+    expect(t.meets.acc1.calls.exports).toEqual(["doc1"]);
+    expect(t.notes).toHaveBeenCalledTimes(1);
+    expect(t.notes.mock.calls[0][0]).toMatchObject({
+      source: "gemini_notes",
+      transcript: "Resumo: cliente quer automatizar a cobrança.\nPróximos passos: enviar proposta.",
+    });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("transcrição pronta tem preferência: o Gemini nem é consultado", async () => {
+    const t = setup({ meet: { acc1: gemini({ transcripts: meetData().transcripts }) } });
+    await t.run();
+    expect(t.meets.acc1.calls.smartNotes).toBe(0);
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({ source: "transcript" });
+    expect(t.notes.mock.calls[0][0]).toMatchObject({ source: "transcript" });
+  });
+
+  it("transcrição ainda gerando: espera por ela até o prazo; depois, sem nenhuma pronta, usa o Gemini", async () => {
+    const t = setup({ meet: { acc1: gemini({ transcripts: { [R1]: [{ name: T1, state: "STARTED" }] } }) } });
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript" });
+    expect(t.meets.acc1.calls.smartNotes).toBe(0);
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
+    await t.run();
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({ source: "gemini_notes" });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("anotações do Gemini ainda gerando: espera até o prazo; depois, sem documento pronto, vira failed", async () => {
+    const t = setup({ meet: { acc1: gemini({ smartNotes: { [R1]: [{ name: N1, state: "ENDED" }] } }) } });
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript" });
+    expect(t.meets.acc1.calls.exports).toEqual([]);
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
+    const out = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: NO_MEETING_TEXT });
+    expect(out[0]).toMatchObject({ failed: 1 });
+    expect(t.notes).not.toHaveBeenCalled();
+  });
+
+  it("várias sessões do Gemini: junta os documentos em ordem e pula os vazios e os sem documento", async () => {
+    const t = setup({
+      meet: {
+        acc1: gemini({
+          smartNotes: {
+            [R1]: [
+              { name: N1, state: "FILE_GENERATED", docsDestination: { document: "doc1" } },
+              { name: `${R1}/smartNotes/n2`, state: "FILE_GENERATED" },
+              { name: `${R1}/smartNotes/n3`, state: "FILE_GENERATED", docsDestination: { document: "vazio" } },
+              { name: `${R1}/smartNotes/n4`, state: "FILE_GENERATED", docsDestination: { document: "doc2" } },
+            ],
+          },
+          docs: { doc1: "Parte 1", vazio: "  \n ", doc2: "Parte 2" },
+        }),
+      },
+    });
+    await t.run();
+    expect(t.meets.acc1.calls.exports).toEqual(["doc1", "vazio", "doc2"]);
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({ source: "gemini_notes", text: "Parte 1\n\nParte 2" });
+  });
+
+  it("o mesmo documento em duas sessões entra uma vez só", async () => {
+    const t = setup({
+      meet: {
+        acc1: gemini({
+          smartNotes: {
+            [R1]: [
+              { name: N1, state: "FILE_GENERATED", docsDestination: { document: "doc1" } },
+              { name: `${R1}/smartNotes/n2`, state: "FILE_GENERATED", docsDestination: { document: "doc1" } },
+            ],
+          },
+          docs: { doc1: "Parte 1" },
+        }),
+      },
+    });
+    await t.run();
+    expect(t.meets.acc1.calls.exports).toEqual(["doc1"]);
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({ text: "Parte 1" });
+  });
+
+  it("um documento que não abre não descarta os outros", async () => {
+    const t = setup({
+      meet: {
+        acc1: gemini({
+          smartNotes: {
+            [R1]: [
+              { name: N1, state: "FILE_GENERATED", docsDestination: { document: "apagado" } },
+              { name: `${R1}/smartNotes/n2`, state: "FILE_GENERATED", docsDestination: { document: "doc2" } },
+            ],
+          },
+          docs: { doc2: "Parte 2" },
+        }),
+      },
+    });
+    await t.run();
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({ source: "gemini_notes", text: "Parte 2" });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("transcrição pronta mas sem fala: usa as anotações do Gemini", async () => {
+    const t = setup({ meet: { acc1: gemini({ transcripts: meetData().transcripts, entries: { [T1]: [] } }) } });
+    await t.run();
+    expect(t.tables.meeting_transcripts[0]).toMatchObject({ source: "gemini_notes" });
+    expect(t.notes.mock.calls[0][0]).toMatchObject({ source: "gemini_notes" });
+  });
+
+  it("transcrição sem fala e sem Gemini: espera e, depois do prazo, vira failed sem chamar o Claude", async () => {
+    const t = setup({ meet: { acc1: meetData({ entries: { [T1]: [] } }) } });
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript" });
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: NO_MEETING_TEXT });
+    expect(t.notes).not.toHaveBeenCalled();
+  });
+
+  it("documento do Gemini vazio conta como nada pronto: espera e, depois do prazo, vira failed", async () => {
+    const t = setup({ meet: { acc1: gemini({ docs: { doc1: "   " } }) } });
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript" });
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: NO_MEETING_TEXT });
+  });
+
+  it("texto do Gemini é cortado em 1.048.576 caracteres", async () => {
+    const t = setup({ meet: { acc1: gemini({ docs: { doc1: "y".repeat(MAX_TRANSCRIPT_CHARS + 10) } }) } });
+    await t.run();
+    expect((t.tables.meeting_transcripts[0].text as string).length).toBe(MAX_TRANSCRIPT_CHARS);
+  });
+
+  it("exportar o documento falhando: antes do prazo continua esperando; depois do prazo vira failed com o erro", async () => {
+    const t = setup({ meet: { acc1: gemini({ docs: {} }) } });
+    const early = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript" });
+    expect(early[0].error).toBe("File not found");
+
+    t.setNow(minutesAfter("2026-11-05T14:45:00.000Z", 121));
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed", last_error: `${NO_MEETING_TEXT} (File not found)` });
   });
 });
 

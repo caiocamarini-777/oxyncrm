@@ -51,11 +51,14 @@ export function Reconnect({ email }: { email: string }) {
   );
 }
 
-/** Caixa conectada antes do assistente de reuniões: faltam os escopos do Meet e da agenda. */
+/** Caixa sem algum escopo do assistente de reuniões (Meet, agenda ou os arquivos do Meet no Drive). */
 export function ReconnectForMeet({ companyId }: { companyId: string }) {
   return (
     <Notice title="Reconecte o Google para ativar o assistente de reuniões.">
-      <p>Esta caixa foi conectada sem acesso às reuniões do Meet e à agenda. Reconecte-a e autorize os novos acessos.</p>
+      <p>
+        Esta caixa foi conectada sem algum dos acessos do assistente (reuniões do Meet, agenda e anotações do Gemini).
+        Reconecte-a e autorize os novos acessos.
+      </p>
       {/* O perfil só oferece "Reconectar" quando a caixa caiu; aqui ela está ativa, então vai direto ao OAuth. */}
       <a
         href={`/api/google/conectar?empresa=${encodeURIComponent(companyId)}`}

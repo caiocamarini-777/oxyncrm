@@ -87,7 +87,7 @@ describe("retryMeeting", () => {
   it("sem transcrição guardada: volta a esperar a transcrição, zera as tentativas e não processa", async () => {
     const t = setup();
     const res = await retryMeeting(M);
-    expect(res).toEqual({ ok: true, data: { message: "Vamos buscar a transcrição de novo na próxima rodada." } });
+    expect(res).toEqual({ ok: true, data: { message: "Vamos buscar a transcrição (ou as anotações do Gemini) de novo na próxima rodada." } });
     expect(t.tables.meetings[0]).toMatchObject({ status: "waiting_transcript", attempts: 0, last_error: null });
     expect(processMeeting).not.toHaveBeenCalled();
   });

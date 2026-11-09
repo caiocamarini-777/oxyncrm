@@ -64,14 +64,14 @@ describe("toRecordMeeting", () => {
     meeting_transcripts: { meeting_id: "m1" },
   };
 
-  it("monta a reunião com notas, sugestões em ordem fixa e a marca de transcrição", () => {
+  it("monta a reunião com notas, sugestões em ordem fixa e a origem do texto (sem origem, transcrição)", () => {
     const m = toRecordMeeting(base, true);
     expect(m).toMatchObject({
       id: "m1",
       title: "Reunião com a Ana",
       startedAt: "2026-11-05T17:00:00Z",
       status: "done",
-      hasTranscript: true,
+      transcriptSource: "transcript",
       canEdit: true,
     });
     expect(m?.notes).toEqual(base.meeting_notes);
@@ -88,8 +88,15 @@ describe("toRecordMeeting", () => {
   it("aceita as relações como lista (um elemento) e sem transcrição", () => {
     const m = toRecordMeeting({ ...base, meeting_notes: [base.meeting_notes], meeting_transcripts: [] }, false);
     expect(m?.notes?.summary).toBe("Resumo da conversa");
-    expect(m?.hasTranscript).toBe(false);
+    expect(m?.transcriptSource).toBeNull();
     expect(m?.canEdit).toBe(false);
+  });
+
+  it("texto vindo das anotações do Gemini", () => {
+    const m = toRecordMeeting({ ...base, meeting_transcripts: { meeting_id: "m1", source: "gemini_notes" } }, true);
+    expect(m?.transcriptSource).toBe("gemini_notes");
+    const t = toRecordMeeting({ ...base, meeting_transcripts: [{ meeting_id: "m1", source: "transcript" }] }, true);
+    expect(t?.transcriptSource).toBe("transcript");
   });
 
   it("processando e sem notas: notes nulo", () => {

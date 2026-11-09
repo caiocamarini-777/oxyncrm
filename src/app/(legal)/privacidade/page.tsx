@@ -33,8 +33,9 @@ export default function PrivacyPage() {
           <li>
             <strong>Dados das reuniões do Google Meet</strong>, somente quando o próprio usuário conecta a sua conta
             Google e a empresa liga o assistente de reuniões. Das reuniões encerradas da conta conectada, o CRM lê o
-            título, o horário e os participantes (nome e e-mail), para saber se há convidado externo. A transcrição só
-            é lida quando há convidado externo (veja as seções 4 e 5).
+            título, o horário e os participantes (nome e e-mail), para saber se há convidado externo. A transcrição
+            (ou, quando a reunião não teve transcrição, as anotações do Gemini) só é lida quando há convidado externo
+            (veja as seções 4 e 5).
           </li>
         </ul>
       </LegalSection>
@@ -68,17 +69,18 @@ export default function PrivacyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="4. Uso dos dados do Google (Google Meet e Agenda)">
+      <LegalSection title="4. Uso dos dados do Google (Google Meet, Agenda e Drive)">
         <p>
           O assistente de reuniões usa a mesma conexão do Google que o usuário faz no perfil para o Gmail e pede mais
-          dois acessos, ambos somente de leitura. Quem já conectou a caixa precisa reconectar uma vez para autorizá-los.
+          três acessos, todos somente de leitura. Quem já conectou a caixa precisa reconectar uma vez para autorizá-los.
         </p>
         <ul>
           <li>
             <strong>Leitura das reuniões do Google Meet</strong> (
             <code>https://www.googleapis.com/auth/meetings.space.readonly</code>): permite ao CRM consultar as reuniões
-            feitas pela conta, com horário de início e fim, participantes e a transcrição gerada pelo próprio Meet. O
-            CRM não baixa gravações de áudio ou vídeo e não cria, altera nem apaga reuniões.
+            feitas pela conta, com horário de início e fim, participantes, a transcrição gerada pelo próprio Meet e a
+            indicação do documento das anotações do Gemini. O CRM não baixa gravações de áudio ou vídeo e não cria,
+            altera nem apaga reuniões.
           </li>
           <li>
             <strong>Leitura dos eventos da Agenda Google</strong> (
@@ -86,28 +88,36 @@ export default function PrivacyPage() {
             da agenda principal da conta para achar o evento da reunião e ler o título e os convidados. O CRM não cria,
             altera nem apaga eventos.
           </li>
+          <li>
+            <strong>Leitura dos arquivos criados pelo Google Meet no Drive</strong> (
+            <code>https://www.googleapis.com/auth/drive.meet.readonly</code>): permite ao CRM ler o documento das
+            anotações do Gemini (&quot;Anotações com o Gemini&quot;) de uma reunião que não teve transcrição. Esse
+            acesso só alcança arquivos criados ou editados pelo Meet; o CRM não lê os demais arquivos do Drive, não
+            baixa gravações e não cria, altera nem apaga arquivos.
+          </li>
         </ul>
         <p>
           Com o assistente de reuniões ligado para a empresa da caixa conectada, o CRM lê o título, o horário e os
           participantes das reuniões encerradas da conta, para saber se há pelo menos um convidado de fora das
-          empresas do grupo. Reuniões só com gente interna são marcadas como ignoradas e a transcrição delas não é
-          lida. Com o assistente desligado, nada é lido. Esses dados são usados apenas para escrever a anotação da
-          reunião e sugerir atualizações do funil para o vendedor.
+          empresas do grupo. Reuniões só com gente interna são marcadas como ignoradas, e a transcrição e as anotações
+          do Gemini delas não são lidas. Com o assistente desligado, nada é lido. Esses dados são usados apenas para
+          escrever a anotação da reunião e sugerir atualizações do funil para o vendedor.
         </p>
       </LegalSection>
 
-      <LegalSection title="5. Processamento das transcrições e guarda no CRM">
+      <LegalSection title="5. Processamento das transcrições e anotações e guarda no CRM">
         <ul>
           <li>
-            <strong>Anthropic, fornecedora do processamento:</strong> para escrever a anotação, o texto da transcrição,
-            o título, a data e os participantes da reunião, o roteiro de perguntas da empresa e um resumo do registro
-            vinculado (nome, etapa, valores e as últimas anotações) são enviados à Anthropic, junto com os nomes dos
-            resultados de reunião, dos tipos de atividade e das etapas do funil que o assistente pode sugerir. A
-            Anthropic opera o modelo de inteligência artificial Claude por conta do CRM. Pelos termos comerciais da API
-            da Anthropic, esses dados não são usados para treinar os modelos dela.
+            <strong>Anthropic, fornecedora do processamento:</strong> para escrever a anotação, o texto da transcrição
+            (ou das anotações do Gemini), o título, a data e os participantes da reunião, o roteiro de perguntas da
+            empresa e um resumo do registro vinculado (nome, etapa, valores e as últimas anotações) são enviados à
+            Anthropic, junto com os nomes dos resultados de reunião, dos tipos de atividade e das etapas do funil que o
+            assistente pode sugerir. A Anthropic opera o modelo de inteligência artificial Claude por conta do CRM.
+            Pelos termos comerciais da API da Anthropic, esses dados não são usados para treinar os modelos dela.
           </li>
           <li>
-            <strong>Guarda no CRM:</strong> a transcrição e as notas geradas ficam guardadas no banco do CRM e são
+            <strong>Guarda no CRM:</strong> a transcrição (ou as anotações do Gemini) e as notas geradas ficam guardadas
+            no banco do CRM e são
             visíveis, no registro vinculado, para as pessoas que têm acesso a esse registro. A anotação da reunião
             (sem a transcrição) é gravada direto no registro correspondente do Pipedrive, ferramenta comercial que o
             grupo ainda usa, sem esperar confirmação. Só as sugestões de atualização do funil (resultado da reunião,
@@ -143,8 +153,8 @@ export default function PrivacyPage() {
       <LegalSection title="7. Onde os dados ficam">
         <p>
           Os dados ficam em banco de dados gerenciado pela Supabase, e o sistema roda na Vercel. Os e-mails automáticos
-          do CRM (convites, redefinição de senha e lembretes) são enviados pela Resend, e as transcrições de reuniões são
-          processadas pela Anthropic (seção 5). Os tokens de acesso ao Gmail
+          do CRM (convites, redefinição de senha e lembretes) são enviados pela Resend, e as transcrições e anotações de
+          reuniões são processadas pela Anthropic (seção 5). Os tokens de acesso ao Gmail
           são guardados criptografados (AES-256-GCM) e só são lidos pelo servidor. Toda a comunicação usa HTTPS.
         </p>
       </LegalSection>
@@ -157,8 +167,9 @@ export default function PrivacyPage() {
             caixa são apagadas do CRM. O assistente de reuniões também deixa de ler as reuniões dela.
           </li>
           <li>
-            A transcrição e as notas de uma reunião vinculada ficam no CRM junto com o registro. Reuniões sem vínculo e
-            sem decisão do vendedor são descartadas sozinhas em 7 dias, com a transcrição apagada. O vendedor também
+            A transcrição (ou as anotações do Gemini) e as notas de uma reunião vinculada ficam no CRM junto com o
+            registro. Reuniões sem vínculo e sem decisão do vendedor são descartadas sozinhas em 7 dias, com esse texto
+            apagado. O vendedor também
             pode descartá-las antes disso. Uma reunião ignorada (só com gente interna, sem a transcrição lida) ou
             descartada continua registrada no CRM com o título, os participantes (nome e e-mail), o horário e o
             identificador da reunião no Google, para não ser lida de novo. A transcrição e as notas da reunião

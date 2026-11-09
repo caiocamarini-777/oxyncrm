@@ -84,10 +84,14 @@ export function hasRequiredScopes(granted: string[]): boolean {
   return REQUIRED_GMAIL_SCOPES.every((s) => granted.includes(s));
 }
 
-/** Escopos do assistente de reuniões (ler a transcrição no Meet e os eventos da agenda). Sem eles a caixa funciona, o assistente não. */
+/**
+ * Escopos do assistente de reuniões: ler as reuniões no Meet, os eventos da agenda e os arquivos que o Meet cria
+ * no Drive (as anotações do Gemini). Sem eles a caixa funciona, o assistente não.
+ */
 export const MEET_SCOPES: readonly string[] = [
   "https://www.googleapis.com/auth/meetings.space.readonly",
   "https://www.googleapis.com/auth/calendar.events.readonly",
+  "https://www.googleapis.com/auth/drive.meet.readonly",
 ];
 
 /** Contas conectadas antes do assistente (ou com os escopos desmarcados) precisam reconectar. */

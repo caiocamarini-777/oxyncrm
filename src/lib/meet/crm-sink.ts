@@ -31,6 +31,8 @@ const DEFAULT_TIME = "09:00";
 const VIDEO_CHANNEL = "Videochamada";
 /** Assunto da reunião criada sem âncora quando o título da reunião vem vazio. */
 const MEETING_SUBJECT = "Reunião";
+/** Etapa sugerida para negócio ganho ou perdido. */
+const NOT_OPEN = "O negócio não está aberto: a etapa não foi mudada.";
 
 /** Coluna de vínculo da atividade para cada entidade do alvo. */
 const LINK_COLUMN = {
@@ -252,19 +254,24 @@ async function missingFieldsMessage(client: SupabaseClient, companyId: string, e
 }
 
 /**
- * Move o negócio para a etapa pelo nome (sem diferenciar maiúsculas), dentro do funil dele e sem as arquivadas.
- * Negócio já na etapa: nada a gravar. Campos obrigatórios da etapa faltando: `CrmSinkUserError` com a lista.
+ * Move o negócio aberto para a etapa pelo nome (sem diferenciar maiúsculas), dentro do funil dele e sem as
+ * arquivadas. Ganho ou perdido: `CrmSinkUserError`, sem gravar. Negócio já na etapa: nada a gravar. Campos
+ * obrigatórios da etapa faltando: `CrmSinkUserError` com a lista.
  */
 export async function moveCrmStage(client: SupabaseClient, dealId: string, stageName: string): Promise<void> {
   const found = await client
     .from("deals")
-    .select("id, company_id, pipeline_id, stage_id")
+    .select("id, company_id, pipeline_id, stage_id, status")
     .eq("id", dealId)
     .is("deleted_at", null)
     .maybeSingle();
   if (found.error) throw new Error(`Falha ao ler o negócio: ${found.error.message}`);
-  const deal = found.data as { id: string; company_id: string; pipeline_id: string; stage_id: string } | null;
+  const deal = found.data as
+    | { id: string; company_id: string; pipeline_id: string; stage_id: string; status: string }
+    | null;
   if (!deal) throw new CrmSinkUserError("O negócio não foi encontrado.");
+  // Mesma regra do `moveDeal`: ganho ou perdido não muda de etapa.
+  if (deal.status !== "open") throw new CrmSinkUserError(NOT_OPEN);
 
   const stages = await client.from("stages").select("id, name").eq("pipeline_id", deal.pipeline_id).is("archived_at", null);
   if (stages.error) throw new Error(`Falha ao ler as etapas do funil: ${stages.error.message}`);
@@ -278,6 +285,7 @@ export async function moveCrmStage(client: SupabaseClient, dealId: string, stage
     .update({ stage_id: stage.id })
     .eq("id", deal.id)
     .is("deleted_at", null)
+    .eq("status", "open")
     .select("id");
   if (error) {
     if (error.message?.includes("OXYN_REQUIRED_FIELDS")) {
@@ -286,7 +294,9 @@ export async function moveCrmStage(client: SupabaseClient, dealId: string, stage
     throw writeFailure(error, "mover o negócio de etapa");
   }
   if (!data || data.length === 0) {
-    throw new CrmSinkUserError("Não foi possível mover: o negócio está na lixeira ou você não tem permissão.");
+    throw new CrmSinkUserError(
+      "Não foi possível mover: o negócio não está aberto, está na lixeira ou você não tem permissão.",
+    );
   }
 }
 

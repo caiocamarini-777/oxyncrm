@@ -448,6 +448,7 @@ describe("moveCrmStage", () => {
           company_id: CO,
           pipeline_id: "p1",
           stage_id: "st1",
+          status: "open",
           deleted_at: null,
           expected_close_date: null,
           person_id: null,
@@ -519,6 +520,17 @@ describe("moveCrmStage", () => {
     const { db, tables } = fakeDb(t);
     await moveCrmStage(db, "d1", "Contrato");
     expect(tables.deals[0].stage_id).toBe("st4");
+  });
+
+  it.each([["won"], ["lost"]])("negócio %s: CrmSinkUserError sem mudar a etapa", async (status) => {
+    const t = stageTables();
+    t.deals[0].status = status;
+    const { db, log, tables } = fakeDb(t);
+    const p = moveCrmStage(db, "d1", "Proposta");
+    await expect(p).rejects.toBeInstanceOf(CrmSinkUserError);
+    await expect(p).rejects.toThrow("O negócio não está aberto: a etapa não foi mudada.");
+    expect(writes(log)).toEqual([]);
+    expect(tables.deals[0].stage_id).toBe("st1");
   });
 
   it("negócio já na etapa: não grava nada", async () => {

@@ -5,6 +5,8 @@ import { getComposeData } from "@/lib/gmail/compose-data";
 import { getRecordThreads } from "@/lib/gmail/queries";
 import type { RecordThread } from "@/lib/gmail/thread-view";
 import { getRecordMeetings } from "@/lib/meet/queries";
+import { getRecordPipedriveThreads } from "@/lib/pipedrive-mail/queries";
+import { dropImportedDuplicates } from "@/lib/pipedrive-mail/view";
 import type { RecordEntity } from "@/lib/records/types";
 import type { TimelineItem } from "@/lib/timeline/queries";
 import { Timeline } from "./timeline";
@@ -25,22 +27,30 @@ export function RecordHistory(props: Props) {
 
 async function RecordHistoryContent({ entity, recordId, items, planned }: Props) {
   // Se a parte de e-mail falhar, o histórico segue sem as conversas; as reuniões falham em silêncio dentro da consulta.
-  const [threads, compose, meetings] = await Promise.all([
+  // Os e-mails importados do Pipedrive vêm junto e também falham sem derrubar o resto.
+  const [gmail, imported, compose, meetings] = await Promise.all([
     getRecordThreads(entity, recordId).catch((e: unknown) => {
       console.error("[historico] e-mails:", e);
+      return [] as RecordThread[];
+    }),
+    getRecordPipedriveThreads(entity, recordId).catch((e: unknown) => {
+      console.error("[historico] e-mails do Pipedrive:", e);
       return [] as RecordThread[];
     }),
     getComposeData(entity, recordId).catch(() => null),
     getRecordMeetings(entity, recordId),
   ]);
 
-  // "Responder" só nas conversas da caixa do próprio usuário, para o remetente da última mensagem recebida.
+  // O importado que já veio pelo Gmail (mesmo Message-ID) some; o resto entra no histórico, só para leitura.
+  const threads = [...gmail, ...dropImportedDuplicates(gmail, imported)];
+
+  // "Responder" só nas conversas do Gmail da caixa do próprio usuário, para o remetente da última mensagem recebida.
   const threadActions: Record<string, ReactNode> = {};
   if (compose) {
     const record = compose.canEdit ? { entity, id: recordId } : undefined;
     for (const t of threads) {
       const last = t.messages[t.messages.length - 1];
-      if (!t.isMine || !last) continue;
+      if (t.source !== "gmail" || !t.isMine || !last) continue;
       threadActions[t.threadId] = (
         <Composer
           label="Responder"

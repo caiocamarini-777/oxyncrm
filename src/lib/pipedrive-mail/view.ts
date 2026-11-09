@@ -153,3 +153,11 @@ export function toRecordFileView(r: RecordFileRow): RecordFileView {
     available: !!r.storage_path || !!r.remote_url,
   };
 }
+
+/** Tamanho legível: "512 B", "48 KB", "1,5 MB". Vazio quando o tamanho não é conhecido. */
+export function formatFileSize(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB`;
+}

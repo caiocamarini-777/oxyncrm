@@ -8,6 +8,7 @@ import { NoteComposer } from "@/components/records/note-composer";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { RecordHistory } from "@/components/records/record-history";
+import { RecordFiles } from "@/components/records/record-files";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
@@ -76,6 +77,7 @@ export default async function PersonPage({ params }: { params: Promise<{ empresa
             canEdit={permissions.edit}
             canCreateOrganization={orgPermissions.create}
           />
+          <RecordFiles entity="persons" recordId={person.id} />
         </div>
       }
       main={

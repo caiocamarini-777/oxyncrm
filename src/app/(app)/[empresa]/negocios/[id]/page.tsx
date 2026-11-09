@@ -12,6 +12,7 @@ import { RecordLayout } from "@/components/records/record-layout";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { RecordHistory } from "@/components/records/record-history";
+import { RecordFiles } from "@/components/records/record-files";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
@@ -135,6 +136,7 @@ export default async function DealPage({ params }: { params: Promise<{ empresa: 
               <RevenueTable rows={deal.schedule} />
             </CardContent>
           </Card>
+          <RecordFiles entity="deals" recordId={deal.id} />
         </div>
       }
       main={

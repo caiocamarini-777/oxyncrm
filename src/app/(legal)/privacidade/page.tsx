@@ -25,7 +25,9 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong>Dados comerciais:</strong> pessoas, organizações, leads, negócios, atividades e anotações
-            cadastrados pelos usuários ou importados das ferramentas que as empresas do grupo já usavam.
+            cadastrados pelos usuários ou importados das ferramentas que as empresas do grupo já usavam. Isso inclui
+            os e-mails e os arquivos guardados no Pipedrive (o corpo e os anexos das mensagens e os arquivos dos
+            cards), que também são importados. Os arquivos ficam em armazenamento privado.
           </li>
           <li>
             <strong>Dados do Gmail</strong>, somente quando o próprio usuário conecta a sua caixa (veja a seção 3).

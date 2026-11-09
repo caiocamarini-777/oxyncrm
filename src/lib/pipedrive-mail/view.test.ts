@@ -3,6 +3,7 @@ import type { RecordThread, ThreadMessageView } from "@/lib/gmail/thread-view";
 import {
   buildPipedriveThreads,
   dropImportedDuplicates,
+  formatFileSize,
   toRecordFileView,
   type PipedriveAttachmentRow,
   type PipedriveEmailRow,
@@ -198,5 +199,19 @@ describe("toRecordFileView", () => {
       available: false,
       size: 30_000_000,
     });
+  });
+});
+
+describe("formatFileSize", () => {
+  it("bytes, KB e MB", () => {
+    expect(formatFileSize(512)).toBe("512 B");
+    expect(formatFileSize(2048)).toBe("2 KB");
+    expect(formatFileSize(1_572_864)).toBe("1,5 MB");
+    expect(formatFileSize(26_214_400)).toBe("25 MB");
+  });
+
+  it("tamanho desconhecido fica vazio", () => {
+    expect(formatFileSize(null)).toBe("");
+    expect(formatFileSize(Number.NaN)).toBe("");
   });
 });

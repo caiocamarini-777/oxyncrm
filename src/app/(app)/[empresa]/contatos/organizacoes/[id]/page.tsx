@@ -6,6 +6,7 @@ import { NoteComposer } from "@/components/records/note-composer";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { RecordHistory } from "@/components/records/record-history";
+import { RecordFiles } from "@/components/records/record-files";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
@@ -71,6 +72,7 @@ export default async function OrganizationPage({
         <div className="flex flex-col gap-4">
           <OrganizationEditPanel organization={organization} defs={defs} owners={owners} canEdit={permissions.edit} />
           <OrganizationPersons organization={organization} />
+          <RecordFiles entity="organizations" recordId={organization.id} />
         </div>
       }
       main={

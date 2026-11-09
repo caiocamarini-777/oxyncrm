@@ -48,6 +48,14 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : Array.from(text).slice(0, max).join("");
 }
 
+/** E-mail da pessoa: o marcado como principal, senão o primeiro da lista (`[{ value, label?, primary? }]`). */
+export function primaryEmail(emails: unknown): string | null {
+  if (!Array.isArray(emails)) return null;
+  const items = emails as { value?: unknown; primary?: unknown }[];
+  const item = items.find((e) => e?.primary === true) ?? items[0];
+  return typeof item?.value === "string" && item.value.trim() ? item.value.trim() : null;
+}
+
 const hasEmail = (a: ActivityForCalendar): boolean => !!a.personEmail?.trim();
 
 /** Reunião aberta (não concluída, fora da lixeira) com pessoa que tem e-mail: o cliente é convidado. */

@@ -152,6 +152,8 @@ function CompleteBody({
     channelId: channels.some((c) => c.id === activity.channel.id) ? activity.channel.id : undefined,
     dueAt: defaultDue(data.nowIso, 1),
     ownerId: activity.ownerId,
+    // A próxima herda a pessoa (o formulário não a mostra): só serve ao aviso do convite.
+    person: activity.person && { ...activity.person, hasEmail: activity.personHasEmail },
   };
 
   if (stage === "suggest") {
@@ -170,6 +172,7 @@ function CompleteBody({
           canReassign={data.canReassign}
           initial={nextInitial}
           parties={[]}
+          calendarSync={data.calendarSync}
           withDescription={false}
           autoFocusFirst
           submitLabel="Agendar"
@@ -303,6 +306,7 @@ function CompleteBody({
               canReassign={data.canReassign}
               initial={nextInitial}
               parties={[]}
+              calendarSync={data.calendarSync}
               withDescription={false}
               submitLabel="Concluir e agendar"
               cancelLabel="Cancelar"

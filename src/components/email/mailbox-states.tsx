@@ -56,7 +56,7 @@ export function ReconnectForMeet({ companyId }: { companyId: string }) {
   return (
     <Notice title="Reconecte o Google para ativar o assistente de reuniões.">
       <p>
-        Esta caixa foi conectada sem algum dos acessos do assistente (reuniões do Meet, agenda e anotações do Gemini).
+        Esta caixa foi conectada sem algum dos acessos do CRM (reuniões do Meet, Agenda e anotações do Gemini).
         Reconecte-a e autorize os novos acessos.
       </p>
       {/* O perfil só oferece "Reconectar" quando a caixa caiu; aqui ela está ativa, então vai direto ao OAuth. */}

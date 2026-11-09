@@ -11,6 +11,7 @@ import type { ActivityRow } from "@/lib/activities/queries";
 import type { RecordActivityData } from "@/lib/activities/record-context";
 import { formatDue, toLocalInput } from "@/lib/activities/time";
 import { ActivityChip, TypeIcon } from "./activity-chip";
+import { CalendarStatus } from "./calendar-status";
 import { activeChannels, activeTypes } from "./activity-tab";
 import { ActivityForm, type FormResult, type FormValues } from "./activity-form";
 import { CompleteDialog } from "./complete-dialog";
@@ -63,13 +64,14 @@ function EditDialog({
             durationMinutes: activity.durationMinutes,
             reminderMinutes: activity.reminderMinutes,
             ownerId: activity.ownerId,
-            person: activity.person,
+            person: activity.person && { ...activity.person, hasEmail: activity.personHasEmail },
             organization: activity.organization,
           }}
           parties={[
             ...(data.links.personId ? [] : (["person"] as const)),
             ...(data.links.organizationId ? [] : (["organization"] as const)),
           ]}
+          calendarSync={data.calendarSync}
           submitLabel="Salvar"
           onCancel={onClose}
           onSubmit={submit}
@@ -114,6 +116,7 @@ export function PlannedList({ data }: { data: RecordActivityData }) {
               <p className="text-xs text-muted-foreground">
                 {formatDue(a.dueAt, now)} · {a.channel.name} · {a.ownerName}
               </p>
+              <CalendarStatus activity={a} canRetry={data.canEdit} />
             </div>
             {data.canEdit ? (
               <Button type="button" variant="ghost" size="icon-sm" aria-label={`Editar ${a.subject}`} onClick={() => setEditing(a)}>

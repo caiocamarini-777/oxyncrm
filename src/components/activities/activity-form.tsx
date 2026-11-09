@@ -75,6 +75,7 @@ export function ActivityForm({
   canReassign,
   initial,
   parties,
+  calendarSync = false,
   withDescription = true,
   autoFocusFirst = false,
   submitLabel,
@@ -91,6 +92,8 @@ export function ActivityForm({
   initial: FormInitial;
   /** Quais vínculos relacionados o usuário pode ajustar. */
   parties: ("person" | "organization")[];
+  /** A empresa sincroniza com a Agenda do Google: reunião com pessoa que tem e-mail convida o cliente. */
+  calendarSync?: boolean;
   withDescription?: boolean;
   /** Foca o primeiro campo (tipo) ao abrir. */
   autoFocusFirst?: boolean;
@@ -160,6 +163,7 @@ export function ActivityForm({
   }
 
   const currentType = types.find((t) => t.id === typeId);
+  const showInviteHint = calendarSync && currentType?.isMeeting === true && shownPerson?.hasEmail === true;
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-3" data-testid="activity-form">
@@ -294,6 +298,11 @@ export function ActivityForm({
             </div>
           ) : null}
         </div>
+      ) : null}
+      {showInviteHint ? (
+        <p data-testid="calendar-invite-hint" className="text-xs text-muted-foreground">
+          O cliente recebe o convite com link do Meet.
+        </p>
       ) : null}
       {errors.links ? <p role="alert" className="text-xs text-destructive">{errors.links}</p> : null}
       {formError && Object.keys(errors).length === 0 ? (

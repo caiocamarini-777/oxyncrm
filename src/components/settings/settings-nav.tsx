@@ -20,6 +20,7 @@ const ITEMS = [
   { href: "/configuracoes/atividades", label: "Atividades" },
   { href: "/configuracoes/modelos-email", label: "Modelos de e-mail" },
   { href: "/configuracoes/assistente-reunioes", label: "Assistente de reuniões" },
+  { href: "/configuracoes/agenda", label: "Agenda do Google" },
   { href: "/configuracoes/importacao", label: "Importação" },
 ];
 

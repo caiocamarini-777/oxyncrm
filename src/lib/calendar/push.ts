@@ -4,7 +4,14 @@ import { GmailApiError, GmailAuthError, GmailNetworkError, GmailRateLimitError }
 import { hasCalendarScope } from "@/lib/gmail/connect";
 import { recordHref, type RecordEntity } from "@/lib/records/types";
 import type { CalendarClient, CalendarEvent } from "./google";
-import { activityToEvent, DEFAULT_MINUTES, outboundOp, wantsInvite, type ActivityForCalendar } from "./mapping";
+import {
+  activityToEvent,
+  DEFAULT_MINUTES,
+  outboundOp,
+  primaryEmail,
+  wantsInvite,
+  type ActivityForCalendar,
+} from "./mapping";
 import { readCalendarSettings } from "./settings";
 
 /**
@@ -86,14 +93,6 @@ function check(error: { message: string } | null, what: string): void {
 
 /** O evento não existe mais no Google (apagado de vez): o `patch` responde 404 ou 410. */
 const isGone = (e: unknown) => e instanceof GmailApiError && (e.status === 404 || e.status === 410);
-
-/** E-mail da pessoa: o marcado como principal, senão o primeiro da lista (`[{ value, label?, primary? }]`). */
-function primaryEmail(emails: unknown): string | null {
-  if (!Array.isArray(emails)) return null;
-  const items = emails as { value?: unknown; primary?: unknown }[];
-  const item = items.find((e) => e?.primary === true) ?? items[0];
-  return typeof item?.value === "string" && item.value.trim() ? item.value.trim() : null;
-}
 
 /** URL do registro da atividade no CRM, pelo vínculo de maior precedência (negócio, lead, pessoa, organização). */
 function recordUrl(appUrl: string, slug: string | null, r: ActivityRow): string | null {

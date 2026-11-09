@@ -8,6 +8,7 @@ import type { ActivityRow } from "@/lib/activities/queries";
 import { formatDateTime, formatTime } from "@/lib/activities/time";
 import { cn } from "cn";
 import { ActivityChip, TypeIcon } from "./activity-chip";
+import { CalendarStatus } from "./calendar-status";
 import { primaryLink } from "./helpers";
 import type { PageCtx } from "./page-context";
 
@@ -66,6 +67,7 @@ export function AgendaItem({
             </p>
           ) : null}
           {activity.description ? <p className="whitespace-pre-wrap text-xs">{activity.description}</p> : null}
+          <CalendarStatus activity={activity} canRetry={canEdit} />
           <div className="flex items-center justify-between gap-2 pt-1">
             {link ? (
               <Link href={link.href} className="truncate text-xs font-medium text-primary hover:underline">

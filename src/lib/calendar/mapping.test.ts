@@ -11,6 +11,7 @@ import {
   newActivityFields,
   newerSide,
   outboundOp,
+  primaryEmail,
   wantsInvite,
   type ActivityForCalendar,
 } from "./mapping";
@@ -401,5 +402,20 @@ describe("newerSide", () => {
   it("empate ou evento sem updated: CRM", () => {
     expect(newerSide("2026-11-09T12:00:00Z", "2026-11-09T12:00:00Z")).toBe("crm");
     expect(newerSide("2026-11-09T12:00:00Z", undefined)).toBe("crm");
+  });
+});
+
+describe("primaryEmail", () => {
+  it("prefere o e-mail marcado como principal, senão o primeiro da lista", () => {
+    expect(primaryEmail([{ value: "a@acme.com" }, { value: " b@acme.com ", primary: true }])).toBe("b@acme.com");
+    expect(primaryEmail([{ value: " a@acme.com " }, { value: "b@acme.com" }])).toBe("a@acme.com");
+  });
+
+  it("lista vazia, valor em branco ou formato estranho não dão e-mail", () => {
+    expect(primaryEmail([])).toBeNull();
+    expect(primaryEmail([{ value: "  " }])).toBeNull();
+    expect(primaryEmail([{ value: 3 }])).toBeNull();
+    expect(primaryEmail(null)).toBeNull();
+    expect(primaryEmail("a@acme.com")).toBeNull();
   });
 });

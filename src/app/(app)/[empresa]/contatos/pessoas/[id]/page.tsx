@@ -15,6 +15,7 @@ import { loadRecordActivity } from "@/lib/activities/record-context";
 import { getTimeline } from "@/lib/timeline/queries";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
+import { primaryEmail } from "@/lib/calendar/mapping";
 import { getPerson } from "@/lib/persons/queries";
 import { listActiveCustomFieldDefs, listCompanyLabels } from "@/lib/records/lookups";
 import { listAssignableOwners } from "@/lib/records/owners";
@@ -34,7 +35,7 @@ export default async function PersonPage({ params }: { params: Promise<{ empresa
 
   const [timeline, activity, owners, labels, defs, permissions, orgPermissions] = await Promise.all([
     getTimeline("persons", person.id),
-    loadRecordActivity({ entity: "persons", recordId: person.id, companyId: person.companyId, partyName: person.fullName }),
+    loadRecordActivity({ entity: "persons", recordId: person.id, companyId: person.companyId, partyName: person.fullName, personHasEmail: primaryEmail(person.emails) !== null }),
     listAssignableOwners(person.companyId),
     listCompanyLabels(person.companyId),
     listActiveCustomFieldDefs(person.companyId, "persons"),

@@ -10,6 +10,7 @@ import { formatDateTime, formatDue } from "@/lib/activities/time";
 import { TAB_PARAM, type ActivityListFilters } from "@/lib/activities/view";
 import { cn } from "cn";
 import { ActivityChip, TypeIcon } from "./activity-chip";
+import { CalendarStatus } from "./calendar-status";
 import { CompleteHost } from "./complete-host";
 import { primaryLink } from "./helpers";
 import type { PageCtx } from "./page-context";
@@ -121,7 +122,12 @@ export function ActivityList({
         id: "subject",
         header: "Assunto",
         sortKey: "subject",
-        cell: (a) => <span className={cn("font-medium", a.done && "text-muted-foreground line-through")}>{a.subject}</span>,
+        cell: (a) => (
+          <div className="flex flex-col gap-1">
+            <span className={cn("font-medium", a.done && "text-muted-foreground line-through")}>{a.subject}</span>
+            <CalendarStatus activity={a} canRetry={ctx.companies.find((c) => c.id === a.companyId)?.canEdit ?? false} />
+          </div>
+        ),
       },
       {
         id: "link",

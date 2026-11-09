@@ -15,6 +15,8 @@ env:
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
   SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
   NEXT_PUBLIC_SITE_URL: http://localhost:3000
+  # Projeto Supabase só de testes (oxyncrm-testes). O banco é recriado a cada execução; ver scripts/ci-db-reset.ts.
+  SUPABASE_TEST_PROJECT_REF: cvqaaipjdirbbwfdgjox
 
 jobs:
   ci:
@@ -33,6 +35,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Recria o banco de testes
+        if: env.SUPABASE_DB_URL != ''
+        run: pnpm ci:db-reset
       - name: Testes de banco
         if: env.SUPABASE_DB_URL != ''
         run: pnpm test:db

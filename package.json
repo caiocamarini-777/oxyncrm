@@ -10,6 +10,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:db": "tsx scripts/test-db.ts",
+    "ci:db-reset": "tsx scripts/ci-db-reset.ts",
     "test:e2e": "playwright test --pass-with-no-tests",
     "db:migrate": "tsx scripts/db-migrate.ts",
     "db:seed": "tsx scripts/seed-dev.ts",

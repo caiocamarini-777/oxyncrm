@@ -339,6 +339,7 @@ Com cliente e store falsos em memória. Os testes cobrem:
 - **Idempotência:** rodar duas vezes com o mesmo store não cria nada na segunda (`emails.created = 0`, `files.uploaded = 0`, `existing` contado).
 - **Falha de item:** `download` lançando em um arquivo registra em `errors` (`item: "arquivo {id}"`) e continua com os outros.
 - **`dryRun`:** nenhum `insertEmail`, `linkEmail`, `upload` nem `insertFile` é chamado, mas os contadores refletem o que seria feito.
+- **Token inválido:** `PipedriveAuthError` não é erro de item; propaga e encerra a importação.
 
 - [ ] **Step 2: Rodar e ver falhar**
 

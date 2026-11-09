@@ -1,9 +1,11 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { GmailApiError, GmailAuthError, GmailNetworkError, GmailRateLimitError } from "@/lib/gmail/client";
+import { hasCalendarScope } from "@/lib/gmail/connect";
 import { recordHref, type RecordEntity } from "@/lib/records/types";
 import type { CalendarClient, CalendarEvent } from "./google";
 import { activityToEvent, DEFAULT_MINUTES, outboundOp, wantsInvite, type ActivityForCalendar } from "./mapping";
+import { readCalendarSettings } from "./settings";
 
 /**
  * Saída da sincronização com a Agenda do Google (CRM → Agenda): envia uma atividade e grava de volta o estado do
@@ -16,13 +18,18 @@ export type CalendarDeps = { db: SupabaseClient; clientFor(accountId: string): C
 /** Tentativas seguidas com erro antes de a atividade ficar só no "Tentar de novo" (o cron para de reenviar). */
 export const MAX_CALENDAR_ATTEMPTS = 3;
 
-/** Escopo de leitura e escrita de eventos que a caixa precisa ter concedido. */
-export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 /** Limite do texto de erro gravado (como o `last_error` das caixas). */
 const MAX_ERROR = 500;
 const MINUTE_MS = 60_000;
 
-type AccountRow = { id: string; email: string; company_id: string; status: string; scopes: string[] | null };
+type AccountRow = {
+  id: string;
+  email: string;
+  company_id: string;
+  status: string;
+  scopes: string[] | null;
+  calendar_since: string | null;
+};
 
 type ActivityRow = {
   id: string;
@@ -79,12 +86,6 @@ function check(error: { message: string } | null, what: string): void {
 
 /** O evento não existe mais no Google (apagado de vez): o `patch` responde 404 ou 410. */
 const isGone = (e: unknown) => e instanceof GmailApiError && (e.status === 404 || e.status === 410);
-
-/** Só o booleano `true` liga a Agenda na empresa (como `calendar_sync_enabled` no banco). */
-export function calendarEnabled(settings: unknown): boolean {
-  const sync = (settings as { calendar_sync?: { enabled?: unknown } } | null)?.calendar_sync;
-  return sync?.enabled === true;
-}
 
 /** E-mail da pessoa: o marcado como principal, senão o primeiro da lista (`[{ value, label?, primary? }]`). */
 function primaryEmail(emails: unknown): string | null {
@@ -150,29 +151,34 @@ export async function markReconnect(db: SupabaseClient, accountId: string, msg: 
  * Caixa que recebe a atividade: do dono na empresa da atividade; senão a mais antiga do dono; ativa e com o escopo da
  * Agenda. A escolha vem antes da conferência: se a caixa escolhida está em "reconectar" ou sem o escopo, devolve
  * `null` (a atividade espera a reconexão) em vez de passar o evento para outra caixa do dono.
+ *
+ * `ready` é falso enquanto a caixa não fez a primeira rodada (`calendar_since` nulo): até lá o envio só vale com
+ * `invite: false`, porque a primeira rodada adota os eventos que o Pipedrive deixou e não pode haver convite duplicado.
  */
 export async function calendarAccountFor(
   db: SupabaseClient,
   ownerId: string,
   companyId: string,
-): Promise<{ id: string; email: string } | null> {
+): Promise<{ id: string; email: string; ready: boolean } | null> {
   const { data, error } = await db
     .from("email_accounts")
-    .select("id, email, company_id, status, scopes")
+    .select("id, email, company_id, status, scopes, calendar_since")
     .eq("user_id", ownerId)
     .order("created_at", { ascending: true });
   check(error, "ler as caixas do dono da atividade");
   const rows = (data ?? []) as AccountRow[];
   const chosen = rows.find((r) => r.company_id === companyId) ?? rows[0];
-  if (!chosen || chosen.status !== "active" || !(chosen.scopes ?? []).includes(CALENDAR_SCOPE)) return null;
-  return { id: chosen.id, email: chosen.email };
+  if (!chosen || chosen.status !== "active" || !hasCalendarScope(chosen.scopes)) return null;
+  return { id: chosen.id, email: chosen.email, ready: chosen.calendar_since != null };
 }
 
 /**
  * Envia uma atividade pendente. Devolve o estado final. Nunca lança por erro do Google (grava `error`).
  *
  * - `skipped`: nada a enviar, e a atividade fica como estava. Vale para empresa com a Agenda desligada, atividade que
- *   não existe ou já em dia (`synced`), e dono sem caixa utilizável.
+ *   não existe ou já em dia (`synced`), dono sem caixa utilizável e caixa que ainda não fez a primeira rodada
+ *   (`calendar_since` nulo): só o envio com `invite: false`, o da primeira rodada, passa por ela. Assim, entre ligar a
+ *   Agenda e a primeira rodada, uma gravação na hora não manda convite que o Pipedrive já mandou.
  * - `deferred`: o envio ficou para depois, e a atividade continua pendente sem contar tentativa. Vale para limite de
  *   uso do Google (o cron para a rodada da caixa), falha de rede e token recusado (a caixa vai para "reconectar").
  * - `synced`: o evento ficou igual à atividade. Ele foi criado, atualizado ou apagado, ou não havia nada a fazer, como
@@ -199,7 +205,7 @@ export async function pushActivity(
   const company = await db.from("companies").select("slug, settings").eq("id", r.company_id).maybeSingle();
   check(company.error, "ler a empresa da atividade");
   const co = company.data as { slug: string; settings: unknown } | null;
-  if (!co || !calendarEnabled(co.settings)) return "skipped";
+  if (!co || !readCalendarSettings(co.settings).enabled) return "skipped";
   // Já em dia: a gravação não mudou nada que aparece no evento (o gatilho não a marcou como pendente).
   if (r.calendar_state === "synced") return "skipped";
 
@@ -234,10 +240,15 @@ export async function pushActivity(
   const upcoming = Date.parse(a.dueAt) + minutes * MINUTE_MS > deps.now().getTime();
   const notifyClient = opts?.invite !== false && upcoming;
 
+  // A apagada (lixeira, cancelada) não escolhe caixa nova nem convida: só desfaz o evento que já existe, então não
+  // espera a primeira rodada.
   let target: { id: string; email: string } | null = null;
   if (op.op !== "delete") {
-    target = await calendarAccountFor(db, a.ownerId, a.companyId);
-    if (!target) return "skipped";
+    const account = await calendarAccountFor(db, a.ownerId, a.companyId);
+    if (!account) return "skipped";
+    // Caixa da primeira rodada ainda por fazer: a atividade espera, pendente, sem chamar o Google.
+    if (!account.ready && opts?.invite !== false) return "skipped";
+    target = account;
   }
 
   // Caixa onde está o evento, quando é preciso apagá-lo lá (lixeira, cancelada ou dono trocado). Sem a linha (caixa

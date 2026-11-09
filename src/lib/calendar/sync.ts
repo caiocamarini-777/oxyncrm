@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { GmailAuthError } from "@/lib/gmail/client";
-import { isUuid } from "@/lib/gmail/connect";
+import { hasCalendarScope, isUuid } from "@/lib/gmail/connect";
 import { pickRecord } from "@/lib/meet/match";
 import { loadCandidates } from "@/lib/meet/match-loader";
 import { SyncTokenExpiredError, type CalendarClient, type CalendarEvent } from "./google";
@@ -14,14 +14,8 @@ import {
   newerSide,
   RECURRING_WINDOW_DAYS,
 } from "./mapping";
-import {
-  CALENDAR_SCOPE,
-  calendarEnabled,
-  type CalendarDeps,
-  markReconnect,
-  MAX_CALENDAR_ATTEMPTS,
-  pushActivity,
-} from "./push";
+import { type CalendarDeps, markReconnect, MAX_CALENDAR_ATTEMPTS, pushActivity } from "./push";
+import { readCalendarSettings } from "./settings";
 
 /**
  * Rodada da sincronização com a Agenda do Google (cron `/api/cron/agenda`, a cada 5 min). Regras na spec, seções
@@ -194,7 +188,7 @@ async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[
     .order("created_at", { ascending: true })
     .limit(200);
   check(error, "listar as caixas");
-  const accounts = ((data ?? []) as AccountRow[]).filter((a) => (a.scopes ?? []).includes(CALENDAR_SCOPE));
+  const accounts = ((data ?? []) as AccountRow[]).filter((a) => hasCalendarScope(a.scopes));
   if (accounts.length === 0) return { accounts: [], enabled: new Set() };
 
   // Todas as empresas, não só as das caixas: a atividade do dono sem caixa na empresa dela vai para a caixa mais
@@ -203,7 +197,7 @@ async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[
   check(companies.error, "ler as empresas");
   const enabled = new Set(
     ((companies.data ?? []) as { id: string; settings: unknown; archived_at: string | null }[])
-      .filter((c) => !c.archived_at && calendarEnabled(c.settings))
+      .filter((c) => !c.archived_at && readCalendarSettings(c.settings).enabled)
       .map((c) => c.id),
   );
   return { accounts: accounts.filter((a) => enabled.has(a.company_id)), enabled };

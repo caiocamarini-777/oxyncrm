@@ -51,6 +51,8 @@ const account = (over: Row = {}): Row => ({
   status: "active",
   scopes: ["https://www.googleapis.com/auth/gmail.readonly", SCOPE],
   created_at: "2026-11-01T00:00:00Z",
+  // Caixa que já fez a primeira rodada da Agenda (sem isso, só o envio com invite false passa).
+  calendar_since: "2026-11-09T12:00:00.000Z",
   ...over,
 });
 
@@ -160,6 +162,79 @@ describe("pushActivity: quando não envia", () => {
     expect(t.row()).toMatchObject({ calendar_state: "pending", calendar_attempts: 0, calendar_event_id: null });
   });
 
+  describe("caixa que ainda não fez a primeira rodada (calendar_since nulo)", () => {
+    const notReady = [account({ calendar_since: null })];
+
+    it("skipped sem chamar o Google, e a atividade continua pending", async () => {
+      const t = setup({ accounts: notReady });
+      expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
+      expect(t.calls).toEqual([]);
+      expect(markCalls(t.log)).toEqual([]);
+      expect(t.row()).toMatchObject({ calendar_state: "pending", calendar_attempts: 0, calendar_event_id: null });
+    });
+
+    it("vale também para tarefa, para atividade com erro e para atualização de evento já ligado", async () => {
+      for (const activityRow of [
+        { type_id: "t-task" },
+        { calendar_state: "error", calendar_attempts: 2, calendar_error: "falha antiga" },
+        { calendar_account_id: "acc-1", calendar_event_id: "ev-1", calendar_etag: '"e1"' },
+      ]) {
+        const t = setup({ accounts: notReady, activity: activityRow });
+        expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
+        expect(t.calls).toEqual([]);
+        expect(markCalls(t.log)).toEqual([]);
+        expect(t.row()).toMatchObject({ calendar_state: activityRow.calendar_state ?? "pending" });
+      }
+    });
+
+    it("com invite true explícito também espera (só o false, da primeira rodada, passa)", async () => {
+      const t = setup({ accounts: notReady });
+      expect(await pushActivity(t.deps, "a-1", { invite: true })).toBe("skipped");
+      expect(t.calls).toEqual([]);
+    });
+
+    it("com invite false (a primeira rodada do cron) envia sem convidar", async () => {
+      const t = setup({ accounts: notReady, replies: { insert: { hangoutLink: undefined } } });
+      expect(await pushActivity(t.deps, "a-1", { invite: false })).toBe("synced");
+      expect(t.calls).toHaveLength(1);
+      expect(t.calls[0]).toMatchObject({ account: "acc-1", op: "insert", opts: { sendUpdates: "none", withMeet: false } });
+      expect(t.calls[0].ev?.attendees).toBeUndefined();
+      expect(t.row()).toMatchObject({ calendar_event_id: "ev-new", calendar_state: "synced" });
+    });
+
+    it("a caixa pronta do mesmo dono envia normalmente (convida)", async () => {
+      const t = setup({ accounts: [account({ calendar_since: "2026-11-09T12:00:00.000Z" })] });
+      expect(await pushActivity(t.deps, "a-1")).toBe("synced");
+      expect(t.calls[0].opts).toEqual({ sendUpdates: "all", withMeet: true });
+    });
+
+    it("a prontidão é da caixa escolhida: a do dono na empresa decide, mesmo havendo outra pronta", async () => {
+      const t = setup({
+        accounts: [
+          account({ id: "acc-velha", company_id: "co-2", created_at: "2026-01-01T00:00:00Z" }),
+          account({ calendar_since: null }),
+        ],
+      });
+      expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
+      expect(t.calls).toEqual([]);
+    });
+
+    it("a atividade que vai para a lixeira não espera a primeira rodada: só desfaz o vínculo", async () => {
+      const t = setup({
+        accounts: notReady,
+        activity: {
+          deleted_at: "2026-11-09T14:30:00+00:00",
+          calendar_account_id: "acc-1",
+          calendar_event_id: "ev-1",
+          calendar_etag: '"e1"',
+        },
+      });
+      expect(await pushActivity(t.deps, "a-1")).toBe("synced");
+      expect(t.calls).toEqual([expect.objectContaining({ account: "acc-1", op: "delete", id: "ev-1" })]);
+      expect(t.row()).toMatchObject({ calendar_state: "synced", calendar_event_id: null });
+    });
+  });
+
   it("atividade já em dia (synced) não é reenviada", async () => {
     const t = setup({ activity: { calendar_state: "synced", calendar_account_id: "acc-1", calendar_event_id: "ev-1" } });
     expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
@@ -177,7 +252,7 @@ describe("calendarAccountFor", () => {
       account({ id: "acc-velha", company_id: "co-2", email: "caio@outra.com", created_at: "2026-01-01T00:00:00Z" }),
       account(),
     ]);
-    expect(r).toEqual({ id: "acc-1", email: "caio@oxyn.com.br" });
+    expect(r).toEqual({ id: "acc-1", email: "caio@oxyn.com.br", ready: true });
   });
 
   it("sem caixa na empresa, usa a mais antiga do dono", async () => {
@@ -186,7 +261,7 @@ describe("calendarAccountFor", () => {
       account({ id: "acc-a", company_id: "co-2", email: "a@x.com", created_at: "2026-01-01T00:00:00Z" }),
       account({ id: "acc-z", user_id: "u-2", company_id: "co-1", email: "z@x.com" }),
     ]);
-    expect(r).toEqual({ id: "acc-a", email: "a@x.com" });
+    expect(r).toEqual({ id: "acc-a", email: "a@x.com", ready: true });
   });
 
   it("caixa escolhida em reconectar ou sem escopo: null, sem passar para outra caixa", async () => {
@@ -197,6 +272,11 @@ describe("calendarAccountFor", () => {
 
   it("sem nenhuma caixa: null", async () => {
     expect(await pick([])).toBeNull();
+  });
+
+  it("caixa que ainda não fez a primeira rodada (calendar_since nulo) vem como não pronta", async () => {
+    expect(await pick([account({ calendar_since: null })])).toEqual({ id: "acc-1", email: "caio@oxyn.com.br", ready: false });
+    expect(await pick([account({ calendar_since: undefined })])).toMatchObject({ ready: false });
   });
 });
 

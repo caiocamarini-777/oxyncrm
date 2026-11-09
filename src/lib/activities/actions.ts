@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth/session";
+import { afterActivityWrite } from "@/lib/calendar/activity-hooks";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
@@ -56,6 +57,7 @@ export async function createActivity(companyId: string, input: ActivityInput): P
     .select("id")
     .single();
   if (error) return { ok: false, error: translateDbError(error) };
+  await afterActivityWrite(data.id);
   touched();
   return { ok: true, data: { id: data.id } };
 }
@@ -98,6 +100,7 @@ export async function updateActivity(id: string, input: ActivityInput): Promise<
     .select("id");
   if (error) return { ok: false, error: translateDbError(error) };
   if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  await afterActivityWrite(id);
   touched();
   return { ok: true, data: undefined };
 }
@@ -167,6 +170,9 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
     return completeFailure(error);
   }
   const r = (data ?? {}) as { meeting_id?: string | null; next_id?: string | null; rule?: CompleteOk["rule"] };
+  // A concluída e as que a conclusão criou (reunião e próxima atividade) vão juntas, dentro de um único teto.
+  const written = [id, r.meeting_id, r.next_id].filter((v): v is string => !!v);
+  await Promise.all(written.map((activityId) => afterActivityWrite(activityId)));
   touched();
   return { ok: true, data: { meetingId: r.meeting_id ?? null, nextId: r.next_id ?? null, rule: r.rule ?? null } };
 }
@@ -178,6 +184,7 @@ export async function reopenActivity(id: string): Promise<ActionResult> {
   const supabase = await createServerClient();
   const { error } = await supabase.rpc("reopen_activity", { p_id: id });
   if (error) return { ok: false, error: translateDbError(error) };
+  await afterActivityWrite(id);
   touched();
   return { ok: true, data: undefined };
 }
@@ -190,6 +197,7 @@ async function setDeletedAt(id: string, value: string | null): Promise<ActionRes
   const { data, error } = await supabase.from("activities").update({ deleted_at: value }).eq("id", id).select("id");
   if (error) return { ok: false, error: translateDbError(error) };
   if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  await afterActivityWrite(id);
   touched();
   return { ok: true, data: undefined };
 }

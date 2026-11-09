@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPipedriveClient, retryAfterMs, PipedriveAuthError, PipedriveError, REQUEST_TOTAL_MS } from "./client";
+import {
+  createPipedriveClient, retryAfterMs, PipedriveAuthError, PipedriveError, REQUEST_TOTAL_MS, DOWNLOAD_TOTAL_MS,
+} from "./client";
 
 vi.mock("server-only", () => ({}));
 
@@ -228,6 +230,124 @@ describe("cliente do Pipedrive", () => {
     expect(err).toBeInstanceOf(PipedriveError);
     expect(String(err.message)).not.toContain("SEGREDO");
     expect(sempre500).toHaveBeenCalledTimes(6);
+  });
+
+  it("download segue o redirecionamento sem repassar o token", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 302, headers: { location: "https://files.example.com/x?sig=1" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7, 8]), { headers: { "content-type": "image/png" } }));
+    const c = createPipedriveClient({ token: "SEGREDO", baseUrl: "https://x.test", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await c.download("/v1/files/7/download");
+    expect(Array.from(out.bytes)).toEqual([7, 8]);
+    expect(out.contentType).toBe("image/png");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [url1, init1] = fetchImpl.mock.calls[0];
+    expect(url1).toBe("https://x.test/v1/files/7/download");
+    expect((init1 as RequestInit).redirect).toBe("manual");
+    expect((init1 as RequestInit).headers).toMatchObject({ "x-api-token": "SEGREDO" });
+    const [url2, init2] = fetchImpl.mock.calls[1];
+    expect(url2).toBe("https://files.example.com/x?sig=1");
+    expect((init2 as RequestInit).redirect).toBe("manual");
+    const headers2 = (init2 as RequestInit).headers as Record<string, string>;
+    expect(Object.keys(headers2).map((k) => k.toLowerCase())).not.toContain("x-api-token");
+    expect(JSON.stringify(init2)).not.toContain("SEGREDO");
+  });
+
+  it("download resolve Location relativo e segue até 3 redirecionamentos", async () => {
+    const redirect = (location: string) => new Response("", { status: 301, headers: { location } });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirect("/files/a"))
+      .mockResolvedValueOnce(redirect("https://cdn.example.com/b"))
+      .mockResolvedValueOnce(redirect("/c"))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1])));
+    const c = createPipedriveClient({ token: "SEGREDO", baseUrl: "https://x.test", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(Array.from((await c.download("/v1/files/7/download")).bytes)).toEqual([1]);
+    expect(fetchImpl.mock.calls.map((c) => c[0])).toEqual([
+      "https://x.test/v1/files/7/download",
+      "https://x.test/files/a",
+      "https://cdn.example.com/b",
+      "https://cdn.example.com/c",
+    ]);
+  });
+
+  it("download desiste com redirecionamentos demais, sem destino ou erro no destino, sem vazar token nem URL", async () => {
+    const redirect = (location: string) => new Response("", { status: 302, headers: { location } });
+    const sempreRedireciona = vi.fn().mockImplementation(async () => redirect("https://files.example.com/x?sig=SEGREDO2"));
+    const c1 = createPipedriveClient({ token: "SEGREDO", fetchImpl: sempreRedireciona as unknown as typeof fetch, sleepImpl: async () => {} });
+    const e1 = await c1.download("/v1/files/7/download?k=1").catch((e) => e);
+    expect(e1).toBeInstanceOf(PipedriveError);
+    expect(sempreRedireciona).toHaveBeenCalledTimes(4); // a original + 3 saltos
+    expect(String(e1.message)).not.toMatch(/SEGREDO|files\.example\.com|k=1/);
+
+    const semLocation = vi.fn().mockResolvedValue(new Response("", { status: 302 }));
+    const c2 = createPipedriveClient({ token: "SEGREDO", fetchImpl: semLocation as unknown as typeof fetch, sleepImpl: async () => {} });
+    await expect(c2.download("/v1/files/7/download")).rejects.toBeInstanceOf(PipedriveError);
+    expect(semLocation).toHaveBeenCalledTimes(1);
+
+    const destino403 = vi
+      .fn()
+      .mockResolvedValueOnce(redirect("https://files.example.com/x?sig=SEGREDO2"))
+      .mockResolvedValueOnce(new Response("", { status: 403 }));
+    const c3 = createPipedriveClient({ token: "SEGREDO", fetchImpl: destino403 as unknown as typeof fetch, sleepImpl: async () => {} });
+    const e3 = await c3.download("/v1/files/7/download").catch((e) => e);
+    expect(e3).toBeInstanceOf(PipedriveError);
+    expect(e3).not.toBeInstanceOf(PipedriveAuthError);
+    expect(e3.status).toBe(403);
+    expect(String(e3.message)).not.toMatch(/SEGREDO|files\.example\.com/);
+    expect(destino403).toHaveBeenCalledTimes(2); // erro no destino não é repetido
+  });
+
+  it("download repete o 5xx do Pipedrive e depois segue o redirecionamento", async () => {
+    const waits: number[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(new Response("", { status: 302, headers: { location: "https://files.example.com/x" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([5])));
+    const c = createPipedriveClient({
+      token: "SEGREDO", fetchImpl: fetchImpl as unknown as typeof fetch, sleepImpl: async (ms) => void waits.push(ms),
+    });
+    expect(Array.from((await c.download("/v1/files/7/download")).bytes)).toEqual([5]);
+    expect(waits).toEqual([1000]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("download usa tentativa de 120 s e teto de 300 s; as chamadas JSON seguem com 30 s", async () => {
+    expect(DOWNLOAD_TOTAL_MS).toBe(300_000);
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(new Uint8Array([1])))
+        .mockResolvedValueOnce(json({ data: [] }));
+      const c = createPipedriveClient({ token: "t", fetchImpl: fetchImpl as unknown as typeof fetch });
+      await c.download("/v1/files/7/download");
+      await c.stages();
+      expect(timeout.mock.calls.map((a) => a[0])).toEqual([120_000, 30_000]);
+    } finally {
+      timeout.mockRestore();
+    }
+
+    // teto total do download: cada tentativa leva 100 s até falhar (5xx lento)
+    let clock = 0;
+    const waits: number[] = [];
+    const lento = vi.fn().mockImplementation(async () => {
+      clock += 100_000;
+      return new Response("", { status: 503 });
+    });
+    const c = createPipedriveClient({
+      token: "t", fetchImpl: lento as unknown as typeof fetch, nowImpl: () => clock,
+      sleepImpl: async (ms) => {
+        waits.push(ms);
+        clock += ms;
+      },
+    });
+    await expect(c.download("/v1/files/7/download")).rejects.toBeInstanceOf(PipedriveError);
+    // 100 + 1 + 100 + 2 + 100 = 303 s: a próxima espera (4 s) já não cabe no teto de 300 s, então para
+    expect(waits).toEqual([1000, 2000]);
+    expect(lento).toHaveBeenCalledTimes(3);
   });
 
   it("next_start que não avança cai em start + itens", async () => {

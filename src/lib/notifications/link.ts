@@ -16,3 +16,12 @@ export function reminderPath(slug: string | null, a: ReminderLinks | null): stri
   if (a?.organization_id) return recordHref("organizations", slug, a.organization_id);
   return `/${slug}/atividades`;
 }
+
+/**
+ * Destino da notificação conforme o tipo: reunião sem vínculo leva à aba Sem vínculo da página Reuniões;
+ * lembrete de atividade (e qualquer tipo desconhecido) segue o vínculo da atividade.
+ */
+export function notificationPath(kind: string, slug: string | null, a: ReminderLinks | null): string {
+  if (kind === "meeting_unlinked") return slug ? `/${slug}/reunioes?aba=sem-vinculo` : "/";
+  return reminderPath(slug, a);
+}

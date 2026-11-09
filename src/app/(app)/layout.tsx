@@ -3,6 +3,7 @@ import { AppShell } from "@/components/shell/app-shell";
 import { requireUser } from "@/lib/auth/session";
 import { LAST_COMPANY_COOKIE } from "@/lib/companies/constants";
 import { getAccessibleCompanies, hideTestCompanies } from "@/lib/companies/scope";
+import { countMyPending } from "@/lib/meet/queries";
 import { hasSharedDashboards, reportCompanySlugs } from "@/lib/reports/permissions";
 
 // Bloqueante de propósito: o 404 de empresa precisa sair com status 404, e não
@@ -10,12 +11,15 @@ import { hasSharedDashboards, reportCompanySlugs } from "@/lib/reports/permissio
 export const instant = false;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [profile, companies, cookieStore, reportSlugs, sharedDashboards] = await Promise.all([
-    requireUser(),
+  const user = requireUser();
+  const [profile, companies, cookieStore, reportSlugs, sharedDashboards, pendingMeetings] = await Promise.all([
+    user,
     getAccessibleCompanies(),
     cookies(),
     reportCompanySlugs(),
     hasSharedDashboards(),
+    // Falha em silêncio (0): o contador nunca derruba uma página.
+    user.then((u) => countMyPending(u.id)),
   ]);
   const lastSlug = cookieStore.get(LAST_COMPANY_COOKIE)?.value;
   return (
@@ -30,6 +34,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       lastSlug={lastSlug}
       reportSlugs={reportSlugs}
       hasSharedDashboards={sharedDashboards}
+      pendingMeetings={pendingMeetings}
     >
       {children}
     </AppShell>

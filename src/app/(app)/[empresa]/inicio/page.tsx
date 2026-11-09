@@ -1,6 +1,8 @@
+import { MeetingsToday } from "@/components/home/meetings-today";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
+import { getHomeMeetings } from "@/lib/meet/home";
 import { notFound } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 
@@ -17,7 +19,11 @@ export default async function HomePage({ params }: PageProps<"/[empresa]/inicio"
 
   const ids = scope.kind === "all" ? companies.map((c) => c.id) : [scope.company.id];
   const supabase = await createServerClient();
-  const { data } = await supabase.from("memberships").select("user_id").in("company_id", ids);
+  const now = new Date();
+  const [{ data }, meetings] = await Promise.all([
+    supabase.from("memberships").select("user_id").in("company_id", ids),
+    getHomeMeetings(profile.id, ids, now),
+  ]);
   const people = new Set((data ?? []).map((m) => m.user_id)).size;
   const firstName = (profile.fullName || profile.email).split(/[\s@]/)[0];
 
@@ -29,6 +35,7 @@ export default async function HomePage({ params }: PageProps<"/[empresa]/inicio"
         </h1>
         <p className="text-muted-foreground">Olá, {firstName}</p>
       </div>
+      <MeetingsToday data={meetings} showCompany={scope.kind === "all"} />
       <Card className="max-w-sm">
         <CardHeader>
           <CardTitle className="font-heading text-xs uppercase tracking-wide text-muted-foreground">

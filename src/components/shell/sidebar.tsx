@@ -13,10 +13,13 @@ export function Sidebar({
   scopeSlug,
   isSuperAdmin,
   reports,
+  pendingMeetings,
 }: {
   scopeSlug: string | null;
   isSuperAdmin: boolean;
   reports: ReportsNavAccess;
+  /** Reuniões do usuário que esperam decisão (sem vínculo e sugestões pendentes); 0 não mostra contador. */
+  pendingMeetings: number;
 }) {
   const pathname = usePathname();
   const sharedOnly = reportsSharedOnly(isSuperAdmin, reports);
@@ -58,6 +61,7 @@ export function Sidebar({
             );
           }
           const href = navHref(item, scopeSlug ?? "", sharedOnly);
+          const count = item.key === "reunioes" ? pendingMeetings : 0;
           const segment = href.split("/").slice(0, item.scoped ? 3 : 2).join("/");
           const active = pathname === href || pathname.startsWith(`${segment}/`) || pathname === segment;
           return (
@@ -65,15 +69,23 @@ export function Sidebar({
               <TooltipTrigger asChild>
                 <Link
                   href={href}
-                  aria-label={item.label}
+                  aria-label={count > 0 ? `${item.label}, ${count} aguardando decisão` : item.label}
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     base,
-                    "transition-colors hover:bg-sidebar-accent",
+                    "relative transition-colors hover:bg-sidebar-accent",
                     active && "bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand)]",
                   )}
                 >
                   <Icon className="size-5" />
+                  {count > 0 && (
+                    <span
+                      data-testid="meetings-pending-count"
+                      className="absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground ring-2 ring-[var(--color-sidebar)]"
+                    >
+                      {count > 99 ? "99+" : count}
+                    </span>
+                  )}
                 </Link>
               </TooltipTrigger>
               <TooltipContent side="right">{item.label}</TooltipContent>

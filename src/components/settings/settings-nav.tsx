@@ -19,6 +19,7 @@ const ITEMS = [
   { href: "/configuracoes/motivos-perda", label: "Motivos de perda" },
   { href: "/configuracoes/atividades", label: "Atividades" },
   { href: "/configuracoes/modelos-email", label: "Modelos de e-mail" },
+  { href: "/configuracoes/assistente-reunioes", label: "Assistente de reuniões" },
   { href: "/configuracoes/importacao", label: "Importação" },
 ];
 

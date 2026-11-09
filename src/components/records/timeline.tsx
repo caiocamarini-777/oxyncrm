@@ -16,15 +16,18 @@ import {
   Tag,
   Trash2,
   UserRound,
+  Video,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ThreadCard } from "@/components/email/thread-card";
+import { MeetingBlock } from "@/components/meetings/meeting-block";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { deleteNote, updateNote } from "@/lib/notes/actions";
 import { formatDateTime } from "@/lib/activities/time";
 import { threadSummary, type RecordThread } from "@/lib/gmail/thread-view";
+import type { RecordMeeting } from "@/lib/meet/queries";
 import { linkify, noteText, sortByAtDesc, timelineCategory, type TimelineCategory } from "@/lib/timeline/describe";
 import type { TimelineItem } from "@/lib/timeline/queries";
 import { cn } from "cn";
@@ -155,7 +158,9 @@ const FILTERS: { key: Filter; label: string }[] = [
 
 type Entry =
   | { at: string; category: TimelineCategory; item: TimelineItem; key: string }
-  | { at: string; category: "email"; thread: RecordThread; key: string };
+  | { at: string; category: "email"; thread: RecordThread; key: string }
+  // Reunião do Meet: entra no filtro "Atividades", ordenada pelo início da reunião.
+  | { at: string; category: "activity"; meeting: RecordMeeting; key: string };
 
 /** Um item do histórico: ícone no trilho à esquerda e o conteúdo ao lado. */
 function RailItem({ icon: Icon, last, children }: { icon: LucideIcon; last: boolean; children: ReactNode }) {
@@ -172,6 +177,7 @@ function RailItem({ icon: Icon, last, children }: { icon: LucideIcon; last: bool
 
 function EntryContent({ entry, threadActions }: { entry: Entry; threadActions?: Record<string, ReactNode> }) {
   if ("thread" in entry) return <ThreadCard thread={entry.thread} extra={threadActions?.[entry.thread.threadId]} />;
+  if ("meeting" in entry) return <MeetingBlock meeting={entry.meeting} />;
   const { item } = entry;
   if (item.note) return <NoteCard item={item} />;
   if (entry.category === "activity") {
@@ -198,18 +204,21 @@ function EntryContent({ entry, threadActions }: { entry: Entry; threadActions?: 
 
 /**
  * Histórico do card no formato do Pipedrive: filtros (Tudo, Anotações, Atividades, E-mails, Alterações),
- * trilho com ícones e as conversas de e-mail como cards. `emailsLoading`: as conversas ainda estão chegando.
+ * trilho com ícones, as conversas de e-mail como cards e as reuniões do Meet como blocos (em Atividades).
+ * `emailsLoading`: as conversas ainda estão chegando.
  */
 export function Timeline({
   items,
   planned,
   threads = [],
+  meetings = [],
   threadActions,
   emailsLoading = false,
 }: {
   items: TimelineItem[];
   planned?: ReactNode;
   threads?: RecordThread[];
+  meetings?: RecordMeeting[];
   threadActions?: Record<string, ReactNode>;
   emailsLoading?: boolean;
 }) {
@@ -228,9 +237,15 @@ export function Timeline({
         thread,
         key: `t-${thread.threadId}`,
       })),
+      ...meetings.map((meeting) => ({
+        at: meeting.startedAt,
+        category: "activity" as const,
+        meeting,
+        key: `m-${meeting.id}`,
+      })),
     ];
     return sortByAtDesc(list);
-  }, [items, threads]);
+  }, [items, threads, meetings]);
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: entries.length, note: 0, activity: 0, email: 0, change: 0 };
     for (const e of entries) c[e.category] += 1;
@@ -277,7 +292,7 @@ export function Timeline({
             {visible.map((entry, i) => (
               <RailItem
                 key={entry.key}
-                icon={"thread" in entry ? Mail : (EVENT_ICONS[entry.item.kind] ?? Circle)}
+                icon={"thread" in entry ? Mail : "meeting" in entry ? Video : (EVENT_ICONS[entry.item.kind] ?? Circle)}
                 last={i === visible.length - 1}
               >
                 <EntryContent entry={entry} threadActions={threadActions} />

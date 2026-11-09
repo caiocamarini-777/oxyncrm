@@ -15,9 +15,11 @@ describe("buildAuthUrl", () => {
     expect(url.searchParams.get("prompt")).toBe("consent");
     expect(url.searchParams.get("state")).toBe("st");
     expect(url.searchParams.get("scope")).toBe(
-      "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
+      "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/meetings.space.readonly https://www.googleapis.com/auth/calendar.events.readonly",
     );
-    expect(GMAIL_SCOPES).toHaveLength(4);
+    expect(url.searchParams.get("scope")).toContain("meetings.space.readonly");
+    expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
+    expect(GMAIL_SCOPES).toHaveLength(6);
   });
 });
 

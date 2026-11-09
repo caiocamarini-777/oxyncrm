@@ -1,5 +1,6 @@
 import "server-only";
 import { getCurrentProfile } from "@/lib/auth/session";
+import { getMeetingNotePipedriveIds, hideMeetingNotes, importedNoteExternalIds } from "@/lib/meet/queries";
 import { createServerClient } from "@/lib/supabase/server";
 import type { RecordEntity } from "@/lib/records/types";
 import { activityTimelineItem, describeEvent, sortByAtDesc } from "./describe";
@@ -12,6 +13,11 @@ export type TimelineItem = {
   /** Nota de conclusão da atividade. */
   detail?: string | null;
   note?: { id: string; body: string; canEdit: boolean };
+  /**
+   * Id da anotação no Pipedrive. Só vem preenchido nas anotações que o assistente de reuniões gravou lá (as do
+   * bloco da reunião); serve para esconder a duplicada.
+   */
+  externalId?: string;
 };
 
 const ACTIVITY_COLUMN: Record<RecordEntity, string> = {
@@ -29,12 +35,13 @@ function fail(what: string, error: { message: string; code?: string }): never {
 /**
  * Histórico do registro, mais recente primeiro: eventos, anotações e atividades concluídas. Anotações e
  * atividades vêm das próprias tabelas (as importadas do Pipedrive não têm evento). Os e-mails entram como
- * conversas no RecordHistory.
+ * conversas no RecordHistory. A anotação que o assistente de reuniões gravou no Pipedrive e voltou pela
+ * importação fica de fora, porque o bloco da reunião já a mostra.
  */
 export async function getTimeline(entity: RecordEntity, recordId: string): Promise<TimelineItem[]> {
   const supabase = await createServerClient();
   const profile = await getCurrentProfile();
-  const [events, notes, done] = await Promise.all([
+  const [events, notes, done, meetingNoteIds] = await Promise.all([
     supabase
       .from("timeline_events")
       .select("id, kind, actor_id, data, created_at")
@@ -57,6 +64,7 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
       .is("deleted_at", null)
       .order("completed_at", { ascending: false, nullsFirst: false })
       .limit(300),
+    getMeetingNotePipedriveIds(entity, recordId),
   ]);
   if (events.error) fail("eventos", events.error);
   if (notes.error) fail("anotações", notes.error);
@@ -126,6 +134,9 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     }
   }
 
+  // Quais anotações do CRM vieram do Pipedrive com o id de uma anotação de reunião (consulta só se houver).
+  const meetingNotes = notes.data.length > 0 ? await importedNoteExternalIds(meetingNoteIds) : new Map<string, string>();
+
   const items: TimelineItem[] = [];
   for (const e of events.data) {
     // Anotações e atividades concluídas entram pelas tabelas, abaixo (sem duplicar com o evento).
@@ -135,17 +146,19 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     items.push({ kind: e.kind, at: e.created_at, actorName, text: describeEvent({ kind: e.kind, entity, data }, names) });
   }
   for (const n of notes.data) {
+    const externalId = meetingNotes.get(n.id);
     items.push({
       kind: "note",
       at: n.created_at,
       actorName: (n.created_by && names[n.created_by]) || "Alguém",
       text: "",
       note: { id: n.id, body: n.body, canEdit: n.created_by === profile?.id || Boolean(profile?.isSuperAdmin) },
+      ...(externalId ? { externalId } : {}),
     });
   }
   for (const a of doneRows) {
     const t = Array.isArray(a.type) ? a.type[0] : a.type;
     items.push(activityTimelineItem({ ...a, typeName: t?.name ?? null, ownerName: a.owner_id ? (names[a.owner_id] ?? null) : null }));
   }
-  return sortByAtDesc(items);
+  return hideMeetingNotes(sortByAtDesc(items), meetingNoteIds);
 }

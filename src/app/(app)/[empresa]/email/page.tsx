@@ -4,21 +4,35 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Search } from "lucide-react";
-import { Notice, NoMailbox, NotConfigured, PickCompany, Reconnect } from "@/components/email/mailbox-states";
+import { Notice, NoMailbox, NotConfigured, PickCompany, Reconnect, ReconnectForMeet } from "@/components/email/mailbox-states";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { LIVE_ERROR_TEXT, listMyMailboxes, loadLivePage, type Mailbox } from "@/lib/gmail/live";
 import { cleanPageToken, cleanQuery, mailboxHref } from "@/lib/gmail/live-thread";
+import { hasMeetScopes } from "@/lib/gmail/connect";
 import { gmailConfig } from "@/lib/gmail/oauth";
+import { readMeetingSettings } from "@/lib/meet/settings";
 import { formatDate } from "@/lib/records/format";
+import { createServerClient } from "@/lib/supabase/server";
 import { cn } from "cn";
 
 export const instant = false;
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+
+/** Assistente de reuniões ligado na empresa da caixa. Falha na leitura conta como desligado (o aviso some). */
+async function meetingAssistantOn(companyId: string): Promise<boolean> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from("companies").select("settings").eq("id", companyId).maybeSingle();
+  if (error) {
+    console.error("[email] configuração do assistente de reuniões:", error.code, error.message);
+    return false;
+  }
+  return readMeetingSettings((data as { settings?: unknown } | null)?.settings).enabled;
+}
 
 export default async function EmailPage({
   params,
@@ -51,6 +65,9 @@ export default async function EmailPage({
   const q = cleanQuery(first(sp.q));
   const pageToken = cleanPageToken(first(sp.pagina));
   const base = `/${empresa}/email`;
+  // Aviso de reconectar para o Meet: só com a caixa ativa, sem os acessos novos e com o assistente ligado.
+  const askMeetReconnect =
+    mailbox.status !== "reconnect" && !hasMeetScopes(mailbox.scopes) && (await meetingAssistantOn(scope.company.id));
 
   return wrap(
     <>
@@ -74,6 +91,7 @@ export default async function EmailPage({
         <Reconnect email={mailbox.email} />
       ) : (
         <>
+          {askMeetReconnect ? <ReconnectForMeet companyId={scope.company.id} /> : null}
           <Form action={base} className="flex gap-2">
             <input type="hidden" name="caixa" value={mailbox.id} />
             <Input

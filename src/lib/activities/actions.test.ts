@@ -156,6 +156,36 @@ describe("envio para a Agenda depois de gravar", () => {
       expect(state.afterActivityWrite.mock.calls.map((c) => c[0]).sort()).toEqual([A, NEXT].sort());
     });
 
+    describe("atividade sem vínculo (veio da Agenda do Google)", () => {
+      const next = { typeId: TYPE, channelId: CHANNEL, subject: "Retorno", dueAt: "2026-11-12T10:00" };
+      const meeting = { subject: "Reunião remarcada", dueAt: "2026-11-12T10:00" };
+      const unlinked = { lead_id: null, deal_id: null, person_id: null, organization_id: null };
+      const MSG = "Vincule a atividade a um lead, negócio, pessoa ou organização antes de agendar a próxima.";
+
+      it.each([
+        ["próxima atividade", { ...complete, next }],
+        ["reunião remarcada", { isMeeting: true, meetingOutcome: "rescheduled" as const, meeting }],
+      ])("pedindo %s: pede o vínculo antes, sem chamar a conclusão", async (_, input) => {
+        state.results.select = { data: unlinked };
+        expect(await completeActivity(A, input)).toEqual({ ok: false, error: MSG });
+        expect(state.order).not.toContain("rpc:complete_activity");
+        expect(state.afterActivityWrite).not.toHaveBeenCalled();
+      });
+
+      it("sem próxima nem reunião, conclui normalmente", async () => {
+        state.results.select = { data: unlinked };
+        state.results.complete_activity = { data: { rule: "off" } };
+        expect((await completeActivity(A, complete)).ok).toBe(true);
+      });
+
+      it("com vínculo, a próxima segue para a conclusão", async () => {
+        state.results.select = { data: { ...unlinked, deal_id: DEAL } };
+        state.results.complete_activity = { data: { next_id: NEXT } };
+        expect((await completeActivity(A, { ...complete, next })).ok).toBe(true);
+        expect(state.order).toContain("rpc:complete_activity");
+      });
+    });
+
     it("conclusão recusada pelo banco não envia nada", async () => {
       state.results.complete_activity = { error: { message: "OXYN_ALREADY_DONE" } };
       expect((await completeActivity(A, complete)).ok).toBe(false);

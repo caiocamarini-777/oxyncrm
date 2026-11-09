@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { primaryEmail } from "@/lib/calendar/mapping";
 import { readCalendarSettings } from "@/lib/calendar/settings";
 import type { CompanyScope } from "@/lib/companies/pure";
 import { safeTerm } from "@/lib/records/list-helpers";
@@ -191,6 +192,22 @@ export async function getCalendarSyncEnabled(companyId: string): Promise<boolean
     return false;
   }
   return readCalendarSettings((data as { settings?: unknown } | null)?.settings).enabled;
+}
+
+/**
+ * A pessoa do negócio ou do lead tem e-mail (fora da lixeira): a reunião criada no registro sem escolher pessoa
+ * convida essa pessoa pela Agenda. Só informa a tela (aviso do convite), então falha na leitura conta como não.
+ */
+export async function getRecordPersonHasEmail(entity: "deals" | "leads", id: string): Promise<boolean> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from(entity).select("person:persons(emails, deleted_at)").eq("id", id).maybeSingle();
+  if (error) {
+    console.error("[atividades] pessoa do registro:", error.code, error.message);
+    return false;
+  }
+  const rel = (data as { person?: unknown } | null)?.person;
+  const person = (Array.isArray(rel) ? rel[0] : rel) as { emails: unknown; deleted_at: string | null } | null | undefined;
+  return !!person && !person.deleted_at && primaryEmail(person.emails) !== null;
 }
 
 export type ActivityCatalogItem = { id: string; name: string; active: boolean };

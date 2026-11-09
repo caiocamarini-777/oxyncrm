@@ -72,4 +72,19 @@ describe("toActivityRow", () => {
     expect(toActivityRow(raw({ person: person({ deleted_at: "2026-10-01T00:00:00Z" }) }), now).personHasEmail).toBe(false);
     expect(toActivityRow(raw({ person: null }), now).personHasEmail).toBe(false);
   });
+  it("sem pessoa na atividade, vale a pessoa do negócio, senão a do lead (quem a reunião convida)", () => {
+    const withEmail = { emails: [{ value: "cliente@acme.com" }], deleted_at: null };
+    const noEmail = { emails: [], deleted_at: null };
+    const deal = (person: unknown) => ({ id: "d1", title: "Neg", deleted_at: null, person }) as RawRow["deal"];
+    const lead = (person: unknown) => ({ id: "l1", title: "Lead", deleted_at: null, person }) as RawRow["lead"];
+    const row = (o: Partial<RawRow>) => toActivityRow(raw({ person_id: null, ...o }), now).recordPersonHasEmail;
+    expect(row({ deal: deal(withEmail), lead: lead(null) })).toBe(true);
+    expect(row({ deal: deal([withEmail]), lead: lead(null) })).toBe(true);
+    expect(row({ deal: deal(null), lead: lead(withEmail) })).toBe(true);
+    // A pessoa do negócio vem primeiro, mesmo sem e-mail.
+    expect(row({ deal: deal(noEmail), lead: lead(withEmail) })).toBe(false);
+    expect(row({ deal: deal({ ...withEmail, deleted_at: "2026-10-01T00:00:00Z" }), lead: lead(null) })).toBe(false);
+    // Com pessoa na atividade, não há reserva: vale a dela.
+    expect(toActivityRow(raw({ person_id: "p1", deal: deal(withEmail) }), now).recordPersonHasEmail).toBe(false);
+  });
 });

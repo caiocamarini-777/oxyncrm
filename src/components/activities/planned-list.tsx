@@ -17,7 +17,8 @@ import { ActivityForm, type FormResult, type FormValues } from "./activity-form"
 import { CompleteDialog } from "./complete-dialog";
 import { toEditInput } from "./helpers";
 
-function EditDialog({
+/** Edição da atividade: dados, responsável e os vínculos de pessoa e organização que o registro não fixa. */
+export function EditDialog({
   activity,
   data,
   onClose,
@@ -72,6 +73,7 @@ function EditDialog({
             ...(data.links.organizationId ? [] : (["organization"] as const)),
           ]}
           calendarSync={data.calendarSync}
+          inviteFallback={activity.recordPersonHasEmail}
           submitLabel="Salvar"
           onCancel={onClose}
           onSubmit={submit}

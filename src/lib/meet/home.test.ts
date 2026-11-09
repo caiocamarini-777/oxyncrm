@@ -140,6 +140,7 @@ describe("toScheduledMeeting", () => {
     person: null,
     organization: null,
     personHasEmail: false,
+    recordPersonHasEmail: false,
     bookedByActivityId: null,
     legacy: false,
     status: "today",

@@ -20,6 +20,7 @@ import {
 
 const uuid = z.string().uuid();
 const NO_PERMISSION = "Você não tem permissão para esta ação.";
+const LINK_BEFORE_NEXT = "Vincule a atividade a um lead, negócio, pessoa ou organização antes de agendar a próxima.";
 const INVALID = { ok: false, error: "Dados inválidos." } as const;
 const touched = () => revalidatePath("/", "layout");
 
@@ -115,6 +116,8 @@ export type CompleteResult =
  * Conclui via RPC `complete_activity`. `next.ownerId` só segue quando o usuário escolheu outro
  * responsável (passar o do registro de origem exige a permissão de reatribuir). Sucesso devolve
  * `rule` (off | suggest | require) para a tela decidir se sugere a próxima atividade.
+ * A próxima atividade e a reunião (remarcada ou marcada) herdam os vínculos da concluída: sem nenhum (atividade que
+ * veio da Agenda do Google), a conclusão pede o vínculo antes, em vez de o banco recusar com um erro técnico.
  */
 export async function completeActivity(id: string, input: CompleteInput): Promise<CompleteResult> {
   if (!uuid.safeParse(id).success) return INVALID;
@@ -132,6 +135,17 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
   }
   const d = parsed.data;
   const supabase = await createServerClient();
+  if (d.next || d.meeting) {
+    const { data: src, error: srcError } = await supabase
+      .from("activities")
+      .select("lead_id, deal_id, person_id, organization_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (srcError) return { ok: false, error: translateDbError(srcError) };
+    if (src && !src.lead_id && !src.deal_id && !src.person_id && !src.organization_id) {
+      return { ok: false, error: LINK_BEFORE_NEXT };
+    }
+  }
   let nextOwner = d.next?.ownerId;
   if (nextOwner) {
     // dono igual ao da atividade de origem: omitir (informar exige a permissão de reatribuir)

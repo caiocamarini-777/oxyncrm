@@ -11,7 +11,8 @@ import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
 import { LIVE_ERROR_TEXT, listMyMailboxes, loadLivePage, type Mailbox } from "@/lib/gmail/live";
 import { cleanPageToken, cleanQuery, mailboxHref } from "@/lib/gmail/live-thread";
-import { hasMeetScopes } from "@/lib/gmail/connect";
+import { readCalendarSettings } from "@/lib/calendar/settings";
+import { hasCalendarScope, hasMeetScopes, needsGoogleReconnect } from "@/lib/gmail/connect";
 import { gmailConfig } from "@/lib/gmail/oauth";
 import { readMeetingSettings } from "@/lib/meet/settings";
 import { formatDate } from "@/lib/records/format";
@@ -23,15 +24,19 @@ export const instant = false;
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
-/** Assistente de reuniões ligado na empresa da caixa. Falha na leitura conta como desligado (o aviso some). */
-async function meetingAssistantOn(companyId: string): Promise<boolean> {
+/**
+ * Assistente de reuniões e sincronização com a Agenda ligados na empresa da caixa. Falha na leitura conta como
+ * desligados (o aviso some).
+ */
+async function googleFeaturesOn(companyId: string): Promise<{ meet: boolean; calendar: boolean }> {
   const supabase = await createServerClient();
   const { data, error } = await supabase.from("companies").select("settings").eq("id", companyId).maybeSingle();
   if (error) {
-    console.error("[email] configuração do assistente de reuniões:", error.code, error.message);
-    return false;
+    console.error("[email] configuração do assistente de reuniões e da Agenda:", error.code, error.message);
+    return { meet: false, calendar: false };
   }
-  return readMeetingSettings((data as { settings?: unknown } | null)?.settings).enabled;
+  const settings = (data as { settings?: unknown } | null)?.settings;
+  return { meet: readMeetingSettings(settings).enabled, calendar: readCalendarSettings(settings).enabled };
 }
 
 export default async function EmailPage({
@@ -65,9 +70,13 @@ export default async function EmailPage({
   const q = cleanQuery(first(sp.q));
   const pageToken = cleanPageToken(first(sp.pagina));
   const base = `/${empresa}/email`;
-  // Aviso de reconectar para o Meet: só com a caixa ativa, sem os acessos novos e com o assistente ligado.
-  const askMeetReconnect =
-    mailbox.status !== "reconnect" && !hasMeetScopes(mailbox.scopes) && (await meetingAssistantOn(scope.company.id));
+  // Aviso de reconectar: só com a caixa ativa e faltando o acesso de algo ligado na empresa (o assistente de reuniões,
+  // ou a Agenda, que exige o escopo de gravar eventos).
+  const lacksScopes = !hasMeetScopes(mailbox.scopes) || !hasCalendarScope(mailbox.scopes);
+  const askGoogleReconnect =
+    mailbox.status !== "reconnect" &&
+    lacksScopes &&
+    needsGoogleReconnect(mailbox.scopes, await googleFeaturesOn(scope.company.id));
 
   return wrap(
     <>
@@ -91,7 +100,7 @@ export default async function EmailPage({
         <Reconnect email={mailbox.email} />
       ) : (
         <>
-          {askMeetReconnect ? <ReconnectForMeet companyId={scope.company.id} /> : null}
+          {askGoogleReconnect ? <ReconnectForMeet companyId={scope.company.id} /> : null}
           <Form action={base} className="flex gap-2">
             <input type="hidden" name="caixa" value={mailbox.id} />
             <Input

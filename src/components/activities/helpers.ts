@@ -47,6 +47,25 @@ export function toEditInput(v: FormValues): ActivityInput {
   };
 }
 
+/**
+ * O formulário avisa que o cliente recebe o convite (também na edição: a reunião que passa a ter quem convidar convida
+ * ao salvar): Agenda ligada, tipo reunião e alguém com e-mail para convidar. É a pessoa escolhida; sem pessoa, a do
+ * negócio ou do lead (`fallback`), como no envio.
+ */
+export function showsInviteHint(o: {
+  calendarSync: boolean;
+  isMeeting: boolean;
+  person: { hasEmail?: boolean } | null;
+  fallback: boolean;
+}): boolean {
+  return o.calendarSync && o.isMeeting && (o.person ? o.person.hasEmail === true : o.fallback);
+}
+
+/** Atividade sem nenhum vínculo (veio da Agenda do Google): só pela lista de atividades dá para vinculá-la. */
+export function isUnlinked(a: Pick<ActivityRow, "leadId" | "dealId" | "personId" | "organizationId">): boolean {
+  return !a.leadId && !a.dealId && !a.personId && !a.organizationId;
+}
+
 export function toNextInput(v: FormValues): NextActivityInput {
   return {
     typeId: v.typeId,

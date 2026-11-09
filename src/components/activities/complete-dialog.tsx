@@ -173,6 +173,7 @@ function CompleteBody({
           initial={nextInitial}
           parties={[]}
           calendarSync={data.calendarSync}
+          inviteFallback={activity.recordPersonHasEmail}
           withDescription={false}
           autoFocusFirst
           submitLabel="Agendar"
@@ -307,6 +308,7 @@ function CompleteBody({
               initial={nextInitial}
               parties={[]}
               calendarSync={data.calendarSync}
+              inviteFallback={activity.recordPersonHasEmail}
               withDescription={false}
               submitLabel="Concluir e agendar"
               cancelLabel="Cancelar"

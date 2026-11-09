@@ -7,6 +7,7 @@ import {
   GMAIL_ERROR_MESSAGES,
   hasCalendarScope,
   hasMeetScopes,
+  needsGoogleReconnect,
   hasRequiredScopes,
   MEET_SCOPES,
   REQUIRED_GMAIL_SCOPES,
@@ -133,6 +134,15 @@ describe("hasMeetScopes", () => {
     expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], MEET_SCOPES[1]])).toBe(false);
     expect(hasMeetScopes([])).toBe(false);
   });
+
+  it("aceita o escopo de leitura da Agenda das caixas conectadas antes (o assistente só lê)", () => {
+    const readonly = "https://www.googleapis.com/auth/calendar.events.readonly";
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], readonly, MEET_SCOPES[2]])).toBe(true);
+    // Sem nenhum dos dois escopos da Agenda, falta acesso.
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], MEET_SCOPES[2]])).toBe(false);
+    // O readonly não serve à sincronização com a Agenda.
+    expect(hasCalendarScope([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], readonly, MEET_SCOPES[2]])).toBe(false);
+  });
 });
 
 describe("hasCalendarScope", () => {
@@ -147,5 +157,26 @@ describe("hasCalendarScope", () => {
     expect(hasCalendarScope(REQUIRED_GMAIL_SCOPES)).toBe(false);
     expect(hasCalendarScope([])).toBe(false);
     expect(hasCalendarScope(null)).toBe(false);
+  });
+});
+
+describe("needsGoogleReconnect", () => {
+  const readonly = "https://www.googleapis.com/auth/calendar.events.readonly";
+  const old = [...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], readonly, MEET_SCOPES[2]];
+  const full = [...REQUIRED_GMAIL_SCOPES, ...MEET_SCOPES];
+
+  it("caixa antiga (readonly): o assistente segue; a Agenda ligada pede reconexão", () => {
+    expect(needsGoogleReconnect(old, { meet: true, calendar: false })).toBe(false);
+    expect(needsGoogleReconnect(old, { meet: false, calendar: true })).toBe(true);
+    expect(needsGoogleReconnect(old, { meet: true, calendar: true })).toBe(true);
+  });
+
+  it("sem os escopos do Meet, pede reconexão só com o assistente ligado", () => {
+    expect(needsGoogleReconnect(REQUIRED_GMAIL_SCOPES, { meet: true, calendar: false })).toBe(true);
+    expect(needsGoogleReconnect(REQUIRED_GMAIL_SCOPES, { meet: false, calendar: false })).toBe(false);
+  });
+
+  it("caixa com todos os escopos nunca pede", () => {
+    expect(needsGoogleReconnect(full, { meet: true, calendar: true })).toBe(false);
   });
 });

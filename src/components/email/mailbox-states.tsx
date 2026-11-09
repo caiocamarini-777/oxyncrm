@@ -51,10 +51,13 @@ export function Reconnect({ email }: { email: string }) {
   );
 }
 
-/** Caixa sem algum escopo do assistente de reuniões (Meet, agenda ou os arquivos do Meet no Drive). */
+/**
+ * Caixa sem algum escopo do assistente de reuniões (Meet, agenda ou os arquivos do Meet no Drive) ou da sincronização
+ * com a Agenda (gravar eventos).
+ */
 export function ReconnectForMeet({ companyId }: { companyId: string }) {
   return (
-    <Notice title="Reconecte o Google para ativar o assistente de reuniões.">
+    <Notice title="Reconecte o Google para ativar o assistente de reuniões e a Agenda.">
       <p>
         Esta caixa foi conectada sem algum dos acessos do CRM (reuniões do Meet, Agenda e anotações do Gemini).
         Reconecte-a e autorize os novos acessos.

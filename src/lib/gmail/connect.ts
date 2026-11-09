@@ -103,9 +103,26 @@ export function hasCalendarScope(granted: readonly string[] | null | undefined):
   return (granted ?? []).includes(CALENDAR_SCOPE);
 }
 
-/** Contas conectadas antes do assistente (ou com os escopos desmarcados) precisam reconectar. */
+/** Ler os eventos da Agenda: o escopo antigo, das caixas conectadas antes da sincronização com a Agenda. */
+const CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+
+/**
+ * Contas conectadas antes do assistente (ou com os escopos desmarcados) precisam reconectar. O assistente só lê a
+ * Agenda: o `calendar.events.readonly` antigo também serve (quem conectou antes da sincronização com a Agenda segue
+ * com o assistente até reconectar).
+ */
 export function hasMeetScopes(granted: string[]): boolean {
-  return MEET_SCOPES.every((s) => granted.includes(s));
+  return MEET_SCOPES.every(
+    (s) => granted.includes(s) || (s === CALENDAR_SCOPE && granted.includes(CALENDAR_READONLY_SCOPE)),
+  );
+}
+
+/**
+ * A caixa precisa reconectar para o que está ligado na empresa: o assistente de reuniões (escopos do Meet) ou a
+ * sincronização com a Agenda (escopo de gravar eventos). O que está desligado não pede reconexão.
+ */
+export function needsGoogleReconnect(granted: string[], on: { meet: boolean; calendar: boolean }): boolean {
+  return (on.meet && !hasMeetScopes(granted)) || (on.calendar && !hasCalendarScope(granted));
 }
 
 export type MailboxDecision =

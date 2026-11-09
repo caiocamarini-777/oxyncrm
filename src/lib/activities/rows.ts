@@ -44,6 +44,11 @@ export type ActivityRow = {
   organization: ActivityLink | null;
   /** A pessoa vinculada (visível) tem e-mail: a reunião convida o cliente pela Agenda. */
   personHasEmail: boolean;
+  /**
+   * Sem pessoa na atividade, a reunião convida a pessoa do negócio, senão a do lead (a regra do envio à Agenda): ela
+   * tem e-mail. Falso quando a atividade tem pessoa.
+   */
+  recordPersonHasEmail: boolean;
   bookedByActivityId: string | null;
   legacy: boolean;
   status: DueStatus;
@@ -58,7 +63,8 @@ export const SELECT =
   "id, company_id, lead_id, deal_id, person_id, organization_id, subject, description, due_at, duration_minutes, reminder_minutes, done, completed_at, meeting_outcome, completion_note, owner_id, booked_by_activity_id, legacy, meet_url, calendar_state, calendar_error, " +
   "company:companies(name, slug), type:activity_types(id, name, is_meeting), channel:activity_channels!channel_id(id, name), " +
   "outcome:activity_outcomes(name, classification), owner:profiles!owner_id(full_name), " +
-  "lead:leads(id, title, deleted_at), deal:deals(id, title, deleted_at), person:persons(id, full_name, deleted_at, emails), organization:organizations(id, name, deleted_at)";
+  "lead:leads(id, title, deleted_at, person:persons(emails, deleted_at)), deal:deals(id, title, deleted_at, person:persons(emails, deleted_at)), " +
+  "person:persons(id, full_name, deleted_at, emails), organization:organizations(id, name, deleted_at)";
 
 export type RawRow = {
   id: string;
@@ -87,11 +93,16 @@ export type RawRow = {
   channel: Rel<{ id: string; name: string }>;
   outcome: Rel<{ name: string; classification: "success" | "neutral" | "failure" }>;
   owner: Rel<{ full_name: string }>;
-  lead: Rel<{ id: string; title: string; deleted_at: string | null }>;
-  deal: Rel<{ id: string; title: string; deleted_at: string | null }>;
+  lead: Rel<{ id: string; title: string; deleted_at: string | null; person?: Rel<PersonEmails> }>;
+  deal: Rel<{ id: string; title: string; deleted_at: string | null; person?: Rel<PersonEmails> }>;
   person: Rel<{ id: string; full_name: string; deleted_at: string | null; emails: unknown }>;
   organization: Rel<{ id: string; name: string; deleted_at: string | null }>;
 };
+
+type PersonEmails = { emails: unknown; deleted_at: string | null };
+
+/** Pessoa visível, fora da lixeira e com e-mail. */
+const reachable = (p: PersonEmails | null | undefined) => !!p && !p.deleted_at && primaryEmail(p.emails) !== null;
 
 function link<T extends { id: string; deleted_at: string | null }>(
   v: Rel<T>,
@@ -133,7 +144,9 @@ export function toActivityRow(r: RawRow, now: Date): ActivityRow {
     deal: link(r.deal, (x) => x.title),
     person: link(r.person, (x) => x.full_name),
     organization: link(r.organization, (x) => x.name),
-    personHasEmail: !!person && !person.deleted_at && primaryEmail(person.emails) !== null,
+    personHasEmail: reachable(person),
+    recordPersonHasEmail:
+      !r.person_id && reachable(one(one(r.deal)?.person ?? null) ?? one(one(r.lead)?.person ?? null)),
     bookedByActivityId: r.booked_by_activity_id,
     legacy: r.legacy,
     status: dueStatus(r.due_at, r.done, now),

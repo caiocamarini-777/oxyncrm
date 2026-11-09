@@ -56,6 +56,7 @@ export function ActivityTab({ data }: { data: RecordActivityData }) {
       }}
       parties={[...parties]}
       calendarSync={data.calendarSync}
+      inviteFallback={data.personHasEmail}
       submitLabel="Salvar atividade"
       onSubmit={submit}
     />

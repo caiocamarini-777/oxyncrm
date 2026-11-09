@@ -118,7 +118,9 @@ export default function PrivacyPage() {
           <li>
             O CRM cria, altera e apaga na agenda principal do vendedor os eventos das atividades do CRM: a atividade
             agendada vira um evento, o evento acompanha as mudanças de horário e de título, e é apagado quando a
-            atividade vai para a lixeira ou a reunião é cancelada no CRM.
+            atividade vai para a lixeira ou a reunião é cancelada (ou remarcada antes do horário) no CRM. O evento
+            criado direto na Agenda nunca é apagado pelo CRM, e só tem o horário e o título alterados quando o
+            vendedor é o organizador.
           </li>
           <li>
             A reunião agendada no CRM com um contato que tem e-mail convida esse contato: o Google envia a ele o convite

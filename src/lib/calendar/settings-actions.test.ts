@@ -18,6 +18,7 @@ vi.mock("@/lib/auth/session", () => ({
   },
 }));
 vi.mock("@/lib/supabase/server", () => ({ createServerClient: async () => state.db }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => state.db }));
 vi.mock("./activity-hooks", () => ({ afterActivityWrite: (id: string) => state.afterActivityWrite(id) }));
 
 import { revalidatePath } from "next/cache";
@@ -124,6 +125,67 @@ describe("saveCalendarSync", () => {
     expect((await saveCalendarSync(CO, true)).ok).toBe(true);
     expect(bumps).toBe(-1); // dois updates: o primeiro perdeu a corrida, o segundo valeu
     expect((t.companies[0].settings as { calendar_sync: { enabled: boolean } }).calendar_sync.enabled).toBe(true);
+  });
+
+  describe("modo espelho do Pipedrive ativo", () => {
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+    const job = (over: Row = {}): Row => ({ id: "j1", status: "done", mirror: true, finished_at: hoursAgo(2), ...over });
+    const MSG = "Desligue o modo espelho (virada do Pipedrive) antes de ligar a Agenda.";
+
+    it("recusa ligar com o último job concluído em espelho há menos de 48 h, sem gravar", async () => {
+      const t: Tables = { companies: [company()], import_jobs: [job()] };
+      use(t);
+      expect(await saveCalendarSync(CO, true)).toEqual({ ok: false, error: MSG });
+      expect(t.companies[0].settings).toEqual(company().settings);
+    });
+
+    it("o último job concluído é o que vale: espelho antigo, ou um job comum depois do espelho, não bloqueia", async () => {
+      for (const jobs of [
+        [job({ finished_at: hoursAgo(49) })],
+        [job({ finished_at: hoursAgo(10) }), job({ id: "j2", mirror: false, finished_at: hoursAgo(1) })],
+        [job({ status: "running", finished_at: null }), job({ id: "j2", status: "failed", finished_at: hoursAgo(1) })],
+      ]) {
+        use({ companies: [company()], import_jobs: jobs });
+        expect((await saveCalendarSync(CO, true)).ok).toBe(true);
+      }
+    });
+
+    it("desligar não é bloqueado", async () => {
+      use({ companies: [company({ settings: { calendar_sync: { enabled: true } } })], import_jobs: [job()] });
+      expect((await saveCalendarSync(CO, false)).ok).toBe(true);
+    });
+  });
+
+  describe("religar a Agenda refaz a primeira rodada das caixas da empresa", () => {
+    const box = (id: string, company_id: string): Row => ({
+      id,
+      company_id,
+      calendar_since: "2026-11-09T12:00:00.000Z",
+      calendar_sync_token: "tok",
+    });
+
+    it("desligada → ligada: zera o início e o token das caixas da empresa (só dela)", async () => {
+      const t: Tables = {
+        companies: [company({ settings: { calendar_sync: { enabled: false, enabled_at: "2026-11-01T00:00:00Z" } } })],
+        email_accounts: [box("acc-1", CO), box("acc-2", CO), box("acc-x", "outra")],
+      };
+      use(t);
+      expect((await saveCalendarSync(CO, true)).ok).toBe(true);
+      const byId = Object.fromEntries(t.email_accounts.map((a) => [a.id, [a.calendar_since, a.calendar_sync_token]]));
+      expect(byId).toEqual({ "acc-1": [null, null], "acc-2": [null, null], "acc-x": ["2026-11-09T12:00:00.000Z", "tok"] });
+    });
+
+    it("já ligada, ou desligando: as caixas ficam como estão", async () => {
+      for (const [settings, enabled] of [
+        [{ calendar_sync: { enabled: true } }, true],
+        [{ calendar_sync: { enabled: true } }, false],
+      ] as const) {
+        const t: Tables = { companies: [company({ settings })], email_accounts: [box("acc-1", CO)] };
+        use(t);
+        expect((await saveCalendarSync(CO, enabled)).ok).toBe(true);
+        expect(t.email_accounts[0]).toMatchObject({ calendar_since: "2026-11-09T12:00:00.000Z", calendar_sync_token: "tok" });
+      }
+    });
   });
 
   it("empresa que muda a cada tentativa: desiste com mensagem, sem gravar", async () => {

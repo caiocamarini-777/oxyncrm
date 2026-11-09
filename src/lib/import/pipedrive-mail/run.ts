@@ -1,13 +1,16 @@
 import { PipedriveAuthError, type PipedriveClient } from "../pipedrive/client";
 import {
   classifyFile,
+  fileAddedAt,
   fileName,
   type FileTarget,
   isRemoteFile,
+  isWebUrl,
   mapMailMessage,
   MAX_FILE_BYTES,
   type PdFile,
   type PdMailMessage,
+  storagePath,
 } from "./mapping";
 import type { MailImportStore, RecordRef } from "./store";
 
@@ -22,11 +25,12 @@ import type { MailImportStore, RecordRef } from "./store";
  * 2. **Arquivos:** percorre `/v1/files` (sem os apagados). O anexo de e-mail vai para cada empresa em que a
  *    mensagem existe, conforme o passo 1 desta mesma rodada (que relê todas as mensagens, inclusive as já
  *    importadas). O arquivo de card vai para o registro; o de atividade, para o registro vinculado à atividade.
- *    Link externo grava só a URL; arquivo acima do limite do bucket, só o nome. Um download serve a todas as
- *    empresas do arquivo.
+ *    Link externo grava só a URL (sem URL http(s), é pulado e conta em `noTarget`); arquivo acima do limite do
+ *    bucket, só o nome. Um download serve a todas as empresas do arquivo. A data do arquivo é o `add_time`.
  *
  * Reexecutável: e-mail e arquivo já gravados são pulados pelo id do Pipedrive (`emailId`, `hasFile`). O envio ao
- * bucket vem antes do `insertFile`, para que uma falha no meio deixe o arquivo para a próxima rodada. Falha num
+ * bucket vem antes do `insertFile`, para que uma falha no meio deixe o arquivo para a próxima rodada; o caminho
+ * no bucket é determinístico (`storagePath`), então a nova tentativa sobrescreve o mesmo objeto. Falha num
  * item vai para `errors` e não para o resto; token inválido (`PipedriveAuthError`) encerra a importação.
  * `dryRun` só lê e conta: não grava, não busca corpo nem baixa arquivo.
  */
@@ -48,7 +52,6 @@ export type MailImportReport = {
   errors: { item: string; reason: string }[];
 };
 
-type Attachment = Parameters<MailImportStore["setEmailAttachments"]>[1][number];
 type FileRow = Parameters<MailImportStore["insertFile"]>[0];
 type LinkEntity = Parameters<MailImportStore["linkEmail"]>[1];
 type MailEntity = "deals" | "persons" | "organizations";
@@ -59,7 +62,6 @@ type FileDestination = {
   entity: LinkEntity | null;
   recordId: string | null;
   emailId: string | null;
-  pdMessageId: number | null;
 };
 
 const MAIL_ENTITIES: MailEntity[] = ["deals", "persons", "organizations"];
@@ -241,22 +243,19 @@ export async function runMailImport(
 
   // ---- 2. Arquivos ----
 
-  /** Anexos gravados nesta rodada, por e-mail; `dirty` são os e-mails com anexo novo ainda não escrito. */
-  const attachments = new Map<string, { pdMessageId: number; list: Attachment[] }>();
-  const dirty = new Set<string>();
   let filesSeen = 0;
 
   async function destinations(target: Exclude<FileTarget, { kind: "skip" }>): Promise<FileDestination[]> {
     if (target.kind === "email") {
       const pdMessageId = Number(target.pdMessageId);
       return [...(emails.get(pdMessageId) ?? new Map<string, string>())].map(([companyId, emailId]) => ({
-        companyId, entity: null, recordId: null, emailId, pdMessageId,
+        companyId, entity: null, recordId: null, emailId,
       }));
     }
     // um destino por empresa (a chave única do arquivo é empresa + id do Pipedrive)
     const out: FileDestination[] = [];
     const add = (companyId: string, entity: LinkEntity, recordId: string) => {
-      if (!out.some((d) => d.companyId === companyId)) out.push({ companyId, entity, recordId, emailId: null, pdMessageId: null });
+      if (!out.some((d) => d.companyId === companyId)) out.push({ companyId, entity, recordId, emailId: null });
     };
     if (target.kind === "record") {
       for (const r of await store.recordsFor(target.entity, target.pdId)) add(r.companyId, target.entity, r.recordId);
@@ -281,6 +280,11 @@ export async function runMailImport(
       else report.files.noTarget++;
       return;
     }
+    // link externo sem URL que dê para abrir: não vira linha (a tela diria que passou de 25 MB)
+    if (isRemoteFile(f) && !isWebUrl(f.url)) {
+      report.files.noTarget++;
+      return;
+    }
     const dests = await destinations(target);
     if (dests.length === 0) {
       if (target.kind === "email") report.files.noEmail++;
@@ -288,6 +292,7 @@ export async function runMailImport(
       return;
     }
     const name = fileName(f);
+    const addedAt = fileAddedAt(f);
     const declaredSize = toNum(f.file_size);
     let download: ReturnType<MailImportClient["download"]> | undefined;
     for (const d of dests) {
@@ -310,6 +315,7 @@ export async function runMailImport(
         remote_url: null,
         created_by: userOf(f.user_id),
       };
+      if (addedAt) row.created_at = addedAt;
       let kind: "uploaded" | "remote" | "tooLarge";
       if (isRemoteFile(f)) {
         kind = "remote";
@@ -327,32 +333,13 @@ export async function runMailImport(
           if (bytes.byteLength > MAX_FILE_BYTES) {
             kind = "tooLarge";
           } else {
-            row.storage_path = `${d.companyId}/${id}/${name}`;
+            row.storage_path = storagePath(d.companyId, f.id, name);
             await store.upload(row.storage_path, bytes, contentType);
           }
         }
       }
       if (!dryRun) await store.insertFile(row);
       report.files[kind]++;
-      if (!dryRun && d.emailId && d.pdMessageId !== null) {
-        const acc = attachments.get(d.emailId) ?? { pdMessageId: d.pdMessageId, list: [] };
-        acc.list.push({ file_id: row.id, filename: row.filename, size: row.size, mime: row.mime });
-        attachments.set(d.emailId, acc);
-        dirty.add(d.emailId);
-      }
-    }
-  }
-
-  /**
-   * Grava a lista de anexos dos e-mails que ganharam arquivo, com todos os anexos gravados nesta rodada. Roda a
-   * cada página de arquivos (e também quando o token cai no meio), para não deixar arquivo gravado fora da lista.
-   */
-  async function flushAttachments(): Promise<void> {
-    for (const emailId of [...dirty]) {
-      dirty.delete(emailId);
-      const acc = attachments.get(emailId);
-      if (!acc) continue;
-      await guard(`anexos do e-mail ${acc.pdMessageId}`, () => store.setEmailAttachments(emailId, acc.list));
     }
   }
 
@@ -360,11 +347,7 @@ export async function runMailImport(
     for (let start: number | null = 0; start !== null; ) {
       const page = await client.get(`/v1/files?start=${start}&limit=${FILES_PAGE}&include_deleted_files=0`);
       const files = uniqueById((Array.isArray(page.data) ? page.data : []).map(toFile));
-      try {
-        await runAll(files.map((f) => () => guard(`arquivo ${f.id}`, () => importFile(f))));
-      } finally {
-        await flushAttachments();
-      }
+      await runAll(files.map((f) => () => guard(`arquivo ${f.id}`, () => importFile(f))));
       start = nextOf(page.nextStart, start);
     }
   });

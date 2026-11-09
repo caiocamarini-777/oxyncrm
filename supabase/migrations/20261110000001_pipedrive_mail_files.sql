@@ -29,8 +29,6 @@ create table public.pipedrive_emails (
   body_html text check (body_html is null or char_length(body_html) <= 1048576),
   rfc_message_id text,
   direction text not null check (direction in ('in','out')),
-  -- [{file_id, filename, size, mime}]
-  attachments jsonb not null default '[]',
   imported_at timestamptz not null default now(),
   unique (company_id, pipedrive_id)
 );
@@ -59,8 +57,9 @@ create table public.record_files (
   filename text not null,
   mime text,
   size bigint,
-  -- Caminho no bucket record-files: {company_id}/{id}/{filename}. Nulo quando é link externo
-  -- ou quando o arquivo passou do limite do bucket (só o nome fica gravado).
+  -- Caminho no bucket record-files: {company_id}/pd-{pipedrive_id}/{nome ASCII seguro} (o nome original
+  -- fica em filename). Nulo quando é link externo ou quando o arquivo passou do limite do bucket (só o
+  -- nome fica gravado).
   storage_path text,
   remote_url text,
   created_by uuid references public.profiles on delete set null,
@@ -73,8 +72,8 @@ create index record_files_record_idx on public.record_files (entity, record_id);
 
 -- Permissões ----------------------------------------------------------------
 
--- O dono da mensagem e o admin geral leem sempre. Os demais, só se a caixa do dono no CRM não é
--- privada e algum registro vinculado é legível para o usuário.
+-- O dono da mensagem e o admin geral leem sempre. Os demais, só se o dono não tem caixa privada no CRM
+-- (em nenhuma empresa) e algum registro vinculado é legível para o usuário.
 create function public.can_read_pipedrive_email(p_email uuid) returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
   select coalesce((
@@ -84,7 +83,7 @@ language sql stable security definer set search_path = public, pg_temp as $$
       or (
         not exists (
           select 1 from public.email_accounts a
-          where a.user_id = e.owner_id and a.company_id = e.company_id and a.visibility = 'private')
+          where a.user_id = e.owner_id and a.visibility = 'private')
         and exists (
           select 1 from public.pipedrive_email_links l
           where l.email_id = e.id and public.can_read_record(l.entity, l.record_id))))
@@ -126,14 +125,14 @@ grant select, insert, update, delete on public.pipedrive_emails, public.pipedriv
 create policy pipedrive_emails_select on public.pipedrive_emails for select to authenticated
   using (public.can_read_pipedrive_email(id));
 create policy pipedrive_email_links_select on public.pipedrive_email_links for select to authenticated
-  using (public.can_read_pipedrive_email(email_id));
+  using (public.can_read_pipedrive_email(email_id) and public.can_read_record(entity, record_id));
 create policy record_files_select on public.record_files for select to authenticated
   using (public.can_read_record_file(id));
 
 -- Storage: bucket privado dos arquivos importados ---------------------------
 
 -- Sem policy em storage.objects para authenticated: só o service role lê e grava,
--- e o download é por URL assinada (a server action confere o acesso antes).
+-- e o download é por URL assinada (a rota /api/arquivos/[id] confere o acesso antes).
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('record-files', 'record-files', false, 26214400)
 on conflict (id) do nothing;

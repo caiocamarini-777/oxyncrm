@@ -7,7 +7,6 @@ import type { MailImportStore, RecordRef } from "./store";
 
 vi.mock("server-only", () => ({}));
 
-type Attachment = Parameters<MailImportStore["setEmailAttachments"]>[1][number];
 type FileRow = Parameters<MailImportStore["insertFile"]>[0];
 type LinkEntity = Parameters<MailImportStore["linkEmail"]>[1];
 
@@ -94,7 +93,7 @@ function fakeStore(init: {
   records?: Record<string, RecordRef[]>;
   activities?: Record<string, { entity: LinkEntity; recordId: string }>;
 } = {}) {
-  const emails: { id: string; companyId: string; row: EmailRow; attachments: Attachment[] }[] = [];
+  const emails: { id: string; companyId: string; row: EmailRow }[] = [];
   const links: string[] = [];
   const files: FileRow[] = [];
   const uploads: { path: string; bytes: Uint8Array; mime: string | null }[] = [];
@@ -126,7 +125,7 @@ function fakeStore(init: {
         throw new Error("e-mail duplicado");
       }
       const id = `email-${++seq}`;
-      emails.push({ id, companyId, row, attachments: [] });
+      emails.push({ id, companyId, row });
       return id;
     },
     async linkEmail(emailId, entity, recordId) {
@@ -135,12 +134,6 @@ function fakeStore(init: {
       if (links.includes(key)) return false;
       links.push(key);
       return true;
-    },
-    async setEmailAttachments(emailId, attachments) {
-      writes.push("setEmailAttachments");
-      const e = emails.find((x) => x.id === emailId);
-      if (!e) throw new Error(`e-mail ${emailId} não existe`);
-      e.attachments = attachments;
     },
     async hasFile(companyId, pdFileId) {
       num(pdFileId, "id do arquivo");
@@ -340,9 +333,9 @@ describe("runMailImport — arquivos", () => {
     ]);
   });
 
-  it("anexo de e-mail importado: baixa, envia ao bucket, grava ligado ao e-mail e entra nos anexos do e-mail", async () => {
+  it("anexo de e-mail importado: baixa, envia ao bucket e grava ligado ao e-mail, com a data do Pipedrive", async () => {
     const { pd, db } = scenario([
-      { id: 7, mail_message_id: 100, file_name: "proposta.pdf", file_size: 3, user_id: 77 },
+      { id: 7, mail_message_id: 100, file_name: "proposta.pdf", file_size: 3, user_id: 77, add_time: "2025-05-10 08:30:00" },
       { id: 8, mail_message_id: 100, file_name: "planilha.xlsx", file_size: 3 },
     ], { downloads: { 7: new Uint8Array([1, 2, 3]), 8: new Uint8Array([4, 5, 6, 7]) } });
 
@@ -351,8 +344,8 @@ describe("runMailImport — arquivos", () => {
     const email = db.emails[0];
     expect(pd.calls.downloads).toEqual(["/v1/files/7/download", "/v1/files/8/download"]);
     expect(db.uploads.map((u) => [u.path, u.mime])).toEqual([
-      [`${A}/f1/proposta.pdf`, "application/pdf"],
-      [`${A}/f2/planilha.xlsx`, "application/pdf"],
+      [`${A}/pd-7/proposta.pdf`, "application/pdf"],
+      [`${A}/pd-8/planilha.xlsx`, "application/pdf"],
     ]);
     expect(db.files[0]).toEqual({
       id: "f1",
@@ -364,15 +357,14 @@ describe("runMailImport — arquivos", () => {
       filename: "proposta.pdf",
       mime: "application/pdf",
       size: 3,
-      storage_path: `${A}/f1/proposta.pdf`,
+      storage_path: `${A}/pd-7/proposta.pdf`,
       remote_url: null,
       created_by: "perfil-77",
+      created_at: "2025-05-10T08:30:00.000Z",
     });
-    expect(email.attachments).toEqual([
-      { file_id: "f1", filename: "proposta.pdf", size: 3, mime: "application/pdf" },
-      { file_id: "f2", filename: "planilha.xlsx", size: 4, mime: "application/pdf" },
-    ]);
-    expect(db.writes.filter((w) => w === "setEmailAttachments")).toHaveLength(1);
+    // sem add_time fica o padrão do banco
+    expect(db.files[1]).not.toHaveProperty("created_at");
+    expect(db.files[1]).toMatchObject({ email_id: email.id, size: 4, storage_path: `${A}/pd-8/planilha.xlsx` });
     expect(report.files).toMatchObject({ uploaded: 2, existing: 0 });
   });
 
@@ -397,7 +389,6 @@ describe("runMailImport — arquivos", () => {
       [8, "persons", "pa-5", null],
     ]);
     expect(report.files).toMatchObject({ uploaded: 2, noTarget: 2 });
-    expect(db.writes).not.toContain("setEmailAttachments");
   });
 
   it("link externo grava só a URL; acima do limite grava só o nome; inline e .ics ficam de fora", async () => {
@@ -419,6 +410,51 @@ describe("runMailImport — arquivos", () => {
     });
   });
 
+  it("link externo sem URL http(s) é pulado e conta em noTarget, sem gravar linha", async () => {
+    const { pd, db } = scenario([
+      { id: 7, person_id: 5, file_name: "doc", remote_location: "googledocs", url: null },
+      { id: 8, person_id: 5, file_name: "doc2", remote_location: "googledocs" },
+      { id: 9, person_id: 5, file_name: "doc3", remote_location: "gdrive", url: "javascript:alert(1)" },
+    ]);
+    const report = await runMailImport({ client: pd.client, store: db.store, newId: ids() });
+    expect(db.files).toEqual([]);
+    expect(pd.calls.downloads).toEqual([]);
+    expect(report.files).toMatchObject({ remote: 0, noTarget: 3 });
+    expect(report.errors).toEqual([]);
+  });
+
+  it("nome com acento e símbolos: caminho ASCII seguro e determinístico; filename fica o original", async () => {
+    const files = [{ id: 7, deal_id: 2, file_name: "Orçamento #3?.pdf", file_size: 3 }];
+    const { pd, db } = scenario(files);
+    // o primeiro insert falha depois do envio (ex.: FK); a nova rodada envia para o mesmo objeto
+    let failed = false;
+    const flaky: MailImportStore = {
+      ...db.store,
+      async insertFile(row) {
+        if (!failed) {
+          failed = true;
+          throw new Error("violação de FK");
+        }
+        return db.store.insertFile(row);
+      },
+    };
+
+    const first = await runMailImport({ client: pd.client, store: flaky, newId: ids() });
+    expect(first.errors).toEqual([{ item: "arquivo 7", reason: "violação de FK" }]);
+    const second = await runMailImport({ client: pd.client, store: flaky, newId: ids() });
+    expect(second.errors).toEqual([]);
+
+    expect(db.uploads.map((u) => u.path)).toEqual([`${A}/pd-7/Orcamento__3_.pdf`, `${A}/pd-7/Orcamento__3_.pdf`]);
+    expect(db.files.map((f) => [f.filename, f.storage_path])).toEqual([["Orçamento #3?.pdf", `${A}/pd-7/Orcamento__3_.pdf`]]);
+  });
+
+  it("add_time inválido deixa a data no padrão do banco", async () => {
+    const { pd, db } = scenario([{ id: 7, deal_id: 2, file_name: "a.pdf", file_size: 3, add_time: "lixo" }]);
+    await runMailImport({ client: pd.client, store: db.store, newId: ids() });
+    expect(db.files).toHaveLength(1);
+    expect(db.files[0]).not.toHaveProperty("created_at");
+  });
+
   it("anexo de e-mail presente em duas empresas: baixa uma vez e grava um arquivo por empresa", async () => {
     const pd = fakeClient({
       records: { persons: [{ id: 5, email_messages_count: 1 }] },
@@ -431,10 +467,9 @@ describe("runMailImport — arquivos", () => {
     const report = await runMailImport({ client: pd.client, store: db.store, newId: ids() });
     expect(pd.calls.downloads).toEqual(["/v1/files/7/download"]);
     expect(db.files.map((f) => [f.company_id, f.email_id, f.storage_path])).toEqual([
-      [A, db.emails[0].id, `${A}/f1/proposta.pdf`],
-      [B, db.emails[1].id, `${B}/f2/proposta.pdf`],
+      [A, db.emails[0].id, `${A}/pd-7/proposta.pdf`],
+      [B, db.emails[1].id, `${B}/pd-7/proposta.pdf`],
     ]);
-    expect(db.emails.map((e) => e.attachments.map((a) => a.file_id))).toEqual([["f1"], ["f2"]]);
     expect(report.files.uploaded).toBe(2);
   });
 
@@ -497,7 +532,6 @@ describe("runMailImport — retomada, simulação e token", () => {
     const first = await runMailImport({ client: pd.client, store: db.store, newId: ids() });
     expect(first.emails).toEqual({ created: 2, existing: 1, links: 3, noRecord: 0 });
     expect(first.files).toMatchObject({ uploaded: 3, remote: 2, tooLarge: 1, existing: 0, skippedInline: 1 });
-    const attachmentsBefore = db.emails.map((e) => e.attachments);
     const writesBefore = db.writes.length;
 
     const second = await runMailImport({ client: pd.client, store: db.store, newId: ids() });
@@ -508,7 +542,6 @@ describe("runMailImport — retomada, simulação e token", () => {
     expect(db.writes.slice(writesBefore).filter((w) => w !== "linkEmail")).toEqual([]);
     expect(db.emails).toHaveLength(2);
     expect(db.files).toHaveLength(6);
-    expect(db.emails.map((e) => e.attachments)).toEqual(attachmentsBefore);
     expect(bodyGets(pd.calls.gets, 100)).toHaveLength(1);
   });
 
@@ -553,7 +586,6 @@ describe("runMailImport — retomada, simulação e token", () => {
       [7, db.emails[0].id, null],
       [8, null, "persons"],
     ]);
-    expect(db.emails[0].attachments.map((a) => a.file_id)).toEqual(["f1"]);
   });
 
   it("token inválido não é erro de item: propaga e encerra a importação", async () => {
@@ -574,7 +606,7 @@ describe("runMailImport — retomada, simulação e token", () => {
     expect(mail.calls.gets.some((g) => g.startsWith("/v1/files"))).toBe(false);
   });
 
-  it("token inválido no meio dos arquivos: para de listar, mas grava os anexos dos arquivos já gravados", async () => {
+  it("token inválido no meio dos arquivos: para de listar e mantém os arquivos já gravados", async () => {
     const pd = fakeClient({
       records: { persons: [{ id: 5, email_messages_count: 1 }] },
       mail: { "persons/5": [msg(100)] },
@@ -593,7 +625,7 @@ describe("runMailImport — retomada, simulação e token", () => {
 
     expect(pd.calls.gets.filter((g) => g.startsWith("/v1/files"))).toHaveLength(1);
     expect(db.files.map((f) => f.pipedrive_id)).toEqual([7]);
-    expect(db.emails[0].attachments.map((a) => a.filename)).toEqual(["proposta.pdf"]);
+    expect(db.files[0].email_id).toBe(db.emails[0].id);
   });
 
   it("log recebe uma linha a cada 200 mensagens e a cada 200 arquivos", async () => {

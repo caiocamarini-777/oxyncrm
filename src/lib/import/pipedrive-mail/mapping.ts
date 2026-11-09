@@ -1,3 +1,4 @@
+import { clean } from "../../gmail/sync-core";
 import { toIso } from "../mapping";
 
 /** Corpo do e-mail cortado neste tamanho (caracteres). */
@@ -72,26 +73,28 @@ function addresses(list: PdAddress[] | null | undefined): { email: string; name:
   const out: { email: string; name: string | null }[] = [];
   for (const a of list) {
     if (!a?.email_address) continue;
-    out.push({ email: a.email_address, name: a.name || null });
+    out.push({ email: clean(a.email_address), name: clean(a.name || null) });
   }
   return out;
 }
 
+/** Textos passam pelo `clean` do Gmail: o Postgres recusa NUL em texto e substitutos soltos em jsonb. */
 export function mapMailMessage(m: PdMailMessage, ctx: { ownerId: string | null; body: string | null }): EmailRow {
   const from = Array.isArray(m.from) ? m.from[0] : undefined;
   return {
     pipedrive_id: m.id,
     pipedrive_thread_id: m.mail_thread_id ?? null,
     owner_id: ctx.ownerId,
-    subject: m.subject ?? "",
-    from_email: from?.email_address ?? "",
-    from_name: from?.name || null,
+    subject: clean(m.subject ?? ""),
+    from_email: clean(from?.email_address ?? ""),
+    from_name: clean(from?.name || null),
     to: addresses(m.to),
     cc: addresses(m.cc),
     sent_at: isoMillis(m.message_time) ?? isoMillis(m.add_time) ?? EPOCH,
-    snippet: m.snippet ?? "",
-    body_html: ctx.body === null ? null : ctx.body.slice(0, MAX_BODY_CHARS),
-    rfc_message_id: m.mua_message_id || null,
+    snippet: clean(m.snippet ?? ""),
+    // cortado antes do clean: um par substituto partido ao meio vira U+FFFD
+    body_html: ctx.body === null ? null : clean(ctx.body.slice(0, MAX_BODY_CHARS)),
+    rfc_message_id: clean(m.mua_message_id || null),
     direction: m.sent_flag === 1 || m.sent_flag === true ? "out" : "in",
   };
 }
@@ -122,7 +125,52 @@ export function isRemoteFile(f: PdFile): boolean {
   return !!f.remote_location && f.remote_location !== "s3";
 }
 
-/** Nome seguro para o caminho no bucket: sem barras. */
+/** Link externo só se for http(s): um `javascript:` vindo do Pipedrive não pode virar URL aberta pela tela. */
+export function isWebUrl(raw: string | null | undefined): raw is string {
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/** Nome original do arquivo, para exibir (`record_files.filename`): sem barras; vazio cai no próximo. */
 export function fileName(f: PdFile): string {
-  return (f.file_name ?? f.name ?? `arquivo-${f.id}`).replace(/[/\\]/g, "_");
+  return clean(f.file_name || f.name || `arquivo-${f.id}`).replace(/[/\\]/g, "_");
+}
+
+/** Data em que o arquivo entrou no Pipedrive (`add_time`, UTC) em ISO; vazia ou inválida: null (fica o padrão do banco). */
+export function fileAddedAt(f: PdFile): string | null {
+  return isoMillis(f.add_time);
+}
+
+/** Tamanho máximo do nome no caminho do bucket. */
+const MAX_KEY_NAME = 120;
+/** Extensão mais longa que o corte preserva (com o ponto). */
+const MAX_KEY_EXT = 20;
+
+/**
+ * Nome para a chave do Storage: ASCII (sem acentos), só `[A-Za-z0-9._-]` (o resto vira `_`), sem `..` nem ponto
+ * no início, até 120 caracteres preservando a extensão; `arquivo` se ficar vazio. O storage-js não codifica o
+ * caminho na URL (`#`, `?` e `%` quebrariam o envio) e o Storage recusa chaves fora do ASCII.
+ */
+export function safeName(name: string): string {
+  let s = name.normalize("NFKD").replace(/\p{M}+/gu, "").replace(/[^A-Za-z0-9._-]/gu, "_");
+  if (s.length > MAX_KEY_NAME) {
+    const dot = s.lastIndexOf(".");
+    const ext = dot > 0 && s.length - dot <= MAX_KEY_EXT ? s.slice(dot) : "";
+    s = s.slice(0, MAX_KEY_NAME - ext.length) + ext;
+  }
+  s = s.replace(/\.{2,}/g, ".").replace(/^\.+/, "");
+  return s || "arquivo";
+}
+
+/**
+ * Caminho do arquivo no bucket: `{empresa}/pd-{id do arquivo no Pipedrive}/{nome seguro}`. Determinístico: uma
+ * reexecução grava no mesmo objeto (envio com upsert), sem deixar cópias órfãs.
+ */
+export function storagePath(companyId: string, pdFileId: number, name: string): string {
+  return `${companyId}/pd-${pdFileId}/${safeName(name)}`;
 }

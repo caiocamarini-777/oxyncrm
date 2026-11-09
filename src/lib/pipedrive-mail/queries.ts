@@ -20,11 +20,11 @@ import {
  * (log e lista vazia), para a página do registro nunca quebrar por causa da importação.
  */
 
-/** Máximo de e-mails importados por card (os mais recentes). */
+/** Máximo de e-mails importados por card (vínculos lidos; o vínculo não tem data para escolher os mais recentes). */
 const MAX_EMAILS = 500;
 /** Máximo de arquivos por card (os mais recentes). */
 const MAX_FILES = 500;
-/** Ids de e-mail por pedido na busca dos anexos: a lista vai na URL do PostgREST. */
+/** Ids de e-mail por pedido (e-mails e anexos): a lista vai na URL do PostgREST. */
 const ID_CHUNK = 100;
 /** O PostgREST devolve no máximo 1.000 linhas por pedido: os anexos vêm em páginas. */
 const PAGE = 1000;
@@ -39,13 +39,32 @@ function logError(what: string, error: DbError): void {
   console.error(`[pipedrive-email] ${what}:`, error.code, error.message);
 }
 
+function chunksOf(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ID_CHUNK) chunks.push(ids.slice(i, i + ID_CHUNK));
+  return chunks;
+}
+
+/** E-mails dados, sem o corpo, em lotes de ids (até 100 linhas por pedido). `null` se a leitura falhou. */
+async function emailsOf(supabase: Supabase, emailIds: string[]): Promise<PipedriveEmailRow[] | null> {
+  const results = await Promise.all(
+    chunksOf(emailIds).map(async (ids) => {
+      const { data, error } = await supabase.from("pipedrive_emails").select(EMAIL_COLUMNS).in("id", ids);
+      if (error) {
+        logError("e-mails", error);
+        return null;
+      }
+      return (data ?? []) as unknown as PipedriveEmailRow[];
+    }),
+  );
+  if (results.some((r) => r === null)) return null;
+  return results.flatMap((r) => r ?? []);
+}
+
 /** Anexos (linhas de `record_files` com `email_id`) dos e-mails dados. `null` se a leitura falhou. */
 async function attachmentsOf(supabase: Supabase, emailIds: string[]): Promise<PipedriveAttachmentRow[] | null> {
-  const chunks: string[][] = [];
-  for (let i = 0; i < emailIds.length; i += ID_CHUNK) chunks.push(emailIds.slice(i, i + ID_CHUNK));
-
   const results = await Promise.all(
-    chunks.map(async (ids) => {
+    chunksOf(emailIds).map(async (ids) => {
       const out: PipedriveAttachmentRow[] = [];
       for (let page = 0; ; page++) {
         const { data, error } = await supabase
@@ -71,8 +90,10 @@ async function attachmentsOf(supabase: Supabase, emailIds: string[]): Promise<Pi
 }
 
 /**
- * Conversas importadas do Pipedrive vinculadas ao registro (até 500 e-mails, os mais recentes), com os
- * anexos de cada mensagem. Junção no banco pelo vínculo, sem o corpo. Falha em silêncio (log e lista vazia).
+ * Conversas importadas do Pipedrive vinculadas ao registro (até 500 e-mails), com os anexos de cada mensagem,
+ * sem o corpo. Lê primeiro os vínculos do registro (índice em `entity, record_id`: a RLS roda só nessas
+ * linhas) e depois os e-mails e os anexos pelos ids; uma junção a partir de `pipedrive_emails` avaliaria a
+ * RLS na tabela toda. Falha em silêncio (log e lista vazia).
  */
 export async function getRecordPipedriveThreads(entity: RecordEntity, recordId: string): Promise<RecordThread[]> {
   const profile = await getCurrentProfile();
@@ -80,22 +101,20 @@ export async function getRecordPipedriveThreads(entity: RecordEntity, recordId: 
   const supabase = await createServerClient();
   try {
     const { data, error } = await supabase
-      .from("pipedrive_emails")
-      .select(`${EMAIL_COLUMNS}, pipedrive_email_links!inner(email_id)`)
-      .eq("pipedrive_email_links.entity", entity)
-      .eq("pipedrive_email_links.record_id", recordId)
-      .order("sent_at", { ascending: false })
-      .order("id", { ascending: false })
+      .from("pipedrive_email_links")
+      .select("email_id")
+      .eq("entity", entity)
+      .eq("record_id", recordId)
       .limit(MAX_EMAILS);
     if (error) {
-      logError("e-mails", error);
+      logError("vínculos", error);
       return [];
     }
-    const rows = (data ?? []) as unknown as PipedriveEmailRow[];
-    if (rows.length === 0) return [];
+    const ids = ((data ?? []) as { email_id: string }[]).map((l) => l.email_id);
+    if (ids.length === 0) return [];
 
-    const files = await attachmentsOf(supabase, rows.map((r) => r.id));
-    if (files === null) return [];
+    const [rows, files] = await Promise.all([emailsOf(supabase, ids), attachmentsOf(supabase, ids)]);
+    if (rows === null || files === null || rows.length === 0) return [];
     // O vínculo não tem id próprio (chave: e-mail, entidade e registro); a conversa importada não é desvinculada.
     return buildPipedriveThreads(rows, files, (emailId) => `${entity}:${recordId}:${emailId}`);
   } catch (e) {

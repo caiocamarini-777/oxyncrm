@@ -50,8 +50,7 @@ const time = (iso: string | null) => (iso ? Date.parse(iso) || 0 : 0);
 /**
  * Agrupa os e-mails importados por conversa do Pipedrive (`pipedrive_thread_id`); e-mail sem conversa vira
  * uma conversa só dele. Mensagens em ordem de envio; conversas da mais recente para a mais antiga.
- * Os anexos vêm de `files` (linhas de `record_files` do e-mail), não do jsonb `attachments`, que uma
- * reexecução parcial da importação pode deixar incompleto. `linkIdFor` recebe o id da primeira mensagem.
+ * Os anexos vêm de `files` (linhas de `record_files` do e-mail). `linkIdFor` recebe o id da primeira mensagem.
  */
 export function buildPipedriveThreads(
   rows: PipedriveEmailRow[],
@@ -115,7 +114,8 @@ function messageKey(id: string | null): string | null {
 }
 
 /**
- * Tira das conversas importadas as mensagens que já aparecem pelo Gmail (mesmo Message-ID) e as conversas
+ * Tira das conversas importadas as mensagens que já aparecem pelo Gmail (mesmo Message-ID) e as repetidas entre
+ * si (o mesmo e-mail guardado na caixa de dois vendedores: fica a primeira por data de envio), e as conversas
  * que ficarem vazias. A data da conversa passa a ser a da última mensagem que ficou.
  */
 export function dropImportedDuplicates(gmail: RecordThread[], imported: RecordThread[]): RecordThread[] {
@@ -126,19 +126,37 @@ export function dropImportedDuplicates(gmail: RecordThread[], imported: RecordTh
       if (k) seen.add(k);
     }
   }
-  if (seen.size === 0) return imported;
+
+  // Message-ID → a cópia importada que fica (a mais antiga; no empate, o menor id, para não depender da ordem).
+  const keep = new Map<string, ThreadMessageView>();
+  for (const t of imported) {
+    for (const m of t.messages) {
+      const k = messageKey(m.rfcMessageId);
+      if (!k || seen.has(k)) continue;
+      const cur = keep.get(k);
+      if (!cur || time(m.sentAt) < time(cur.sentAt) || (time(m.sentAt) === time(cur.sentAt) && m.id < cur.id)) keep.set(k, m);
+    }
+  }
 
   const out: RecordThread[] = [];
   for (const t of imported) {
     const messages = t.messages.filter((m) => {
       const k = messageKey(m.rfcMessageId);
-      return !(k && seen.has(k));
+      return !k || keep.get(k) === m;
     });
     if (messages.length === 0) continue;
     if (messages.length === t.messages.length) out.push(t);
     else out.push({ ...t, messages, lastMessageAt: messages[messages.length - 1].sentAt });
   }
   return out.sort((a, b) => time(b.lastMessageAt) - time(a.lastMessageAt));
+}
+
+/**
+ * Endereço que baixa ou abre um arquivo importado (do card ou anexo de e-mail): a rota confere o acesso e
+ * redireciona para a URL assinada (ou para o link externo).
+ */
+export function recordFileHref(fileId: string): string {
+  return `/api/arquivos/${encodeURIComponent(fileId)}`;
 }
 
 /** Arquivo do card para a tela: tamanho em número e se dá para baixar ou abrir. */

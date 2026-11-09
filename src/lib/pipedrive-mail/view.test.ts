@@ -4,6 +4,7 @@ import {
   buildPipedriveThreads,
   dropImportedDuplicates,
   formatFileSize,
+  recordFileHref,
   toRecordFileView,
   type PipedriveAttachmentRow,
   type PipedriveEmailRow,
@@ -164,6 +165,45 @@ describe("dropImportedDuplicates", () => {
     const imported = [thread("p1", "pipedrive", [view("pm1", "<outro@x>", "2026-01-01T10:00:00Z")])];
     expect(dropImportedDuplicates(gmail, imported)).toEqual(imported);
     expect(dropImportedDuplicates([], imported)).toEqual(imported);
+  });
+
+  it("importadas repetidas entre si (caixas de dois vendedores): fica a primeira por data de envio", () => {
+    const imported = [
+      // caixa do vendedor 1: a cópia chegou um minuto depois
+      thread("p1", "pipedrive", [view("pm1", "<mesmo@x>", "2026-01-01T10:01:00Z"), view("pm2", "<so-p1@x>", "2026-01-02T10:00:00Z")]),
+      // caixa do vendedor 2: só a cópia, que é a mais antiga
+      thread("p2", "pipedrive", [view("pm3", "<MESMO@x>", "2026-01-01T10:00:00Z")]),
+      // terceira cópia, mais nova: a conversa fica vazia e some
+      thread("p3", "pipedrive", [view("pm4", "mesmo@x", "2026-01-03T10:00:00Z")]),
+      // sem Message-ID nunca é tirada
+      thread("p4", "pipedrive", [view("pm5", null, "2026-01-01T08:00:00Z"), view("pm6", null, "2026-01-01T08:00:00Z")]),
+    ];
+    const out = dropImportedDuplicates([], imported);
+    expect(out.map((t) => t.threadId)).toEqual(["p1", "p2", "p4"]);
+    expect(out.find((t) => t.threadId === "p1")!.messages.map((m) => m.id)).toEqual(["pm2"]);
+    expect(out.find((t) => t.threadId === "p2")!.messages.map((m) => m.id)).toEqual(["pm3"]);
+    expect(out.find((t) => t.threadId === "p4")!.messages.map((m) => m.id)).toEqual(["pm5", "pm6"]);
+  });
+
+  it("cópias com a mesma data: fica a de menor id, qualquer que seja a ordem", () => {
+    const a = thread("pa", "pipedrive", [view("e-b", "<x@y>", "2026-01-01T10:00:00Z")]);
+    const b = thread("pb", "pipedrive", [view("e-a", "<x@y>", "2026-01-01T10:00:00Z")]);
+    expect(dropImportedDuplicates([], [a, b]).map((t) => t.threadId)).toEqual(["pb"]);
+    expect(dropImportedDuplicates([], [b, a]).map((t) => t.threadId)).toEqual(["pb"]);
+  });
+
+  it("a cópia que já veio pelo Gmail some mesmo quando há outra importada", () => {
+    const imported = [
+      thread("p1", "pipedrive", [view("pm1", "<dup@x>", "2026-01-01T09:00:00Z")]),
+      thread("p2", "pipedrive", [view("pm2", "<dup@x>", "2026-01-01T10:00:00Z")]),
+    ];
+    expect(dropImportedDuplicates(gmail, imported)).toEqual([]);
+  });
+});
+
+describe("recordFileHref", () => {
+  it("aponta para a rota de download do arquivo", () => {
+    expect(recordFileHref("2b1e0b3c-5c1a-4d7e-9f00-123456789abc")).toBe("/api/arquivos/2b1e0b3c-5c1a-4d7e-9f00-123456789abc");
   });
 });
 

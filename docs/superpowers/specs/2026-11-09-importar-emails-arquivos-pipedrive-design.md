@@ -56,7 +56,7 @@ O token de API lê os e-mails de todos os vendedores, com o corpo inteiro (`mail
 4. **Arquivos:** percorre `/v1/files` (sem os apagados).
    - Arquivo de e-mail: entra só se a mensagem foi importada, não é `inline` e não é `.ics`. É ligado ao e-mail.
    - Arquivo de card (`deal_id`, `person_id`, `org_id`, `lead_id` ou `activity_id`): é ligado ao registro. O de atividade vai para o registro vinculado à atividade.
-   - Download por `/v1/files/{id}/download` e envio ao bucket, em `record-files/{company_id}/{record_files.id}/{filename}`.
+   - Download por `/v1/files/{id}/download` e envio ao bucket, em `record-files/{company_id}/pd-{id do arquivo no Pipedrive}/{nome ASCII seguro}` (sem acentos, só `[A-Za-z0-9._-]`, até 120 caracteres com a extensão, `arquivo` se ficar vazio). O nome original fica em `record_files.filename`.
    - Link externo: só `remote_url`.
 5. **Retomada:** cada etapa é idempotente. Mensagem ou arquivo já importado é pulado pelo id. Uma falha num item vai para o relatório e não para o resto.
 6. **Relatório no fim:** e-mails novos e já existentes, vínculos, arquivos enviados, links, pulados (inline e `.ics`) e erros.

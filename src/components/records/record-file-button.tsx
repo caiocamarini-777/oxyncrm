@@ -1,46 +1,25 @@
-"use client";
-
-import { useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { getRecordFileUrl } from "@/lib/pipedrive-mail/actions";
+import { cn } from "cn";
+import { buttonVariants } from "@/components/ui/button";
+import { recordFileHref } from "@/lib/pipedrive-mail/view";
 
 /**
- * Abre um arquivo importado do Pipedrive (do card ou anexo de e-mail) numa nova aba. A URL assinada dura
- * 60 segundos e é pedida na hora do clique (`getRecordFileUrl` confere o acesso); link externo vem como está.
+ * Botão da seção Arquivos: "Baixar" para arquivo guardado, "Abrir" para link externo (Google Drive etc.). É um
+ * link comum para a rota `/api/arquivos/[id]`, que confere o acesso e redireciona para a URL assinada de 60
+ * segundos (ou para o link externo): abre no próprio clique, sem pop-up que o Safari bloqueie.
  */
-export function useOpenRecordFile(fileId: string) {
-  const [busy, setBusy] = useState(false);
-
-  async function open() {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const res = await getRecordFileUrl(fileId);
-      if (!res.ok) {
-        toast.error(res.error);
-        return;
-      }
-      window.open(res.data.url, "_blank", "noopener");
-    } catch {
-      toast.error("Não foi possível abrir o arquivo. Tente novamente.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return { busy, open };
-}
-
-/** Botão da seção Arquivos: "Baixar" para arquivo guardado, "Abrir" para link externo (Google Drive etc.). */
 export function RecordFileButton({ fileId, filename, remote }: { fileId: string; filename: string; remote: boolean }) {
-  const { busy, open } = useOpenRecordFile(fileId);
   const Icon = remote ? ExternalLink : Download;
   const label = remote ? "Abrir" : "Baixar";
   return (
-    <Button type="button" variant="outline" size="sm" disabled={busy} aria-label={`${label} ${filename}`} onClick={() => void open()}>
+    <a
+      href={recordFileHref(fileId)}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`${label} ${filename}`}
+      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+    >
       <Icon /> {label}
-    </Button>
+    </a>
   );
 }

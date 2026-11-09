@@ -75,8 +75,15 @@ const row: EmailRow = {
 };
 
 describe("userMap", () => {
+  /** O job responde `users`; `profiles` responde os ids que existem. */
+  const withProfiles = (users: unknown, existing: string[] | { error: { message: string } }) =>
+    fakeClient((q) => {
+      if (q.table === "import_jobs") return { data: { mappings: { users, fallbackOwnerId: "x" } } };
+      return Array.isArray(existing) ? { data: existing.map((id) => ({ id })) } : existing;
+    });
+
   it("lê mappings.users do último job do Pipedrive concluído", async () => {
-    const { store, queries } = fakeClient(() => ({ data: { mappings: { users: { "1": "p1", "2": "p2" }, fallbackOwnerId: "x" } } }));
+    const { store, queries } = withProfiles({ "1": "p1", "2": "p2" }, ["p1", "p2"]);
     expect(await store.userMap()).toEqual({ "1": "p1", "2": "p2" });
     const q = queries[0];
     expect(q.table).toBe("import_jobs");
@@ -86,15 +93,32 @@ describe("userMap", () => {
     expect(first(q, "limit")).toEqual([1]);
   });
 
-  it("sem job concluído ou sem usuários devolve um mapa vazio", async () => {
-    expect(await fakeClient(() => ({ data: null })).store.userMap()).toEqual({});
-    expect(await fakeClient(() => ({ data: { mappings: {} } })).store.userMap()).toEqual({});
-    expect(await fakeClient(() => ({ data: { mappings: { users: null } } })).store.userMap()).toEqual({});
+  it("fica só com os profiles que ainda existem, numa consulta só", async () => {
+    const { store, queries } = withProfiles({ "1": "p1", "2": "apagado", "3": "p1" }, ["p1"]);
+    expect(await store.userMap()).toEqual({ "1": "p1", "3": "p1" });
+    expect(queries).toHaveLength(2);
+    const q = queries[1];
+    expect(q.table).toBe("profiles");
+    expect(first(q, "select")).toEqual(["id"]);
+    expect(calls(q, "in")).toEqual([["id", ["p1", "apagado"]]]);
+  });
+
+  it("sem job concluído ou sem usuários devolve um mapa vazio, sem consultar profiles", async () => {
+    for (const data of [null, { mappings: {} }, { mappings: { users: null } }]) {
+      const { store, queries } = fakeClient(() => ({ data }));
+      expect(await store.userMap()).toEqual({});
+      expect(queries.map((q) => q.table)).toEqual(["import_jobs"]);
+    }
   });
 
   it("ignora valores que não são texto", async () => {
-    const { store } = fakeClient(() => ({ data: { mappings: { users: { "1": "p1", "2": 7, "3": null } } } }));
+    const { store } = withProfiles({ "1": "p1", "2": 7, "3": null }, ["p1"]);
     expect(await store.userMap()).toEqual({ "1": "p1" });
+  });
+
+  it("erro ao conferir os profiles lança", async () => {
+    const { store } = withProfiles({ "1": "p1" }, { error: { message: "boom" } });
+    await expect(store.userMap()).rejects.toThrow("Falha ao conferir os perfis do mapa de usuários: boom");
   });
 
   it("erro do banco vira Error com a operação", async () => {
@@ -240,24 +264,6 @@ describe("linkEmail", () => {
   });
 });
 
-describe("setEmailAttachments", () => {
-  const attachments = [{ file_id: "f1", filename: "a.pdf", size: 10, mime: "application/pdf" }];
-
-  it("atualiza os anexos do e-mail pelo id", async () => {
-    const { store, queries } = fakeClient();
-    await store.setEmailAttachments(EMAIL_ID, attachments);
-    const q = queries[0];
-    expect(q.table).toBe("pipedrive_emails");
-    expect(first(q, "update")).toEqual([{ attachments }]);
-    expect(calls(q, "eq")).toEqual([["id", EMAIL_ID]]);
-  });
-
-  it("erro do banco lança", async () => {
-    const { store } = fakeClient(() => ({ error: { message: "boom" } }));
-    await expect(store.setEmailAttachments(EMAIL_ID, attachments)).rejects.toThrow("Falha ao gravar os anexos do e-mail: boom");
-  });
-});
-
 describe("hasFile", () => {
   it("busca pela empresa e pelo id do arquivo no Pipedrive", async () => {
     const { store, queries } = fakeClient(() => ({ data: { id: "f1" } }));
@@ -288,7 +294,7 @@ describe("insertFile", () => {
     filename: "a.pdf",
     mime: "application/pdf",
     size: 10,
-    storage_path: `${COMPANY}/f1/a.pdf`,
+    storage_path: `${COMPANY}/pd-55/a.pdf`,
     remote_url: null,
     created_by: null,
   };
@@ -298,6 +304,12 @@ describe("insertFile", () => {
     await store.insertFile(file);
     expect(queries[0].table).toBe("record_files");
     expect(first(queries[0], "insert")).toEqual([file]);
+  });
+
+  it("leva a data do Pipedrive quando há", async () => {
+    const { store, queries } = fakeClient();
+    await store.insertFile({ ...file, created_at: "2025-05-10T08:30:00.000Z" });
+    expect(first(queries[0], "insert")).toEqual([{ ...file, created_at: "2025-05-10T08:30:00.000Z" }]);
   });
 
   it("erro do banco lança", async () => {

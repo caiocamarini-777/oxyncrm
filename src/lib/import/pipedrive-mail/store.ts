@@ -4,7 +4,6 @@ import type { EmailRow } from "./mapping";
 export type RecordRef = { companyId: string; recordId: string };
 export type PdEntity = "deals" | "leads" | "persons" | "organizations" | "activities";
 type LinkEntity = "deals" | "leads" | "persons" | "organizations";
-type Attachment = { file_id: string; filename: string; size: number | null; mime: string | null };
 type FileRow = {
   id: string;
   company_id: string;
@@ -18,6 +17,8 @@ type FileRow = {
   storage_path: string | null;
   remote_url: string | null;
   created_by: string | null;
+  /** Data do arquivo no Pipedrive (`add_time`); ausente fica o padrão do banco (`now()`). */
+  created_at?: string;
 };
 
 /** Bucket privado dos arquivos importados (criado na migration). */
@@ -30,7 +31,10 @@ const UNIQUE_VIOLATION = "23505";
  * esta interface, o que deixa os testes dele sem Supabase.
  */
 export interface MailImportStore {
-  /** Mapa de usuários do Pipedrive (id em string) → profile, do último job de importação concluído. */
+  /**
+   * Mapa de usuários do Pipedrive (id em string) → profile, do último job de importação concluído, só com os
+   * profiles que ainda existem (um profile apagado depois quebraria a FK de `owner_id` e `created_by`).
+   */
   userMap(): Promise<Record<string, string>>;
   /** Registros do CRM (um por empresa) ligados a esse id do Pipedrive, pelo external_ids. */
   recordsFor(entity: PdEntity, pdId: string): Promise<RecordRef[]>;
@@ -40,7 +44,6 @@ export interface MailImportStore {
   insertEmail(companyId: string, row: EmailRow): Promise<string>;
   /** true se criou o vínculo, false se ele já existia. */
   linkEmail(emailId: string, entity: LinkEntity, recordId: string): Promise<boolean>;
-  setEmailAttachments(emailId: string, attachments: Attachment[]): Promise<void>;
   hasFile(companyId: string, pdFileId: number): Promise<boolean>;
   insertFile(row: FileRow): Promise<void>;
   upload(path: string, bytes: Uint8Array, mime: string | null): Promise<void>;
@@ -77,9 +80,18 @@ export function supabaseMailStore(db: SupabaseClient): MailImportStore {
         .maybeSingle();
       check(r.error, "ler o mapa de usuários da importação");
       const users = (r.data as { mappings?: { users?: Record<string, unknown> | null } } | null)?.mappings?.users;
-      const out: Record<string, string> = {};
+      const mapped: [string, string][] = [];
       for (const [pdId, profileId] of Object.entries(users ?? {})) {
-        if (typeof profileId === "string") out[pdId] = profileId;
+        if (typeof profileId === "string") mapped.push([pdId, profileId]);
+      }
+      if (mapped.length === 0) return {};
+
+      const p = await db.from("profiles").select("id").in("id", [...new Set(mapped.map(([, id]) => id))]);
+      check(p.error, "conferir os perfis do mapa de usuários");
+      const existing = new Set(((p.data ?? []) as { id: string }[]).map((x) => x.id));
+      const out: Record<string, string> = {};
+      for (const [pdId, profileId] of mapped) {
+        if (existing.has(profileId)) out[pdId] = profileId;
       }
       return out;
     },
@@ -135,11 +147,6 @@ export function supabaseMailStore(db: SupabaseClient): MailImportStore {
         .select("email_id");
       check(r.error, "vincular o e-mail");
       return ((r.data ?? []) as unknown[]).length > 0;
-    },
-
-    async setEmailAttachments(emailId, attachments) {
-      const r = await db.from("pipedrive_emails").update({ attachments }).eq("id", emailId);
-      check(r.error, "gravar os anexos do e-mail");
     },
 
     async hasFile(companyId, pdFileId) {

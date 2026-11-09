@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDate } from "@/lib/records/format";
 import { formatTime } from "@/lib/activities/time";
-import { useOpenRecordFile } from "@/components/records/record-file-button";
 import { Button } from "@/components/ui/button";
 import { getEmailMessageBody, type EmailMessageBody } from "@/lib/gmail/message-body-actions";
 import {
@@ -16,6 +15,7 @@ import {
   type ThreadMessageView,
 } from "@/lib/gmail/thread-view";
 import { getPipedriveEmailBody } from "@/lib/pipedrive-mail/actions";
+import { recordFileHref } from "@/lib/pipedrive-mail/view";
 
 /**
  * HTML do e-mail em iframe sem scripts (sem `allow-scripts` e com CSP `default-src 'none'`).
@@ -123,19 +123,18 @@ function MessageBody({ message, subject, source }: { message: ThreadMessageView;
   );
 }
 
-/** Anexo importado do Pipedrive (`fileId`): botão que abre o arquivo numa nova aba por uma URL assinada. */
-function AttachmentButton({ fileId, filename }: { fileId: string; filename: string }) {
-  const { busy, open } = useOpenRecordFile(fileId);
+/** Anexo importado do Pipedrive (`fileId`): link para a rota que confere o acesso e baixa por uma URL assinada. */
+function AttachmentLink({ fileId, filename }: { fileId: string; filename: string }) {
   return (
-    <button
-      type="button"
-      disabled={busy}
+    <a
+      href={recordFileHref(fileId)}
+      target="_blank"
+      rel="noopener noreferrer"
       aria-label={`Abrir anexo ${filename}`}
-      onClick={() => void open()}
-      className="rounded border bg-muted px-2 py-0.5 hover:bg-accent disabled:opacity-50"
+      className="block rounded border bg-muted px-2 py-0.5 hover:bg-accent"
     >
       {filename}
-    </button>
+    </a>
   );
 }
 
@@ -181,7 +180,7 @@ export function MessageView({
         <ul className="flex flex-wrap gap-1.5 text-xs" aria-label="Anexos">
           {message.attachments.map((a, i) => (
             <li key={i} className={a.fileId ? undefined : "rounded border bg-muted px-2 py-0.5"}>
-              {a.fileId ? <AttachmentButton fileId={a.fileId} filename={a.filename} /> : a.filename}
+              {a.fileId ? <AttachmentLink fileId={a.fileId} filename={a.filename} /> : a.filename}
             </li>
           ))}
         </ul>

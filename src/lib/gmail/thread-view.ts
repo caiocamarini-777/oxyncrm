@@ -31,7 +31,7 @@ export type ThreadMessageView = {
   bodyText?: string | null;
   /** Message-ID do cabeçalho (RFC 5322): esconde o e-mail importado do Pipedrive que já veio pelo Gmail. */
   rfcMessageId: string | null;
-  /** `fileId`: arquivo em `record_files` (anexo importado do Pipedrive), baixado por `getRecordFileUrl`. */
+  /** `fileId`: arquivo em `record_files` (anexo importado do Pipedrive), baixado pela rota `/api/arquivos/[id]`. */
   attachments: { filename: string; fileId?: string }[];
   direction: "in" | "out";
 };

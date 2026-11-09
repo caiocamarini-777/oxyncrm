@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { classifyFile, fileName, isRemoteFile, mapMailMessage, MAX_BODY_CHARS, MAX_FILE_BYTES, type PdMailMessage } from "./mapping";
+import {
+  classifyFile,
+  fileAddedAt,
+  fileName,
+  isRemoteFile,
+  isWebUrl,
+  mapMailMessage,
+  MAX_BODY_CHARS,
+  MAX_FILE_BYTES,
+  type PdMailMessage,
+  safeName,
+  storagePath,
+} from "./mapping";
 
 const OWNER = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
@@ -141,6 +153,34 @@ describe("mapMailMessage", () => {
     expect(row.owner_id).toBeNull();
   });
 
+  it("limpa NUL e substitutos soltos dos textos (o Postgres recusaria)", () => {
+    const row = mapMailMessage(
+      {
+        ...base,
+        subject: "Pro\u0000posta",
+        snippet: "a\ud800b",
+        from: [{ email_address: "ana@cliente.com", name: "A\u0000na" }],
+        to: [{ email_address: "b@x.com", name: "B\udc00" }],
+        cc: [{ email_address: "c@x.com", name: "C\u0000" }],
+      },
+      { ownerId: null, body: "<p>o\u0000i</p>" },
+    );
+    expect(row.subject).toBe("Proposta");
+    expect(row.snippet).toBe("a\ufffdb");
+    expect(row.from_name).toBe("Ana");
+    expect(row.to).toEqual([{ email: "b@x.com", name: "B\ufffd" }]);
+    expect(row.cc).toEqual([{ email: "c@x.com", name: "C" }]);
+    expect(row.body_html).toBe("<p>oi</p>");
+  });
+
+  it("corte do corpo no meio de um par substituto não deixa substituto solto", () => {
+    const body = "a".repeat(MAX_BODY_CHARS - 1) + "😀";
+    const out = mapMailMessage(base, { ownerId: null, body }).body_html!;
+    expect(out).toHaveLength(MAX_BODY_CHARS);
+    expect(out.endsWith("\ufffd")).toBe(true);
+    expect(out.isWellFormed()).toBe(true);
+  });
+
   it("mensagem só com o id não quebra", () => {
     const row = mapMailMessage({ id: 1 }, { ownerId: null, body: null });
     expect(row).toEqual({
@@ -222,8 +262,87 @@ describe("fileName", () => {
     expect(fileName({ id: 9 })).toBe("arquivo-9");
   });
 
+  it("nome vazio cai no próximo; o nome original fica com acentos e símbolos", () => {
+    expect(fileName({ id: 9, file_name: "", name: "b.pdf" })).toBe("b.pdf");
+    expect(fileName({ id: 9, file_name: "", name: "" })).toBe("arquivo-9");
+    expect(fileName({ id: 9, file_name: "Orçamento #3?.pdf" })).toBe("Orçamento #3?.pdf");
+    expect(fileName({ id: 9, file_name: "a\u0000b.pdf" })).toBe("ab.pdf");
+  });
+
   it("troca barras por sublinhado", () => {
     expect(fileName({ id: 9, file_name: "pasta/sub\\arq.pdf" })).toBe("pasta_sub_arq.pdf");
     expect(fileName({ id: 9, name: "../../etc/passwd" })).toBe(".._.._etc_passwd");
+  });
+});
+
+describe("safeName", () => {
+  it("tira os acentos e troca o que não é [A-Za-z0-9._-] por _", () => {
+    expect(safeName("Orçamento.pdf")).toBe("Orcamento.pdf");
+    expect(safeName("Proposta técnica.docx")).toBe("Proposta_tecnica.docx");
+    expect(safeName("Pedido #12.pdf")).toBe("Pedido__12.pdf");
+    expect(safeName("o que?.pdf")).toBe("o_que_.pdf");
+    expect(safeName("Desconto 10%.pdf")).toBe("Desconto_10_.pdf");
+    expect(safeName("contrato_v2-final.PDF")).toBe("contrato_v2-final.PDF");
+    expect(safeName("日本.txt")).toBe("__.txt");
+    expect(safeName("😀.png")).toBe("_.png");
+  });
+
+  it("sem .. nem ponto no início", () => {
+    expect(safeName("../../etc/passwd")).toBe("_._etc_passwd");
+    expect(safeName("a..b...pdf")).toBe("a.b.pdf");
+    expect(safeName(".htaccess")).toBe("htaccess");
+    expect(safeName("..")).toBe("arquivo");
+  });
+
+  it("vazio vira arquivo", () => {
+    expect(safeName("")).toBe("arquivo");
+    expect(safeName("...")).toBe("arquivo");
+  });
+
+  it("corta em 120 caracteres preservando a extensão", () => {
+    const long = `${"a".repeat(200)}.pdf`;
+    const out = safeName(long);
+    expect(out).toHaveLength(120);
+    expect(out).toBe(`${"a".repeat(116)}.pdf`);
+    // extensão longa demais não é preservada: corte simples
+    expect(safeName(`x.${"b".repeat(200)}`)).toBe(`x.${"b".repeat(118)}`);
+    // o corte não cria ..
+    expect(safeName(`${"a".repeat(115)}.${"c".repeat(10)}.pdf`)).not.toContain("..");
+    expect(safeName("curto.pdf")).toBe("curto.pdf");
+  });
+
+  it("é determinístico", () => {
+    expect(safeName("Orçamento #3?.pdf")).toBe(safeName("Orçamento #3?.pdf"));
+  });
+});
+
+describe("storagePath", () => {
+  it("{empresa}/pd-{id do Pipedrive}/{nome seguro}, sempre o mesmo para o mesmo arquivo", () => {
+    expect(storagePath("c1", 55, "Orçamento #3?.pdf")).toBe("c1/pd-55/Orcamento__3_.pdf");
+    expect(storagePath("c1", 55, "")).toBe("c1/pd-55/arquivo");
+    expect(storagePath("c1", 55, "a.pdf")).toBe(storagePath("c1", 55, "a.pdf"));
+  });
+});
+
+describe("fileAddedAt", () => {
+  it("add_time do Pipedrive (UTC) vira ISO; vazio ou inválido vira null", () => {
+    expect(fileAddedAt({ id: 1, add_time: "2025-05-10 08:30:00" })).toBe("2025-05-10T08:30:00.000Z");
+    expect(fileAddedAt({ id: 1, add_time: null })).toBeNull();
+    expect(fileAddedAt({ id: 1 })).toBeNull();
+    expect(fileAddedAt({ id: 1, add_time: "lixo" })).toBeNull();
+    expect(fileAddedAt({ id: 1, add_time: "2025-13-45 99:99:99" })).toBeNull();
+  });
+});
+
+describe("isWebUrl", () => {
+  it("só http(s)", () => {
+    expect(isWebUrl("https://docs.google.com/x")).toBe(true);
+    expect(isWebUrl("http://x.com")).toBe(true);
+    expect(isWebUrl("javascript:alert(1)")).toBe(false);
+    expect(isWebUrl("data:text/html,oi")).toBe(false);
+    expect(isWebUrl("lixo")).toBe(false);
+    expect(isWebUrl("")).toBe(false);
+    expect(isWebUrl(null)).toBe(false);
+    expect(isWebUrl(undefined)).toBe(false);
   });
 });

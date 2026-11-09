@@ -22,6 +22,9 @@
 -- empresa está com a Agenda ligada. Não marca durante a importação nem sob a marca da entrada: a entrada (e a volta
 -- do envio) grava pelas funções calendar_* (só service role), que fazem set_config('oxyn.calendar_inbound','on', true)
 -- antes de gravar.
+--
+-- Ligar a Agenda só depois de desligar o modo espelho: a limpeza do espelho mandaria para a lixeira as atividades
+-- criadas pela Agenda.
 
 -- Colunas novas -------------------------------------------------------------
 
@@ -65,6 +68,23 @@ end $$;
 
 create trigger activities_source_import before insert on public.activities
   for each row execute function public.activities_source_import();
+
+-- Usuário logado não escolhe a origem: com google_calendar a atividade escaparia da regra de vínculo.
+create function public.activities_source_guard() returns trigger
+language plpgsql set search_path = public, pg_temp as $$
+begin
+  if auth.uid() is not null and not public.importing() then
+    if tg_op = 'INSERT' then
+      new.source := 'crm';
+    else
+      new.source := old.source;
+    end if;
+  end if;
+  return new;
+end $$;
+
+create trigger activities_source_guard before insert or update on public.activities
+  for each row execute function public.activities_source_guard();
 
 -- Vínculo obrigatório: lead, negócio, pessoa ou organização, ou evento vindo da Agenda --------------
 
@@ -206,8 +226,8 @@ end $$;
 
 -- Permissões ----------------------------------------------------------------
 
-revoke execute on function public.activities_source_import(), public.activities_calendar_pending()
-  from public, anon, authenticated;
+revoke execute on function public.activities_source_import(), public.activities_source_guard(),
+  public.activities_calendar_pending() from public, anon, authenticated;
 revoke execute on function public.calendar_sync_enabled(uuid), public.calendar_mark_synced(uuid, jsonb),
   public.calendar_apply_inbound(uuid, jsonb), public.calendar_insert_inbound(jsonb)
   from public, anon, authenticated;

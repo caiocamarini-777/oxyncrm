@@ -53,6 +53,8 @@ const CALENDAR_FIELDS = [
   "calendar_error",
   "calendar_attempts",
   "meet_url",
+  "calendar_invited_email",
+  "calendar_generation",
 ];
 
 /** Colunas que `calendar_apply_inbound` grava (horário, título, conclusão, lixeira e vínculo com o evento). */
@@ -69,6 +71,7 @@ const INBOUND_FIELDS = [
   "calendar_etag",
   "calendar_state",
   "meet_url",
+  "calendar_invited_email",
 ];
 
 /** Colunas que `calendar_insert_inbound` aceita; as demais ficam com o padrão da tabela. */
@@ -92,6 +95,7 @@ const INSERT_INBOUND_FIELDS = [
   "calendar_error",
   "calendar_attempts",
   "meet_url",
+  "calendar_is_organizer",
 ];
 
 /** Check `done = (completed_at is not null)` da tabela `activities`. */
@@ -149,6 +153,10 @@ const RPCS: Record<string, (tables: Tables, args: Row) => unknown> = {
       calendar_error: null,
       calendar_attempts: 0,
       meet_url: null,
+      calendar_local_changed_at: null,
+      calendar_invited_email: null,
+      calendar_generation: 0,
+      calendar_is_organizer: null,
     };
     for (const k of INSERT_INBOUND_FIELDS) if (k in input && input[k] != null) row[k] = structuredClone(input[k]);
     (tables.activities ??= []).push(row);

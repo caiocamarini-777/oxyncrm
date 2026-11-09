@@ -13,9 +13,18 @@
 --   calendar_error       mensagem do último erro de envio.
 --   calendar_attempts    tentativas seguidas com erro (depois de 3, só pelo "Tentar de novo").
 --   meet_url             link do Google Meet do evento.
+--   calendar_local_changed_at  quando o CRM mudou por último algo que aparece no evento (gravado pelo gatilho de
+--                        pendente). No conflito, é o lado do CRM comparado com o `updated` do evento.
+--   calendar_invited_email  convidado que o evento já tem (o cliente que o CRM convidou, ou o primeiro convidado lido
+--                        na Agenda). Evento com convidado não leva a descrição interna nem o link do CRM.
+--   calendar_generation  geração do id do evento criado pelo CRM (id = uuid sem hífens + 'g' + geração): muda quando é
+--                        preciso um evento novo (lixeira, dono trocado, evento apagado de vez no Google).
+--   calendar_is_organizer  o vendedor organiza o evento que veio da Agenda (organizer.self); sem isso, o CRM não mexe
+--                        no evento.
 -- Colunas novas em email_accounts:
 --   calendar_sync_token  syncToken da leitura incremental da Agenda (events.list).
---   calendar_lock_until  lease da sincronização da Agenda (evita dois crons na mesma caixa).
+--   calendar_lock_until  lease da sincronização da Agenda (evita dois crons na mesma caixa). Ao soltar, guarda a hora
+--                        em que a rodada da caixa terminou: a rodada seguinte começa pelas caixas paradas há mais tempo.
 --   calendar_since       início da sincronização da caixa (primeira rodada).
 --
 -- O gatilho activities_calendar_pending marca a atividade como pendente quando muda algo que aparece no evento e a
@@ -36,7 +45,11 @@ alter table public.activities
   add column calendar_state text not null default 'none' check (calendar_state in ('none','pending','synced','error')),
   add column calendar_error text,
   add column calendar_attempts int not null default 0,
-  add column meet_url text;
+  add column meet_url text,
+  add column calendar_local_changed_at timestamptz,
+  add column calendar_invited_email text,
+  add column calendar_generation int not null default 0,
+  add column calendar_is_organizer boolean;
 
 alter table public.email_accounts
   add column calendar_sync_token text,
@@ -46,8 +59,9 @@ alter table public.email_accounts
 -- Fila do cron: atividades que falta enviar ou que falharam.
 create index activities_calendar_pending_idx on public.activities (calendar_state)
   where calendar_state in ('pending','error');
--- Evento da Agenda → atividade (entrada).
-create index activities_calendar_event_idx on public.activities (calendar_account_id, calendar_event_id);
+-- Evento da Agenda → atividade (entrada). Único: um evento de uma caixa fica ligado a uma atividade só.
+create unique index activities_calendar_event_idx on public.activities (calendar_account_id, calendar_event_id)
+  where calendar_event_id is not null;
 
 -- Origem das atividades -------------------------------------------------------
 
@@ -86,6 +100,53 @@ end $$;
 create trigger activities_source_guard before insert or update on public.activities
   for each row execute function public.activities_source_guard();
 
+-- Usuário logado não grava as colunas da Agenda: com elas, apagaria o evento da caixa de outro vendedor (o envio apaga
+-- o evento na caixa de calendar_account_id) ou trocaria o link do Meet. Só o sistema (service role, pelas funções
+-- calendar_*) grava. No insert, ficam vazias e o gatilho de pendente decide o estado; no update, a única mudança aceita
+-- é marcar pendente ("Tentar de novo", que zera as tentativas e o erro). O resto é desfeito em silêncio.
+-- O nome vem antes de activities_calendar_pending (gatilhos BEFORE rodam em ordem alfabética): o pendente marca depois.
+create function public.activities_calendar_guard() returns trigger
+language plpgsql set search_path = public, pg_temp as $$
+begin
+  if auth.uid() is null or public.importing() then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    new.calendar_account_id := null;
+    new.calendar_event_id := null;
+    new.calendar_etag := null;
+    new.calendar_state := 'none';
+    new.calendar_error := null;
+    new.calendar_attempts := 0;
+    new.meet_url := null;
+    new.calendar_local_changed_at := null;
+    new.calendar_invited_email := null;
+    new.calendar_generation := 0;
+    new.calendar_is_organizer := null;
+    return new;
+  end if;
+  new.calendar_account_id := old.calendar_account_id;
+  new.calendar_event_id := old.calendar_event_id;
+  new.calendar_etag := old.calendar_etag;
+  new.meet_url := old.meet_url;
+  new.calendar_local_changed_at := old.calendar_local_changed_at;
+  new.calendar_invited_email := old.calendar_invited_email;
+  new.calendar_generation := old.calendar_generation;
+  new.calendar_is_organizer := old.calendar_is_organizer;
+  if new.calendar_state is distinct from old.calendar_state and new.calendar_state = 'pending' then
+    new.calendar_attempts := 0;
+    new.calendar_error := null;
+  else
+    new.calendar_state := old.calendar_state;
+    new.calendar_attempts := old.calendar_attempts;
+    new.calendar_error := old.calendar_error;
+  end if;
+  return new;
+end $$;
+
+create trigger activities_calendar_guard before insert or update on public.activities
+  for each row execute function public.activities_calendar_guard();
+
 -- Vínculo obrigatório: lead, negócio, pessoa ou organização, ou evento vindo da Agenda --------------
 
 -- Confere que activities_check é mesmo a regra de vínculo antes de apagá-la.
@@ -115,8 +176,9 @@ $$;
 
 -- Gatilho de pendente ---------------------------------------------------------
 
--- Marca pendente no insert e quando muda uma coluna que aparece no evento. Mudanças só em calendar_* e meet_url
--- (a volta do envio, o "Tentar de novo") não marcam.
+-- Marca pendente no insert e quando muda uma coluna que aparece no evento, com a hora da mudança
+-- (calendar_local_changed_at, o lado do CRM no conflito). Mudanças só em calendar_* e meet_url (a volta do envio, o
+-- "Tentar de novo") não marcam.
 create function public.activities_calendar_pending() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
@@ -142,6 +204,7 @@ begin
   new.calendar_state := 'pending';
   new.calendar_attempts := 0;
   new.calendar_error := null;
+  new.calendar_local_changed_at := now();
   return new;
 end $$;
 
@@ -159,7 +222,8 @@ declare
   r record;
 begin
   select * into r from jsonb_to_record(p_fields) as x(calendar_account_id uuid, calendar_event_id text,
-    calendar_etag text, calendar_state text, calendar_error text, calendar_attempts int, meet_url text);
+    calendar_etag text, calendar_state text, calendar_error text, calendar_attempts int, meet_url text,
+    calendar_invited_email text, calendar_generation int);
   perform set_config('oxyn.calendar_inbound', 'on', true);
   update public.activities a
      set calendar_account_id = case when p_fields ? 'calendar_account_id' then r.calendar_account_id else a.calendar_account_id end,
@@ -168,7 +232,11 @@ begin
          calendar_state = case when p_fields ? 'calendar_state' then r.calendar_state else a.calendar_state end,
          calendar_error = case when p_fields ? 'calendar_error' then r.calendar_error else a.calendar_error end,
          calendar_attempts = case when p_fields ? 'calendar_attempts' then r.calendar_attempts else a.calendar_attempts end,
-         meet_url = case when p_fields ? 'meet_url' then r.meet_url else a.meet_url end
+         meet_url = case when p_fields ? 'meet_url' then r.meet_url else a.meet_url end,
+         calendar_invited_email = case when p_fields ? 'calendar_invited_email' then r.calendar_invited_email
+                                       else a.calendar_invited_email end,
+         calendar_generation = case when p_fields ? 'calendar_generation' then r.calendar_generation
+                                    else a.calendar_generation end
    where a.id = p_activity;
   perform set_config('oxyn.calendar_inbound', '', true);
 end $$;
@@ -181,7 +249,7 @@ declare
 begin
   select * into r from jsonb_to_record(p_patch) as x(subject text, due_at timestamptz, duration_minutes int,
     deleted_at timestamptz, done boolean, completed_at timestamptz, meeting_outcome text, calendar_account_id uuid,
-    calendar_event_id text, calendar_etag text, calendar_state text, meet_url text);
+    calendar_event_id text, calendar_etag text, calendar_state text, meet_url text, calendar_invited_email text);
   perform set_config('oxyn.calendar_inbound', 'on', true);
   update public.activities a
      set subject = case when p_patch ? 'subject' then r.subject else a.subject end,
@@ -195,7 +263,9 @@ begin
          calendar_event_id = case when p_patch ? 'calendar_event_id' then r.calendar_event_id else a.calendar_event_id end,
          calendar_etag = case when p_patch ? 'calendar_etag' then r.calendar_etag else a.calendar_etag end,
          calendar_state = case when p_patch ? 'calendar_state' then r.calendar_state else a.calendar_state end,
-         meet_url = case when p_patch ? 'meet_url' then r.meet_url else a.meet_url end
+         meet_url = case when p_patch ? 'meet_url' then r.meet_url else a.meet_url end,
+         calendar_invited_email = case when p_patch ? 'calendar_invited_email' then r.calendar_invited_email
+                                       else a.calendar_invited_email end
    where a.id = p_activity;
   perform set_config('oxyn.calendar_inbound', '', true);
 end $$;
@@ -210,15 +280,15 @@ begin
   select * into r from jsonb_to_record(p_row) as x(company_id uuid, owner_id uuid, type_id uuid, channel_id uuid,
     subject text, description text, due_at timestamptz, duration_minutes int, lead_id uuid, deal_id uuid,
     person_id uuid, organization_id uuid, calendar_account_id uuid, calendar_event_id text, calendar_etag text,
-    calendar_state text, calendar_error text, calendar_attempts int, meet_url text);
+    calendar_state text, calendar_error text, calendar_attempts int, meet_url text, calendar_is_organizer boolean);
   perform set_config('oxyn.calendar_inbound', 'on', true);
   insert into public.activities (company_id, owner_id, created_by, source, type_id, channel_id, subject, description,
     due_at, duration_minutes, lead_id, deal_id, person_id, organization_id, calendar_account_id, calendar_event_id,
-    calendar_etag, calendar_state, calendar_error, calendar_attempts, meet_url)
+    calendar_etag, calendar_state, calendar_error, calendar_attempts, meet_url, calendar_is_organizer)
   values (r.company_id, r.owner_id, r.owner_id, 'google_calendar', r.type_id, r.channel_id, r.subject, r.description,
     r.due_at, coalesce(r.duration_minutes, 30), r.lead_id, r.deal_id, r.person_id, r.organization_id,
     r.calendar_account_id, r.calendar_event_id, r.calendar_etag, coalesce(r.calendar_state, 'none'), r.calendar_error,
-    coalesce(r.calendar_attempts, 0), r.meet_url)
+    coalesce(r.calendar_attempts, 0), r.meet_url, r.calendar_is_organizer)
   returning id into v_id;
   perform set_config('oxyn.calendar_inbound', '', true);
   return v_id;
@@ -227,7 +297,7 @@ end $$;
 -- Permissões ----------------------------------------------------------------
 
 revoke execute on function public.activities_source_import(), public.activities_source_guard(),
-  public.activities_calendar_pending() from public, anon, authenticated;
+  public.activities_calendar_guard(), public.activities_calendar_pending() from public, anon, authenticated;
 revoke execute on function public.calendar_sync_enabled(uuid), public.calendar_mark_synced(uuid, jsonb),
   public.calendar_apply_inbound(uuid, jsonb), public.calendar_insert_inbound(jsonb)
   from public, anon, authenticated;

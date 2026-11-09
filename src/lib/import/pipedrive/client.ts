@@ -44,6 +44,7 @@ type Envelope = {
   success?: boolean;
   data?: unknown;
   error?: string;
+  error_info?: string;
   additional_data?: {
     next_start?: number;
     pagination?: { more_items_in_collection?: boolean; next_start?: number };
@@ -68,7 +69,16 @@ type FetchMode = {
   method?: string;
   /** Corpo já serializado em JSON; manda `content-type: application/json` junto. */
   body?: string;
+  /**
+   * Escrita não idempotente (POST): só repete no 429 (o pedido foi rejeitado, não processado). 5xx, timeout e falha
+   * de rede são ambíguos (o Pipedrive pode ter criado o registro) e lançam na hora, sem nova chamada.
+   */
+  retryOnly429?: boolean;
+  /** Escritas: inclui na mensagem do erro o `error`/`error_info` do envelope da resposta (nunca headers nem token). */
+  errorDetail?: boolean;
 };
+
+const ERROR_DETAIL_MAX = 300;
 
 const JSON_MODE: FetchMode = { accept: "application/json", timeoutMs: REQUEST_TIMEOUT_MS, totalMs: REQUEST_TOTAL_MS };
 
@@ -88,10 +98,25 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = opts.nowImpl ?? Date.now;
 
+  /** Mensagem de erro do envelope (`error` e `error_info`), sem o token, em uma linha e com até 300 caracteres. */
+  async function errorDetail(res: Response): Promise<string> {
+    try {
+      const env = JSON.parse(await res.text()) as Envelope;
+      const text = [env?.error, env?.error_info]
+        .filter((p): p is string => typeof p === "string" && p.trim() !== "")
+        .join(" - ");
+      const clean = (opts.token ? text.split(opts.token).join("[token]") : text).replace(/\s+/g, " ").trim();
+      return clean.slice(0, ERROR_DETAIL_MAX);
+    } catch {
+      return "";
+    }
+  }
+
   /**
    * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de `mode.totalMs` somando
-   * tentativas e esperas. Nunca inclui headers em erros. `mode.method` e `mode.body` (JSON) servem às escritas;
-   * `read` extrai o resultado de uma resposta 2xx e, se falhar, vira PipedriveError sem nova tentativa.
+   * tentativas e esperas (o POST repete só no 429: ver `retryOnly429`). Nunca inclui headers em erros.
+   * `mode.method` e `mode.body` (JSON) servem às escritas; `read` extrai o resultado de uma resposta 2xx e, se
+   * falhar, vira PipedriveError sem nova tentativa.
    */
   async function fetchWithRetry<T>(path: string, mode: FetchMode, read: (res: Response) => Promise<T>): Promise<T> {
     const url = `${base}${path}`;
@@ -116,7 +141,9 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
         await res.body?.cancel().catch(() => {});
         throw new PipedriveAuthError();
       }
-      const retryable = res === null || res.status === 429 || res.status >= 500;
+      const retryable = mode.retryOnly429
+        ? res !== null && res.status === 429
+        : res === null || res.status === 429 || res.status >= 500;
       if (res && res.ok) {
         try {
           return await read(res);
@@ -124,16 +151,23 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
           throw new PipedriveError(`Resposta inválida do Pipedrive em ${path.split("?")[0]}`, res.status);
         }
       }
-      // corpo não lido é descartado antes de repetir ou falhar (libera a conexão)
-      if (res) await res.body?.cancel().catch(() => {});
       const wait = attempt < BACKOFF_MS.length
         ? Math.min(MAX_WAIT_MS, Math.max(BACKOFF_MS[attempt], res ? retryAfterMs(res) : 0))
         : 0;
       // sem tempo para esperar e tentar de novo dentro do teto: desiste agora
-      if (!retryable || attempt >= BACKOFF_MS.length || now() + wait >= deadline) {
+      const giveUp = !retryable || attempt >= BACKOFF_MS.length || now() + wait >= deadline;
+      // ao desistir de uma escrita lê a mensagem do Pipedrive; senão o corpo é descartado (libera a conexão)
+      let detail = "";
+      if (res) {
+        if (giveUp && mode.errorDetail) detail = await errorDetail(res);
+        else await res.body?.cancel().catch(() => {});
+      }
+      if (giveUp) {
         const where = path.split("?")[0];
         throw new PipedriveError(
-          res ? `Pipedrive respondeu ${res.status} em ${where}` : `Falha de rede ao chamar o Pipedrive em ${where}`,
+          res
+            ? `Pipedrive respondeu ${res.status} em ${where}${detail ? `: ${detail}` : ""}`
+            : `Falha de rede ao chamar o Pipedrive em ${where}`,
           res?.status,
         );
       }
@@ -145,9 +179,14 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     return fetchWithRetry(path, JSON_MODE, async (res) => (await res.json()) as Envelope);
   }
 
-  /** Escrita em JSON (POST/PUT/PATCH) com as mesmas tentativas, esperas e tetos da leitura; devolve o `data` do envelope. */
+  /**
+   * Escrita em JSON (POST/PUT/PATCH) com as esperas e tetos da leitura; devolve o `data` do envelope. PUT e PATCH
+   * repetem como a leitura (idempotentes); o POST só repete no 429.
+   */
   async function write(method: "POST" | "PUT" | "PATCH", path: string, body: unknown): Promise<unknown> {
-    const mode: FetchMode = { ...JSON_MODE, method, body: JSON.stringify(body) };
+    const mode: FetchMode = {
+      ...JSON_MODE, method, body: JSON.stringify(body), errorDetail: true, ...(method === "POST" ? { retryOnly429: true } : {}),
+    };
     const envelope = await fetchWithRetry(path, mode, async (res) => (await res.json()) as Envelope);
     return envelope.data;
   }
@@ -165,7 +204,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     /** DELETE com as mesmas tentativas; 404 não é erro (o registro já foi apagado). O corpo da resposta é ignorado. */
     async del(path: string): Promise<void> {
       try {
-        await fetchWithRetry(path, { ...JSON_MODE, method: "DELETE" }, async (res) => {
+        await fetchWithRetry(path, { ...JSON_MODE, method: "DELETE", errorDetail: true }, async (res) => {
           await res.body?.cancel().catch(() => {});
         });
       } catch (e) {

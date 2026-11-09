@@ -202,7 +202,7 @@ describe("cliente do Pipedrive", () => {
       expect(await c.post("/v1/notes", { content: "x" })).toBeUndefined();
     });
 
-    it("429 com Retry-After e depois 200: espera, repete o mesmo corpo e dá sucesso", async () => {
+    it("PUT: 429 com Retry-After, 503 e depois 200: espera, repete o mesmo corpo e dá sucesso", async () => {
       const waits: number[] = [];
       const fetchImpl = vi
         .fn()
@@ -210,12 +210,70 @@ describe("cliente do Pipedrive", () => {
         .mockResolvedValueOnce(new Response("", { status: 503 }))
         .mockResolvedValueOnce(json({ data: { id: 7 } }));
       const c = mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) });
+      expect(await c.put("/v1/deals/7", { title: "N" })).toEqual({ id: 7 });
+      expect(waits).toEqual([3000, 2000]);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      for (const [, init] of fetchImpl.mock.calls) {
+        expect((init as RequestInit).method).toBe("PUT");
+        expect((init as RequestInit).body).toBe(JSON.stringify({ title: "N" }));
+      }
+    });
+
+    it("PATCH repete em 5xx e em erro de rede", async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("", { status: 502 }))
+        .mockRejectedValueOnce(new DOMException("timeout", "TimeoutError"))
+        .mockResolvedValueOnce(json({ data: { id: "u" } }));
+      expect(await mk(fetchImpl).patch("/v1/leads/u", { title: "L" })).toEqual({ id: "u" });
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+    });
+
+    it("POST: 429 com Retry-After e depois 201 dá sucesso, repetindo o mesmo corpo", async () => {
+      const waits: number[] = [];
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "3" } }))
+        .mockResolvedValueOnce(new Response("", { status: 429 }))
+        .mockResolvedValueOnce(json({ success: true, data: { id: 7 } }, { status: 201 }));
+      const c = mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) });
       expect(await c.post("/v1/deals", { title: "N" })).toEqual({ id: 7 });
       expect(waits).toEqual([3000, 2000]);
       expect(fetchImpl).toHaveBeenCalledTimes(3);
       for (const [, init] of fetchImpl.mock.calls) {
         expect((init as RequestInit).method).toBe("POST");
         expect((init as RequestInit).body).toBe(JSON.stringify({ title: "N" }));
+      }
+    });
+
+    it("POST: 429 sem parar desiste após 5 novas tentativas", async () => {
+      const waits: number[] = [];
+      const fetchImpl = vi.fn().mockImplementation(async () => new Response("", { status: 429 }));
+      const c = mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) });
+      await expect(c.post("/v1/deals", {})).rejects.toMatchObject({ status: 429 });
+      expect(waits).toEqual([1000, 2000, 4000, 8000, 16000]);
+      expect(fetchImpl).toHaveBeenCalledTimes(6);
+    });
+
+    it("POST: 5xx lança na hora, sem segunda chamada (a criação pode ter acontecido)", async () => {
+      for (const status of [500, 502, 503]) {
+        const waits: number[] = [];
+        const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status }));
+        const c = mk(fetchImpl, { sleepImpl: async (ms) => void waits.push(ms) });
+        await expect(c.post("/v1/persons", { name: "A" })).rejects.toMatchObject({ name: "PipedriveError", status });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(waits).toEqual([]);
+      }
+    });
+
+    it("POST: timeout e falha de rede lançam na hora, sem segunda chamada", async () => {
+      for (const failure of [new DOMException("timeout", "TimeoutError"), new TypeError("fetch failed")]) {
+        const fetchImpl = vi.fn().mockRejectedValue(failure);
+        const err = (await mk(fetchImpl).post("/v1/persons", { name: "A" }).catch((e: unknown) => e)) as PipedriveError;
+        expect(err).toBeInstanceOf(PipedriveError);
+        expect(err.status).toBeUndefined();
+        expect(String(err.message)).not.toContain("SEGREDO");
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
       }
     });
 
@@ -243,6 +301,64 @@ describe("cliente do Pipedrive", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
+    it("400 com {success:false,error} põe a mensagem do Pipedrive no erro, sem repetir", async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(json({ success: false, error: "Campo obrigatório" }, { status: 400 }));
+      const err = (await mk(fetchImpl).post("/v1/persons", {}).catch((e: unknown) => e)) as PipedriveError;
+      expect(err).toBeInstanceOf(PipedriveError);
+      expect(err.status).toBe(400);
+      expect(err.message).toBe("Pipedrive respondeu 400 em /v1/persons: Campo obrigatório");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("mensagem do erro junta error e error_info, em PUT, PATCH e DELETE também", async () => {
+      const res = () => json({ success: false, error: "Valor inválido", error_info: "Veja a documentação" }, { status: 422 });
+      const c = mk(vi.fn().mockImplementation(async () => res()));
+      const expected = "Pipedrive respondeu 422 em %PATH%: Valor inválido - Veja a documentação";
+      for (const [call, path] of [
+        [() => c.put("/v1/deals/1?x=1", {}), "/v1/deals/1"],
+        [() => c.patch("/v1/leads/u", {}), "/v1/leads/u"],
+        [() => c.del("/v1/notes/1"), "/v1/notes/1"],
+      ] as const) {
+        await expect(call()).rejects.toMatchObject({ status: 422, message: expected.replace("%PATH%", path) });
+      }
+    });
+
+    it("mensagem do erro é cortada em 300 caracteres e não carrega o token", async () => {
+      const long = "x".repeat(500);
+      const err = (await mk(vi.fn().mockResolvedValue(json({ error: long }, { status: 400 })))
+        .put("/v1/persons/1", {}).catch((e: unknown) => e)) as PipedriveError;
+      expect(err.message).toBe(`Pipedrive respondeu 400 em /v1/persons/1: ${"x".repeat(300)}`);
+
+      const leak = json({ error: "token SEGREDO recusado", error_info: 42 }, { status: 400 });
+      const err2 = (await mk(vi.fn().mockResolvedValue(leak)).post("/v1/persons", {}).catch((e: unknown) => e)) as PipedriveError;
+      expect(err2.message).toBe("Pipedrive respondeu 400 em /v1/persons: token [token] recusado");
+      expect(err2.message).not.toContain("SEGREDO");
+    });
+
+    it("corpo de erro ilegível ou sem error deixa só o status", async () => {
+      for (const res of [() => new Response("<html>oops</html>", { status: 400 }), () => json({ success: false }, { status: 400 })]) {
+        const err = (await mk(vi.fn().mockImplementation(async () => res())).post("/v1/persons", {}).catch((e: unknown) => e)) as PipedriveError;
+        expect(err.message).toBe("Pipedrive respondeu 400 em /v1/persons");
+      }
+    });
+
+    it("escrita que esgota as tentativas no 5xx traz a mensagem da última resposta", async () => {
+      const fetchImpl = vi.fn().mockImplementation(async () => json({ success: false, error: "Indisponível" }, { status: 503 }));
+      await expect(mk(fetchImpl).put("/v1/deals/1", {})).rejects.toMatchObject({
+        status: 503, message: "Pipedrive respondeu 503 em /v1/deals/1: Indisponível",
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(6);
+    });
+
+    it("leitura continua sem ler o corpo do erro", async () => {
+      const err = (await createPipedriveClient({
+        token: "SEGREDO",
+        fetchImpl: (async () => json({ error: "detalhe" }, { status: 400 })) as unknown as typeof fetch,
+        sleepImpl: async () => {},
+      }).users().catch((e: unknown) => e)) as PipedriveError;
+      expect(err.message).toBe("Pipedrive respondeu 400 em /v1/users");
+    });
+
     it("escrita desiste após 5 novas tentativas no 5xx, mesmas esperas da leitura", async () => {
       const waits: number[] = [];
       const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
@@ -266,7 +382,7 @@ describe("cliente do Pipedrive", () => {
           clock += ms;
         },
       });
-      await expect(c.post("/v1/notes", { content: "x" })).rejects.toBeInstanceOf(PipedriveError);
+      await expect(c.put("/v1/notes/1", { content: "x" })).rejects.toBeInstanceOf(PipedriveError);
       expect(clock).toBeLessThanOrEqual(REQUEST_TOTAL_MS);
       expect(waits).toEqual([1000, 2000, 4000]);
       expect(fetchImpl).toHaveBeenCalledTimes(4);

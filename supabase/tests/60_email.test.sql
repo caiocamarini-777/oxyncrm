@@ -43,7 +43,11 @@ insert into auth.users (id, instance_id, aud, role, email, raw_user_meta_data) v
   (pg_temp.u(11), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-em-dono@oxyn.test', '{"full_name":"tst-dono"}'),
   (pg_temp.u(12), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-em-gestor@oxyn.test', '{"full_name":"tst-gestor"}'),
   (pg_temp.u(13), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-em-outro@oxyn.test', '{"full_name":"tst-outro"}'),
-  (pg_temp.u(14), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-em-fora@oxyn.test', '{"full_name":"tst-fora"}');
+  (pg_temp.u(14), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-em-fora@oxyn.test', '{"full_name":"tst-fora"}'),
+  (pg_temp.u(15), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tst-em-admin@oxyn.test', '{"full_name":"tst-admin"}');
+-- Um admin geral fixo: num banco só de testes ele é o único, e rebaixar o 12 depois não pode esbarrar na
+-- trava de "último admin geral".
+update profiles set is_super_admin = true where id = pg_temp.u(15);
 insert into roles (id, name, description, permissions) values
   (pg_temp.u(21), 'tst-em-gestor', 'teste', '{"visibility":{"leads":"company","deals":"company","persons":"company","organizations":"company","activities":"company"},"actions":{"create":true,"edit":true,"delete":true,"export":true,"reassign_owner":true},"settings":{"manage_pipelines":true,"manage_custom_fields":true,"manage_products":true,"view_reports":true,"create_dashboards":true,"share_dashboards":true}}'::jsonb),
   (pg_temp.u(22), 'tst-em-vend', 'teste', '{"visibility":{"leads":"own","deals":"own","persons":"own","organizations":"own","activities":"own"},"actions":{"create":true,"edit":true,"delete":false,"export":false,"reassign_owner":false},"settings":{"manage_pipelines":false,"manage_custom_fields":false,"manage_products":false,"view_reports":true,"create_dashboards":true,"share_dashboards":false}}'::jsonb);

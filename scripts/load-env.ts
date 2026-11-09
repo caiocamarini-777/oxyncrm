@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+/** Lê .env.local, ou o arquivo em ENV_FILE (por exemplo .env.ci para o projeto Supabase do CI). */
 export function loadEnv(): void {
-  const file = resolve(process.cwd(), ".env.local");
+  const file = resolve(process.cwd(), process.env.ENV_FILE || ".env.local");
   if (existsSync(file)) process.loadEnvFile(file);
 }
 

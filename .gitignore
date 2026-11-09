@@ -1,6 +1,7 @@
 # env files: only the example is committed
 .env*
 !.env.example
+!.env.ci.example
 
 .superpowers/
 .e2e-outbox/

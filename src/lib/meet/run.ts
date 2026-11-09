@@ -695,8 +695,8 @@ export function buildTranscript(entries: TranscriptEntryRow[]): { entries: Trans
 
 /**
  * Texto da reunião no Google. A transcrição é a fonte preferida: com alguma ainda gerando, espera por ela até o
- * prazo. Sem transcrição pronta, usa as anotações do Gemini (os documentos gerados, juntos), com a mesma espera.
- * `null`: nada pronto ainda (ou nada, depois do prazo).
+ * prazo. Sem transcrição pronta (ou pronta e vazia), usa as anotações do Gemini (os documentos gerados, juntos),
+ * com a mesma espera. `null`: nada pronto ainda (ou nada, depois do prazo).
  */
 async function readMeetingText(meet: MeetClient, m: MeetingRow, late: boolean): Promise<MeetingText | null> {
   const transcripts = await meet.listTranscripts(m.conference_record);
@@ -714,20 +714,26 @@ async function readMeetingText(meet: MeetClient, m: MeetingRow, late: boolean): 
       .flat()
       .sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime))
       .map((e) => ({ speaker: speakers.get(e.participant) ?? UNKNOWN_SPEAKER, text: e.text, start: e.startTime }));
-    return { source: "transcript", ...buildTranscript(entries) };
+    const transcript = buildTranscript(entries);
+    // Transcrição pronta mas sem fala nenhuma não serve para as notas: tenta as anotações do Gemini.
+    if (transcript.text.trim()) return { source: "transcript", ...transcript };
   }
 
   const notes = await meet.listSmartNotes(m.conference_record);
   if (notes.some((n) => n.state !== "FILE_GENERATED") && !late) return null;
-  const docs = notes.flatMap((n) => (n.state === "FILE_GENERATED" && n.docsDestination?.document ? [n.docsDestination.document] : []));
+  const docs = [
+    ...new Set(notes.flatMap((n) => (n.state === "FILE_GENERATED" && n.docsDestination?.document ? [n.docsDestination.document] : []))),
+  ];
   if (docs.length === 0) return null;
-  const texts = await Promise.all(docs.map((d) => meet.exportDocText(d)));
-  const text = texts
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .slice(0, MAX_TRANSCRIPT_CHARS);
-  return text ? { source: "gemini_notes", entries: [], text } : null;
+  // Um documento que não abre (apagado, sem acesso) não descarta os outros; só falha se nenhum abrir.
+  const exported = await Promise.allSettled(docs.map((d) => meet.exportDocText(d)));
+  const texts = exported.flatMap((r) => (r.status === "fulfilled" ? [r.value.trim()] : [])).filter(Boolean);
+  if (texts.length === 0) {
+    const failed = exported.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+    return null;
+  }
+  return { source: "gemini_notes", entries: [], text: texts.join("\n\n").slice(0, MAX_TRANSCRIPT_CHARS) };
 }
 
 /**

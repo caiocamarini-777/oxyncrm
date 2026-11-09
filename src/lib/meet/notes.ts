@@ -112,10 +112,15 @@ const TAG_RE = new RegExp(`<\\s*/?\\s*(?:${DATA_TAGS.join("|")})\\b[^>]*>`, "gi"
 
 /**
  * Conteúdo de fora entre tags. As tags de dado que vierem dentro do conteúdo são removidas, para ele não
- * conseguir fechar a própria tag e se passar por instrução.
+ * conseguir fechar a própria tag e se passar por instrução. A remoção repete até o texto parar de mudar: uma
+ * tag escondida dentro de outra (`</notas_</notas_gemini>gemini>`) remontaria depois de uma passada só.
  */
 function tagged(tag: DataTag, content: string, inline = false): string {
-  const clean = content.replace(TAG_RE, "");
+  let clean = content;
+  for (let prev = ""; prev !== clean; ) {
+    prev = clean;
+    clean = clean.replace(TAG_RE, "");
+  }
   return inline ? `<${tag}>${clean}</${tag}>` : `<${tag}>\n${clean}\n</${tag}>`;
 }
 

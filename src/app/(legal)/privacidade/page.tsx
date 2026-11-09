@@ -69,7 +69,7 @@ export default function PrivacyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="4. Uso dos dados do Google (Google Meet e Agenda)">
+      <LegalSection title="4. Uso dos dados do Google (Google Meet, Agenda e Drive)">
         <p>
           O assistente de reuniões usa a mesma conexão do Google que o usuário faz no perfil para o Gmail e pede mais
           três acessos, todos somente de leitura. Quem já conectou a caixa precisa reconectar uma vez para autorizá-los.
@@ -78,8 +78,9 @@ export default function PrivacyPage() {
           <li>
             <strong>Leitura das reuniões do Google Meet</strong> (
             <code>https://www.googleapis.com/auth/meetings.space.readonly</code>): permite ao CRM consultar as reuniões
-            feitas pela conta, com horário de início e fim, participantes e a transcrição gerada pelo próprio Meet. O
-            CRM não baixa gravações de áudio ou vídeo e não cria, altera nem apaga reuniões.
+            feitas pela conta, com horário de início e fim, participantes, a transcrição gerada pelo próprio Meet e a
+            indicação do documento das anotações do Gemini. O CRM não baixa gravações de áudio ou vídeo e não cria,
+            altera nem apaga reuniões.
           </li>
           <li>
             <strong>Leitura dos eventos da Agenda Google</strong> (

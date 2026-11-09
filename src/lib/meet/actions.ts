@@ -453,7 +453,10 @@ export async function retryMeeting(meetingId: string): Promise<ActionResult<{ me
     if (requeued.error) return { ok: false, error: "Não foi possível tentar de novo. Tente novamente." };
     if (!requeued.data || requeued.data.length === 0) return BUSY;
     refresh();
-    return { ok: true, data: { message: "Vamos buscar a transcrição de novo na próxima rodada." } };
+    return {
+      ok: true,
+      data: { message: "Vamos buscar a transcrição (ou as anotações do Gemini) de novo na próxima rodada." },
+    };
   }
 
   const claimed = await db

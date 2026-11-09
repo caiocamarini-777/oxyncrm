@@ -20,12 +20,13 @@ Quando um vendedor termina uma reunião com cliente ou prospect pelo Google Meet
 | Qualificação | **Roteiro por empresa**, configurável no CRM, com um padrão: dor, orçamento, decisor, prazo, concorrentes e próximo passo. |
 | Convidados fora do CRM | **Pedir para vincular.** As notas ficam prontas numa lista de "Reuniões sem vínculo", e o vendedor escolhe o registro. Reuniões só com gente interna são ignoradas. |
 | Transcrição | **Guardada no CRM**, visível no card para quem tem acesso ao registro. |
-| Plano do Workspace | Business Standard (conferido pelo usuário). Tem transcrição do Meet. |
+| Plano do Workspace | Business Standard (conferido pelo usuário). Tem transcrição do Meet, mas ela não começa sozinha: alguém precisa iniciá-la em cada reunião. Começar sozinha exige upgrade, que não compensa (usuário, 2026-11-09). |
+| Sem transcrição | **Anotações do Gemini** (2026-11-09). O Business Standard tem "Anotações com o Gemini", que pode ficar ligado no evento da Agenda. Quando a reunião não tem transcrição, o assistente usa essas anotações. |
 
 ## Decisões técnicas (minhas, registradas)
 
-- **Fonte:** API REST do Google Meet (`conferenceRecords`, `transcripts`, `transcripts.entries`) e API da Agenda (`events.list`), consultadas por um cron. Não há bot entrando na reunião. Avisos em tempo real (Workspace Events API com Pub/Sub) ficam para uma versão futura.
-- **Mesma conexão Google do Gmail.** A conta conectada em `email_accounts` ganha os escopos `https://www.googleapis.com/auth/meetings.space.readonly` e `https://www.googleapis.com/auth/calendar.events.readonly`. Quem já está conectado precisa reconectar uma vez. A reunião herda a empresa da caixa, já que é uma empresa por caixa.
+- **Fonte:** API REST do Google Meet (`conferenceRecords`, `transcripts`, `transcripts.entries`, `smartNotes`) e API da Agenda (`events.list`), consultadas por um cron. O texto das anotações do Gemini vem do Google Doc indicado em `smartNotes.docsDestination.document`, exportado em texto pelo Drive (`files.export`). Não há bot entrando na reunião. Avisos em tempo real (Workspace Events API com Pub/Sub) ficam para uma versão futura.
+- **Mesma conexão Google do Gmail.** A conta conectada em `email_accounts` ganha os escopos `https://www.googleapis.com/auth/meetings.space.readonly`, `https://www.googleapis.com/auth/calendar.events.readonly` e `https://www.googleapis.com/auth/drive.meet.readonly` (só arquivos criados pelo Meet; escopo restrito, que funciona nos domínios que marcaram o app como confiável). Quem já está conectado precisa reconectar uma vez. A reunião herda a empresa da caixa, já que é uma empresa por caixa.
 - **Cron em `/api/cron/meet`** a cada 10 minutos, com `maxDuration` 300. Entra em `SELF_AUTH` no proxy e é conferido em produção com curl (401, não 307).
 - **Claude pela API** com o SDK oficial `@anthropic-ai/sdk`: `messages.parse` com `zodOutputFormat`, que é saída estruturada validada pelo próprio SDK. O modelo é `claude-opus-5-5` com `effort: "medium"`, e custa cerca de US$ 0,10 por reunião de 1 hora. Há fallback no servidor em caso de recusa (`fallbacks: "default"`). A chave fica em `ANTHROPIC_API_KEY`.
 - **Escrita no Pipedrive** com `PIPEDRIVE_API_TOKEN`, a mesma chave da sincronização. A autoria vai pelo `user_id` do Pipedrive do vendedor, obtido do mapa de usuários da última importação (`mappings.users`, ao contrário). Usa `POST /v1/notes`, `PUT /v1/activities/{id}`, `POST /v1/activities` e `PUT /v1/deals/{id}`.
@@ -38,7 +39,7 @@ Quando um vendedor termina uma reunião com cliente ou prospect pelo Google Meet
 | Tabela | Campos |
 |---|---|
 | `meetings` | id, company_id, account_id → email_accounts (quem trouxe a reunião), owner_id → profiles (o vendedor), conference_record text (único global: chave de idempotência), calendar_event_id, title, started_at, ended_at, attendees jsonb (`{email, name, internal}`), status (`waiting_transcript`, `processing`, `unlinked`, `done`, `failed`, `ignored`), attempts int, last_error, entity (`deals`, `leads`, `persons`, `organizations`, nulo enquanto sem vínculo), record_id, anchor_activity_id (reunião agendada encontrada), created_at, updated_at |
-| `meeting_transcripts` | meeting_id (pk, cascade), entries jsonb (`{speaker, text, start}`), text (transcrição corrida, até 1 MB) |
+| `meeting_transcripts` | meeting_id (pk, cascade), entries jsonb (`{speaker, text, start}`), text (transcrição corrida, até 1 MB), source (`transcript` ou `gemini_notes`; nas anotações do Gemini, `entries` fica vazio) |
 | `meeting_notes` | meeting_id (pk, cascade), summary, pains jsonb, objections jsonb, qualification jsonb (`{question, answer}`), next_steps jsonb (`{what, owner, due}`), model, raw jsonb (resposta validada), pipedrive_note_id, written_at |
 | `meeting_suggestions` | id, meeting_id (cascade), kind (`meeting_outcome`, `next_activity`, `stage`), payload jsonb, status (`pending`, `confirmed`, `dismissed`, `failed`), decided_by, decided_at, last_error |
 | `email_accounts.meeting_cursor` | timestamptz: fim da última reunião já lida pela conta (coluna nova) |
@@ -60,7 +61,11 @@ Quando um vendedor termina uma reunião com cliente ou prospect pelo Google Meet
    - senão, cria em `waiting_transcript`.
 3. Busca o evento da Agenda pelo código da reunião (o `conferenceData` do evento). Ele dá o título e os convidados. Sem evento (reunião instantânea), usa os participantes do `conferenceRecords.participants`.
 4. Sem convidado externo: `ignored`.
-5. Transcrição: se o estado é `FILE_GENERATED`, lê as `entries` e grava em `meeting_transcripts`. Senão, tenta de novo na próxima rodada. Se não houver transcrição 2 h depois do fim, marca `failed` com "reunião sem transcrição".
+5. Texto da reunião, com a transcrição como fonte preferida:
+   - transcrição `FILE_GENERATED` e com fala: lê as `entries` e grava em `meeting_transcripts` (`source = transcript`);
+   - alguma transcrição ainda gerando: tenta de novo na próxima rodada, até o prazo;
+   - sem transcrição pronta (ou pronta e vazia): usa as anotações do Gemini. Com alguma sessão ainda gerando, espera até o prazo. Os documentos `FILE_GENERATED` (sem repetir) são exportados e juntados; um documento que não abre não descarta os outros. Grava com `source = gemini_notes`;
+   - nada disso 2 h depois do fim: `failed` com "reunião sem transcrição nem anotações do Gemini".
 6. Lease por conta (`sync_lock_until`), como no Gmail, para duas rodadas não processarem a mesma conta.
 
 ### Vincular (função pura)
@@ -78,7 +83,7 @@ A reunião agendada encontrada vira `anchor_activity_id`.
 ### Gerar as notas
 
 - O Claude recebe:
-  - a transcrição, cortada no limite de contexto;
+  - a transcrição, cortada no limite de contexto (ou as anotações do Gemini, numa tag própria `<notas_gemini>` e com o aviso de que são um resumo, não a conversa inteira);
   - o roteiro da empresa;
   - título, data e participantes;
   - o contexto do registro: etapa, valor, Setup/MRR e as últimas 3 anotações.
@@ -149,11 +154,12 @@ Pedido do usuário em 2026-11-05: aproveitar a tela inicial, que hoje está quas
 
 ## Configuração (passo a passo para o usuário)
 
-1. **Admin Console → Apps → Google Workspace → Google Meet → Gravação e transcrição:** ligar a transcrição e deixá-la ativada por padrão nas reuniões.
-2. **Google Cloud do app Oxyn CRM Web:** ativar Google Meet REST API e Google Calendar API, e incluir os dois escopos novos na tela de consentimento.
-3. **Vercel:** cadastrar `ANTHROPIC_API_KEY` e `PIPEDRIVE_API_TOKEN`.
-4. **Cada vendedor:** reconectar o Google em Configurações → E-mail.
-5. **Admin geral:** ligar o assistente nas empresas desejadas.
+1. **Admin Console:** no Business Standard a transcrição já vem ligada e não há o que configurar. Os vendedores ligam "Fazer anotações com o Gemini" ao criar o evento na Agenda (ou iniciam a transcrição na reunião).
+2. **Google Cloud do app Oxyn CRM Web:** ativar Google Meet REST API, Google Calendar API e Google Drive API, e incluir os três escopos novos na tela de consentimento.
+3. **Banco:** aplicar a migration `20261109000001_meeting_transcript_source.sql` antes de publicar o código que grava `source`.
+4. **Vercel:** cadastrar `ANTHROPIC_API_KEY` e `PIPEDRIVE_API_TOKEN`.
+5. **Cada vendedor:** reconectar o Google em Configurações → E-mail.
+6. **Admin geral:** ligar o assistente nas empresas desejadas.
 
 ## Erros
 
@@ -161,7 +167,7 @@ Pedido do usuário em 2026-11-05: aproveitar a tela inicial, que hoje está quas
 |---|---|
 | Escopo do Meet ausente | A conta é pulada, e a tela de conexão pede para reconectar. |
 | Transcrição ainda não gerada | Tenta de novo nas próximas rodadas, até 2 h depois do fim. |
-| Reunião sem transcrição | `failed`, "reunião sem transcrição" (por exemplo, a transcrição não foi ligada). |
+| Reunião sem transcrição | Usa as anotações do Gemini. Sem nenhum dos dois: `failed`, "reunião sem transcrição nem anotações do Gemini" (por exemplo, ninguém ligou a transcrição nem o Gemini). |
 | Claude falha ou devolve JSON inválido | Até 3 tentativas. Depois, `failed` com "Tentar de novo". |
 | Pipedrive recusa ou fica fora do ar | A anotação fica em `meeting_notes` sem `pipedrive_note_id`, e a rodada seguinte tenta de novo (até 3). Uma sugestão que falhar fica `failed` com a mensagem. |
 | Registro vinculado foi para a lixeira | A gravação falha com "registro excluído", e a reunião volta para Sem vínculo. |

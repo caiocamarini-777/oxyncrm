@@ -76,7 +76,7 @@ test.afterAll(async () => {
 });
 
 async function loggedIn(browser: Browser, email: string): Promise<Page> {
-  const ctx = await browser.newContext({ baseURL: "http://localhost:3000" });
+  const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const page = await ctx.newPage();
   await login(page, email, password);
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
@@ -84,7 +84,7 @@ async function loggedIn(browser: Browser, email: string): Promise<Page> {
 }
 
 test("jornada da fase 2: admin cria campo personalizado e etiqueta e convida o SDR", async ({ browser }) => {
-  const ctx = await browser.newContext({ baseURL: "http://localhost:3000" });
+  const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const p = await ctx.newPage();
   await login(p, "admin@oxyn.test", "oxyn-dev-123");
   await p.waitForURL((u) => !u.pathname.startsWith("/entrar"));
@@ -116,7 +116,7 @@ test("jornada da fase 2: admin cria campo personalizado e etiqueta e convida o S
   await ctx.close();
 
   const link = await getLatestLink(sdrEmail);
-  const sctx = await browser.newContext({ baseURL: "http://localhost:3000" });
+  const sctx = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const s = await sctx.newPage();
   await s.goto(link);
   await expect(s).toHaveURL(/definir-senha/);

@@ -87,7 +87,7 @@ test.afterAll(async () => {
 });
 
 async function newPage(browser: Browser, email = adminEmail): Promise<Page> {
-  const ctx = await browser.newContext({ baseURL: "http://localhost:3000" });
+  const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const page = await ctx.newPage();
   await login(page, email, password);
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));

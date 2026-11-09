@@ -39,6 +39,12 @@ export default function PrivacyPage() {
             (ou, quando a reunião não teve transcrição, as anotações do Gemini) só é lida quando há convidado externo
             (veja as seções 4 e 5).
           </li>
+          <li>
+            <strong>Dados da Agenda Google</strong>, somente quando o próprio usuário conecta a sua conta Google e a
+            empresa liga a sincronização da Agenda. O CRM grava na agenda principal da conta os eventos das atividades
+            e traz para o CRM os eventos dessa agenda: título, horário, descrição, local, link de reunião e convidados
+            (veja a seção 4).
+          </li>
         </ul>
       </LegalSection>
 
@@ -73,8 +79,9 @@ export default function PrivacyPage() {
 
       <LegalSection title="4. Uso dos dados do Google (Google Meet, Agenda e Drive)">
         <p>
-          O assistente de reuniões usa a mesma conexão do Google que o usuário faz no perfil para o Gmail e pede mais
-          três acessos, todos somente de leitura. Quem já conectou a caixa precisa reconectar uma vez para autorizá-los.
+          O assistente de reuniões e a sincronização da Agenda usam a mesma conexão do Google que o usuário faz no
+          perfil para o Gmail e pedem mais três acessos. Os do Google Meet e do Drive são somente de leitura; o da
+          Agenda é de leitura e escrita. Quem já conectou a caixa precisa reconectar uma vez para autorizá-los.
         </p>
         <ul>
           <li>
@@ -85,10 +92,11 @@ export default function PrivacyPage() {
             altera nem apaga reuniões.
           </li>
           <li>
-            <strong>Leitura dos eventos da Agenda Google</strong> (
-            <code>https://www.googleapis.com/auth/calendar.events.readonly</code>): permite ao CRM consultar os eventos
-            da agenda principal da conta para achar o evento da reunião e ler o título e os convidados. O CRM não cria,
-            altera nem apaga eventos.
+            <strong>Leitura e escrita dos eventos da Agenda Google</strong> (
+            <code>https://www.googleapis.com/auth/calendar.events</code>): permite ao CRM consultar os eventos da
+            agenda principal da conta, para achar o evento da reunião e ler o título e os convidados e para trazer os
+            eventos para o CRM, e criar, alterar e apagar os eventos das atividades do CRM. O CRM não usa as outras
+            agendas da conta nem altera as configurações da Agenda.
           </li>
           <li>
             <strong>Leitura dos arquivos criados pelo Google Meet no Drive</strong> (
@@ -104,6 +112,32 @@ export default function PrivacyPage() {
           empresas do grupo. Reuniões só com gente interna são marcadas como ignoradas, e a transcrição e as anotações
           do Gemini delas não são lidas. Com o assistente desligado, nada é lido. Esses dados são usados apenas para
           escrever a anotação da reunião e sugerir atualizações do funil para o vendedor.
+        </p>
+        <p>Com a sincronização da Agenda ligada para a empresa da caixa conectada:</p>
+        <ul>
+          <li>
+            O CRM cria, altera e apaga na agenda principal do vendedor os eventos das atividades do CRM: a atividade
+            agendada vira um evento, o evento acompanha as mudanças de horário e de título, e é apagado quando a
+            atividade vai para a lixeira ou a reunião é cancelada no CRM.
+          </li>
+          <li>
+            A reunião agendada no CRM com um contato que tem e-mail convida esse contato: o Google envia a ele o convite
+            e as atualizações do evento, com o link do Google Meet.
+          </li>
+          <li>
+            Os eventos criados direto na Agenda viram atividades no CRM, e as mudanças e os cancelamentos feitos na
+            Agenda voltam para a atividade. Os convidados do evento são usados só para definir o tipo da atividade
+            e vinculá-la a um contato do CRM.
+          </li>
+          <li>
+            Como todo evento da agenda principal vira atividade, os compromissos do vendedor ficam visíveis no CRM para
+            quem tem acesso às atividades dele. Os eventos marcados como particulares na Agenda entram como
+            &quot;Ocupado&quot;, sem descrição e sem convidados.
+          </li>
+        </ul>
+        <p>
+          Com a sincronização desligada para a empresa, o CRM não grava eventos na Agenda nem traz eventos para o CRM;
+          com o assistente de reuniões ligado, a conexão serve apenas para achar o evento de cada reunião.
         </p>
       </LegalSection>
 
@@ -144,11 +178,11 @@ export default function PrivacyPage() {
           , incluindo os requisitos de Uso Limitado.
         </p>
         <p>
-          Em particular, os dados do Google Meet e da Agenda são usados só para oferecer o assistente de reuniões ao
-          próprio usuário, não são vendidos, não são usados para publicidade e não são usados para treinar modelos de
-          inteligência artificial. Eles só são lidos por pessoas fora desse uso quando necessário para segurança, para
-          cumprir a lei ou com o consentimento do usuário. O envio à Anthropic descrito na seção 5 serve apenas para
-          gerar as notas da reunião.
+          Em particular, os dados do Google Meet e da Agenda são usados só para oferecer o assistente de reuniões e a
+          sincronização das atividades com a Agenda ao próprio usuário, não são vendidos, não são usados para
+          publicidade e não são usados para treinar modelos de inteligência artificial. Eles só são lidos por pessoas
+          fora desse uso quando necessário para segurança, para cumprir a lei ou com o consentimento do usuário. O
+          envio à Anthropic descrito na seção 5 serve apenas para gerar as notas da reunião.
         </p>
       </LegalSection>
 
@@ -166,7 +200,8 @@ export default function PrivacyPage() {
           <li>Os dados comerciais ficam enquanto forem necessários para a operação das empresas do grupo.</li>
           <li>
             Ao desconectar a caixa do Gmail no perfil, o acesso é revogado no Google e as mensagens importadas daquela
-            caixa são apagadas do CRM. O assistente de reuniões também deixa de ler as reuniões dela.
+            caixa são apagadas do CRM. O assistente de reuniões e a sincronização da Agenda também deixam de usar a
+            conta dela.
           </li>
           <li>
             A transcrição (ou as anotações do Gemini) e as notas de uma reunião vinculada ficam no CRM junto com o

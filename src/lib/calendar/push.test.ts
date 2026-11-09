@@ -355,7 +355,7 @@ describe("pushActivity: dono trocado", () => {
       activity: { calendar_account_id: "acc-velha", calendar_event_id: "ev-velho" },
       fail: { insert: new GmailRateLimitError() },
     });
-    expect(await pushActivity(limit.deps, "a-1")).toBe("skipped");
+    expect(await pushActivity(limit.deps, "a-1")).toBe("deferred");
     expect(limit.row()).toMatchObject({ calendar_event_id: null, calendar_state: "pending", calendar_attempts: 0 });
   });
 
@@ -381,7 +381,7 @@ describe("pushActivity: dono trocado", () => {
       activity: { calendar_account_id: "acc-velha", calendar_event_id: "ev-velho" },
       fail: { delete: new GmailAuthError("O Google recusou o token renovado") },
     });
-    expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
+    expect(await pushActivity(t.deps, "a-1")).toBe("deferred");
     expect(t.calls.map((c) => c.op)).toEqual(["delete"]);
     const status = Object.fromEntries(t.tables.email_accounts.map((a) => [a.id, a.status]));
     expect(status).toEqual({ "acc-velha": "reconnect", "acc-1": "active" });
@@ -401,11 +401,14 @@ describe("pushActivity: atualização", () => {
     expect(t.calls[0]).toMatchObject({ account: "acc-1", op: "patch", id: "ev-1", opts: { sendUpdates: "all" } });
     expect(t.calls[0].ev).toMatchObject({
       summary: "Demo remarcada",
+      description: "Levar a proposta\n\nNo CRM: https://crm.oxyn.app/acme/negocios/d-1",
       start: { dateTime: "2026-11-11T13:00:00+00:00" },
       end: { dateTime: "2026-11-11T13:45:00.000Z" },
-      attendees: [{ email: "cliente@acme.com" }],
       extendedProperties: { private: { oxynActivityId: "a-1" } },
     });
+    // Convidados e Meet só na criação: o patch não leva as chaves, e o Google mantém os do evento.
+    expect(t.calls[0].ev).not.toHaveProperty("attendees");
+    expect(t.calls[0].ev).not.toHaveProperty("conferenceData");
     // O link do Meet que o Google não devolveu no patch continua o mesmo.
     expect(t.row()).toMatchObject({
       calendar_account_id: "acc-1",
@@ -418,18 +421,25 @@ describe("pushActivity: atualização", () => {
     expect(directWrites(t.log)).toEqual([]);
   });
 
-  it("tarefa: patch sem convidados e sem aviso", async () => {
-    const t = setup({ activity: { ...linked, type_id: "t-task" } });
-    await pushActivity(t.deps, "a-1");
-    expect(t.calls[0].opts).toEqual({ sendUpdates: "none" });
-    expect(t.calls[0].ev?.attendees).toBeUndefined();
+  it("reunião criada sem convite (primeira rodada): a edição no CRM não convida o cliente", async () => {
+    const t = setup({ activity: { ...linked, meet_url: null, subject: "Demo (nova pauta)" } });
+    expect(await pushActivity(t.deps, "a-1")).toBe("synced");
+    expect(t.calls.map((c) => c.op)).toEqual(["patch"]);
+    expect(t.calls[0].ev).not.toHaveProperty("attendees");
+    expect(t.calls[0].ev).not.toHaveProperty("conferenceData");
+    expect(t.row().meet_url).toBeNull();
   });
 
-  it("invite false: patch sem convidados e sem aviso", async () => {
-    const t = setup({ activity: linked });
-    await pushActivity(t.deps, "a-1", { invite: false });
-    expect(t.calls[0].opts).toEqual({ sendUpdates: "none" });
-    expect(t.calls[0].ev?.attendees).toBeUndefined();
+  it.each([
+    ["tarefa", { type_id: "t-task" }, undefined],
+    ["invite false", {}, { invite: false }],
+    ["reunião que já terminou", { due_at: "2026-11-09T14:00:00+00:00", duration_minutes: 45 }, undefined],
+    ["pessoa sem e-mail", { person_id: null }, undefined],
+  ])("%s: patch sem convidados e sem aviso", async (_, over, opts) => {
+    const t = setup({ activity: { ...linked, ...over } });
+    await pushActivity(t.deps, "a-1", opts);
+    expect(t.calls[0]).toMatchObject({ op: "patch", opts: { sendUpdates: "none" } });
+    expect(t.calls[0].ev).not.toHaveProperty("attendees");
   });
 
   it.each([404, 410])("evento apagado de vez no Google (%i): cria de novo na mesma caixa", async (status) => {
@@ -439,7 +449,10 @@ describe("pushActivity: atualização", () => {
       ["acc-1", "patch"],
       ["acc-1", "insert"],
     ]);
+    // Recriar é criar: o patch não leva convidados, a criação leva.
+    expect(t.calls[0].ev).not.toHaveProperty("attendees");
     expect(t.calls[1].opts).toEqual({ sendUpdates: "all", withMeet: true });
+    expect(t.calls[1].ev?.attendees).toEqual([{ email: "cliente@acme.com" }]);
     expect(t.row()).toMatchObject({ calendar_event_id: "ev-new", calendar_etag: '"etag-new"', calendar_state: "synced" });
   });
 
@@ -548,14 +561,14 @@ describe("pushActivity: erro do Google", () => {
     ["falha de rede", new GmailNetworkError()],
   ])("%s: não conta tentativa e fica pending", async (_, err) => {
     const t = setup({ activity: { calendar_attempts: 1 }, fail: { insert: err } });
-    expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
+    expect(await pushActivity(t.deps, "a-1")).toBe("deferred");
     expect(t.row()).toMatchObject({ calendar_state: "pending", calendar_attempts: 1, calendar_error: null });
     expect(markCalls(t.log)).toEqual([]);
   });
 
   it("token inválido depois de renovar: fica pending, sem contar tentativa, e a caixa vai para reconectar", async () => {
     const t = setup({ activity: { calendar_attempts: 1 }, fail: { insert: new GmailAuthError("O Google recusou o token renovado") } });
-    expect(await pushActivity(t.deps, "a-1")).toBe("skipped");
+    expect(await pushActivity(t.deps, "a-1")).toBe("deferred");
     expect(t.row()).toMatchObject({ calendar_state: "pending", calendar_attempts: 1 });
     expect(t.tables.email_accounts[0]).toMatchObject({ status: "reconnect", last_error: "O Google recusou o token renovado" });
   });

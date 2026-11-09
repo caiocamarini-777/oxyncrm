@@ -171,22 +171,25 @@ export async function calendarAccountFor(
 /**
  * Envia uma atividade pendente. Devolve o estado final. Nunca lança por erro do Google (grava `error`).
  *
- * - `skipped`: nada foi enviado e a atividade fica como estava. Empresa com a Agenda desligada, atividade que não
- *   existe ou já em dia (`synced`), dono sem caixa utilizável, ou erro passageiro do Google (limite de uso, rede) e
- *   token recusado (a caixa vai para "reconectar"), que não contam tentativa.
- * - `synced`: o evento ficou igual à atividade (criado, atualizado, apagado, ou nada a fazer, como na concluída).
- * - `error`: o Google recusou; grava a mensagem e conta a tentativa (o cron reenvia até `MAX_CALENDAR_ATTEMPTS`).
+ * - `skipped`: nada a enviar, e a atividade fica como estava. Vale para empresa com a Agenda desligada, atividade que
+ *   não existe ou já em dia (`synced`), e dono sem caixa utilizável.
+ * - `deferred`: o envio ficou para depois, e a atividade continua pendente sem contar tentativa. Vale para limite de
+ *   uso do Google (o cron para a rodada da caixa), falha de rede e token recusado (a caixa vai para "reconectar").
+ * - `synced`: o evento ficou igual à atividade. Ele foi criado, atualizado ou apagado, ou não havia nada a fazer, como
+ *   na atividade concluída.
+ * - `error`: o Google recusou. Grava a mensagem e conta a tentativa (o cron reenvia até `MAX_CALENDAR_ATTEMPTS`).
  *
- * Convite e avisos ao cliente (`sendUpdates: "all"`) só para reunião que ainda não terminou e nunca com
- * `invite: false` (primeira rodada). Evento apagado de vez no Google (404/410 no `patch`) é criado de novo, porque a
- * atividade continua aberta. Lança só por erro do banco: se a gravação de volta falhar depois de criar o evento, o
- * evento fica na Agenda sem vínculo (ele leva `oxynActivityId` nas propriedades privadas).
+ * Convidados e Meet só entram na criação; a atualização não mexe neles. Convite e avisos ao cliente
+ * (`sendUpdates: "all"`) só valem para reunião que ainda não terminou, e nunca com `invite: false` (primeira rodada).
+ * Evento apagado de vez no Google (404/410 no `patch`) é criado de novo, porque a atividade continua aberta.
+ * Lança só por erro do banco. Se a gravação de volta falhar depois de criar o evento, ele fica na Agenda sem vínculo
+ * (leva `oxynActivityId` nas propriedades privadas).
  */
 export async function pushActivity(
   deps: CalendarDeps,
   activityId: string,
   opts?: { invite?: boolean },
-): Promise<"synced" | "error" | "skipped"> {
+): Promise<"synced" | "error" | "skipped" | "deferred"> {
   const { db } = deps;
   const found = await db.from("activities").select(ACTIVITY_COLUMNS).eq("id", activityId).maybeSingle();
   check(found.error, "ler a atividade");
@@ -259,11 +262,15 @@ export async function pushActivity(
     } else {
       const invite = notifyClient && wantsInvite(a);
       const sendUpdates = invite ? "all" : "none";
-      const ev = activityToEvent(a, { invite });
       let patched: CalendarEvent | null = null;
       if (op.op === "update" && !leaving) {
+        // Atualizar nunca mexe nos convidados nem no Meet (os dois só entram na criação): sem `attendees` e sem
+        // `conferenceData`, o `patch` mantém os do evento. Os convidados que já existem são avisados da mudança.
+        const changes = activityToEvent(a, { invite: false });
+        delete changes.attendees;
+        delete changes.conferenceData;
         try {
-          patched = await calendar(target!.id).patchEvent(a.calendarEventId!, ev, { sendUpdates });
+          patched = await calendar(target!.id).patchEvent(a.calendarEventId!, changes, { sendUpdates });
         } catch (e) {
           // Evento apagado de vez no Google: a atividade continua aberta, então o evento nasce de novo abaixo.
           if (!isGone(e)) throw e;
@@ -279,7 +286,10 @@ export async function pushActivity(
         // Sem link no retorno, o que já estava gravado continua.
         if (patched.hangoutLink) fields.meet_url = patched.hangoutLink;
       } else {
-        const created = await calendar(target!.id).insertEvent(ev, { sendUpdates, withMeet: invite });
+        const created = await calendar(target!.id).insertEvent(activityToEvent(a, { invite }), {
+          sendUpdates,
+          withMeet: invite,
+        });
         fields = {
           ...IN_SYNC,
           calendar_account_id: target!.id,
@@ -309,12 +319,12 @@ async function recordFailure(
   r: ActivityRow,
   accountId: string | null,
   e: unknown,
-): Promise<"error" | "skipped"> {
+): Promise<"error" | "deferred"> {
   const msg = (e instanceof Error ? e.message : String(e)) || "Falha ao atualizar a Agenda";
-  if (e instanceof GmailRateLimitError || e instanceof GmailNetworkError) return "skipped";
+  if (e instanceof GmailRateLimitError || e instanceof GmailNetworkError) return "deferred";
   if (e instanceof GmailAuthError) {
     if (accountId) await markReconnect(db, accountId, msg);
-    return "skipped";
+    return "deferred";
   }
   await markSynced(db, r.id, {
     calendar_state: "error",

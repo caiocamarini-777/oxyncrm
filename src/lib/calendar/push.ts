@@ -192,8 +192,8 @@ export async function markReconnect(db: SupabaseClient, accountId: string, msg: 
  * Agenda. A escolha vem antes da conferência: se a caixa escolhida está em "reconectar" ou sem o escopo, devolve
  * `null` (a atividade espera a reconexão) em vez de passar o evento para outra caixa do dono.
  *
- * `ready` é falso enquanto a caixa não fez a primeira rodada (`calendar_since` nulo): até lá o envio só vale com
- * `invite: false`, porque a primeira rodada adota os eventos que o Pipedrive deixou e não pode haver convite duplicado.
+ * `ready` é falso enquanto a caixa não fez a primeira rodada (`calendar_since` nulo): até lá só a primeira rodada envia,
+ * porque ela adota os eventos que o Pipedrive deixou e decide quem convida (não pode haver convite duplicado).
  */
 export async function calendarAccountFor(
   db: SupabaseClient,
@@ -217,8 +217,9 @@ export async function calendarAccountFor(
  *
  * - `skipped`: nada a enviar, e a atividade fica como estava. Vale para empresa com a Agenda desligada, atividade que
  *   não existe ou já em dia (`synced`), dono sem caixa utilizável e caixa que ainda não fez a primeira rodada
- *   (`calendar_since` nulo): só o envio com `invite: false`, o da primeira rodada, passa por ela. Assim, entre ligar a
- *   Agenda e a primeira rodada, uma gravação na hora não manda convite que o Pipedrive já mandou.
+ *   (`calendar_since` nulo): só o envio da primeira rodada (`invite: false`, ou `firstRun`) passa por ela. Assim, entre
+ *   ligar a Agenda e a primeira rodada, uma gravação na hora não manda convite que o Pipedrive já mandou; é a primeira
+ *   rodada que decide quem convida (`firstRun` sem `invite: false`: a reunião criada depois de ligar a Agenda).
  * - `deferred`: o envio ficou para depois, e a atividade continua pendente sem contar tentativa. Vale para limite de
  *   uso do Google (o cron para a rodada da caixa), falha de rede e token recusado (a caixa vai para "reconectar").
  * - `synced`: o evento ficou igual à atividade. Ele foi criado, atualizado ou apagado, ou não havia nada a fazer, como
@@ -238,7 +239,7 @@ export async function calendarAccountFor(
 export async function pushActivity(
   deps: CalendarDeps,
   activityId: string,
-  opts?: { invite?: boolean },
+  opts?: { invite?: boolean; firstRun?: boolean },
 ): Promise<"synced" | "error" | "skipped" | "deferred"> {
   const { db } = deps;
   const found = await db.from("activities").select(ACTIVITY_COLUMNS).eq("id", activityId).maybeSingle();
@@ -300,7 +301,7 @@ export async function pushActivity(
     const account = await calendarAccountFor(db, a.ownerId, a.companyId);
     if (!account) return "skipped";
     // Caixa da primeira rodada ainda por fazer: a atividade espera, pendente, sem chamar o Google.
-    if (!account.ready && opts?.invite !== false) return "skipped";
+    if (!account.ready && opts?.invite !== false && !opts?.firstRun) return "skipped";
     target = account;
   }
 

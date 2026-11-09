@@ -222,6 +222,20 @@ describe("pushActivity: quando não envia", () => {
       expect(t.row()).toMatchObject({ calendar_event_id: "ev-new", calendar_state: "synced" });
     });
 
+    it("com firstRun (a primeira rodada, reunião criada depois de ligar a Agenda) envia convidando", async () => {
+      const t = setup({ accounts: notReady });
+      expect(await pushActivity(t.deps, "a-1", { firstRun: true })).toBe("synced");
+      expect(t.calls[0]).toMatchObject({ op: "insert", opts: { sendUpdates: "all", withMeet: true } });
+      expect(t.calls[0].ev?.attendees).toEqual([{ email: "cliente@acme.com" }]);
+      expect(t.row()).toMatchObject({ calendar_state: "synced", calendar_invited_email: "cliente@acme.com" });
+    });
+
+    it("com firstRun e invite false não convida", async () => {
+      const t = setup({ accounts: notReady });
+      await pushActivity(t.deps, "a-1", { firstRun: true, invite: false });
+      expect(t.calls[0].opts).toEqual({ sendUpdates: "none", withMeet: false });
+    });
+
     it("a caixa pronta do mesmo dono envia normalmente (convida)", async () => {
       const t = setup({ accounts: [account({ calendar_since: "2026-11-09T12:00:00.000Z" })] });
       expect(await pushActivity(t.deps, "a-1")).toBe("synced");

@@ -122,6 +122,7 @@ type OpenRow = {
   due_at: string;
   calendar_state: string;
   calendar_attempts: number;
+  created_at?: string;
 };
 
 /**
@@ -163,6 +164,8 @@ type AccountRun = {
   result: CalendarRunResult;
   /** Empresas com a Agenda ligada (e não arquivadas). */
   enabled: Set<string>;
+  /** Quando a Agenda foi ligada em cada empresa ligada (`calendar_sync.enabled_at`; nulo se não houver). */
+  enabledAt: Map<string, string | null>;
   timeLeft: () => boolean;
   /** Atividades religadas a um evento órfão nesta rodada (a primeira rodada não as cria de novo). */
   relinked: Set<string>;
@@ -198,7 +201,9 @@ const isPrivate = (ev: CalendarEvent) => ev.visibility === "private" || ev.visib
  * Agenda desligada. Ordem: a parada há mais tempo primeiro (`calendar_lock_until` guarda o fim da última rodada; a
  * que nunca rodou vem antes), para o orçamento não ficar sempre com as mesmas.
  */
-async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[]; enabled: Set<string> }> {
+async function loadAccounts(
+  db: SupabaseClient,
+): Promise<{ accounts: AccountRow[]; enabled: Set<string>; enabledAt: Map<string, string | null> }> {
   const { data, error } = await db
     .from("email_accounts")
     .select("id, user_id, company_id, email, scopes, calendar_since, calendar_sync_token, calendar_lock_until")
@@ -207,18 +212,20 @@ async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[
     .limit(200);
   check(error, "listar as caixas");
   const accounts = ((data ?? []) as AccountRow[]).filter((a) => hasCalendarScope(a.scopes));
-  if (accounts.length === 0) return { accounts: [], enabled: new Set() };
+  if (accounts.length === 0) return { accounts: [], enabled: new Set(), enabledAt: new Map() };
 
   // Todas as empresas, não só as das caixas: a atividade do dono sem caixa na empresa dela vai para a caixa mais
   // antiga dele, de outra empresa.
   const companies = await db.from("companies").select("id, settings, archived_at").limit(1000);
   check(companies.error, "ler as empresas");
-  const enabled = new Set(
+  const enabledAt = new Map(
     ((companies.data ?? []) as { id: string; settings: unknown; archived_at: string | null }[])
-      .filter((c) => !c.archived_at && readCalendarSettings(c.settings).enabled)
-      .map((c) => c.id),
+      .map((c) => ({ id: c.id, archived: !!c.archived_at, settings: readCalendarSettings(c.settings) }))
+      .filter((c) => !c.archived && c.settings.enabled)
+      .map((c) => [c.id, c.settings.enabledAt] as const),
   );
-  if (enabled.size === 0) return { accounts: [], enabled };
+  const enabled = new Set(enabledAt.keys());
+  if (enabled.size === 0) return { accounts: [], enabled, enabledAt };
 
   const members = await db
     .from("memberships")
@@ -236,6 +243,7 @@ async function loadAccounts(db: SupabaseClient): Promise<{ accounts: AccountRow[
       .filter((a) => enabled.has(a.company_id) || serving.has(a.user_id))
       .sort((a, b) => lastRun(a) - lastRun(b)),
     enabled,
+    enabledAt,
   };
 }
 
@@ -249,7 +257,7 @@ export async function runCalendarSync(deps: CalendarDeps, opts: { budgetMs: numb
   const nowMs = () => deps.now().getTime();
   const end = nowMs() + opts.budgetMs;
 
-  const { accounts, enabled } = await loadAccounts(db);
+  const { accounts, enabled, enabledAt } = await loadAccounts(db);
   const results: CalendarRunResult[] = [];
   for (const acc of accounts) {
     if (nowMs() >= end) break; // as demais entram na próxima rodada
@@ -273,6 +281,7 @@ export async function runCalendarSync(deps: CalendarDeps, opts: { budgetMs: numb
         calendar: deps.clientFor(acc.id),
         result,
         enabled,
+        enabledAt,
         timeLeft: () => nowMs() < end,
         relinked: new Set(),
         meetingTypes: new Map(),
@@ -402,8 +411,10 @@ async function pushQueue(run: AccountRun): Promise<boolean> {
  *    só. O convidado que o evento já tem fica registrado (o evento dele não recebe a descrição interna).
  * 2. Os eventos não adotados seguem as regras de entrada (inclusive religar órfãos), menos os do Pipedrive: o que não
  *    casou com nenhuma atividade fica de fora (viraria a mesma reunião duas vezes) e é contado no resultado.
- * 3. Cria, sem convite, o evento das atividades que sobraram (inclusive as recém-gravadas: até a primeira rodada
- *    terminar, o envio na hora não passa por esta caixa, então ninguém mais está enviando).
+ * 3. Cria o evento das atividades que sobraram (inclusive as recém-gravadas: até a primeira rodada terminar, o envio na
+ *    hora não passa por esta caixa, então ninguém mais está enviando). Sem convite para as criadas antes de ligar a
+ *    Agenda na empresa (`enabled_at`; sem a data, também sem convite): o Pipedrive já convidou. A reunião criada
+ *    depois de ligar (entre ligar e a primeira rodada) convida o cliente como no envio normal.
  * 4. Grava `calendar_since` e o token, só se tudo foi feito. Envio adiado ou com erro deixa a primeira rodada para a
  *    próxima, que repete sem convite. A atividade que já falhou 3 vezes fica só no "Tentar de novo" e não segura a
  *    virada.
@@ -416,7 +427,7 @@ async function firstRun(run: AccountRun): Promise<void> {
 
   const { data, error } = await db
     .from("activities")
-    .select("id, company_id, subject, due_at, calendar_state, calendar_attempts")
+    .select("id, company_id, subject, due_at, calendar_state, calendar_attempts, created_at")
     .eq("owner_id", run.acc.user_id)
     .eq("done", false)
     .is("deleted_at", null)
@@ -464,13 +475,15 @@ async function firstRun(run: AccountRun): Promise<void> {
   const rest = events.filter((e) => !claimed.has(e.id) && !leftover(e));
   if (!(await applyEvents(run, rest, now, now, resolved))) return;
 
-  // 3. Cria o que falta, sem convite.
+  // 3. Cria o que falta: sem convite, menos o que foi criado depois de ligar a Agenda na empresa.
   let finished = true;
   for (const a of open) {
     if (adopted.has(a.id) || run.relinked.has(a.id)) continue;
     if (a.calendar_state === "error" && a.calendar_attempts >= MAX_CALENDAR_ATTEMPTS) continue;
     if (!run.timeLeft()) return;
-    const r = await pushActivity(run.deps, a.id, { invite: false });
+    const enabledAt = run.enabledAt.get(a.company_id);
+    const afterEnable = !!enabledAt && !!a.created_at && Date.parse(a.created_at) >= Date.parse(enabledAt);
+    const r = await pushActivity(run.deps, a.id, afterEnable ? { firstRun: true } : { invite: false });
     if (r === "synced") run.result.pushed++;
     if (r === "deferred") {
       run.result.error = DEFERRED;

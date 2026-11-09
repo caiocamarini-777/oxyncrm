@@ -1125,6 +1125,50 @@ describe("runCalendarSync: primeira rodada", () => {
     expect(t.acc().calendar_since).toBe(NOW.toISOString());
   });
 
+  describe("reunião criada depois de ligar a Agenda (enabled_at 12:00)", () => {
+    const inserts = (t: ReturnType<typeof first>) =>
+      Object.fromEntries(ops(t.calls, "insert").map((c) => [c.ev?.extendedProperties?.private?.oxynActivityId, c]));
+
+    it("criada antes de ligar: sem convite; criada depois (ou no mesmo instante): convida o cliente", async () => {
+      const t = first({
+        activities: [
+          open({ id: "a-antes", created_at: "2026-11-08T10:00:00.000Z" }),
+          open({ id: "a-depois", created_at: "2026-11-09T13:00:00.000Z" }),
+          open({ id: "a-mesmo-instante", created_at: "2026-11-09T12:00:00.000Z" }),
+        ],
+      });
+      await t.run();
+      const by = inserts(t);
+      expect(by["a-antes"].opts).toEqual({ sendUpdates: "none", withMeet: false });
+      expect(by["a-antes"].ev?.attendees).toBeUndefined();
+      expect(by["a-depois"].opts).toEqual({ sendUpdates: "all", withMeet: true });
+      expect(by["a-depois"].ev?.attendees).toEqual([{ email: "cliente@acme.com" }]);
+      expect(by["a-mesmo-instante"].opts).toEqual({ sendUpdates: "all", withMeet: true });
+      expect(t.act("a-depois")).toMatchObject({ calendar_state: "synced", calendar_invited_email: "cliente@acme.com" });
+      expect(t.acc().calendar_since).toBe(NOW.toISOString());
+    });
+
+    it("sem enabled_at na empresa: ninguém é convidado", async () => {
+      const t = first({
+        companies: [{ id: "co-1", slug: "acme", archived_at: null, settings: { calendar_sync: { enabled: true } } }],
+        activities: [open({ id: "a-depois", created_at: "2026-11-09T13:00:00.000Z" })],
+      });
+      await t.run();
+      expect(ops(t.calls, "insert")[0].opts).toEqual({ sendUpdates: "none", withMeet: false });
+    });
+
+    it("adotada, mesmo criada depois de ligar: não cria evento nem convida", async () => {
+      const t = first({
+        activities: [open({ created_at: "2026-11-09T13:00:00.000Z" })],
+        google: { "acc-1": { from: { events: [event({ id: "ev-pd" })], nextSyncToken: "tok-first" } } },
+      });
+      await t.run();
+      expect(t.act("a-1").calendar_event_id).toBe("ev-pd");
+      expect(ops(t.calls, "insert")).toEqual([]);
+      expect(t.calls.some((c) => c.opts?.sendUpdates === "all")).toBe(false);
+    });
+  });
+
   it("adota com título de acento diferente e 3 min de diferença", async () => {
     const t = first({
       activities: [open({ subject: "Reuniao de alinhamento  com a Acme" })],

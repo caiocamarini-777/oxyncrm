@@ -18,7 +18,7 @@ const MESSAGE_PAGE = 1000;
 const MAX_MESSAGE_PAGES = 5;
 
 /** Só metadados e trecho: o corpo (`body_html`/`body_text`) é carregado ao abrir a mensagem. */
-const MESSAGE_COLUMNS = "id, thread_id, gmail_message_id, from_email, from_name, to, cc, sent_at, snippet, attachments, direction";
+const MESSAGE_COLUMNS = "id, thread_id, gmail_message_id, from_email, from_name, to, cc, sent_at, snippet, rfc_message_id, attachments, direction";
 
 function fail(what: string, error: { message: string; code?: string }): never {
   console.error(`[email] ${what}:`, error.code, error.message);

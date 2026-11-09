@@ -42,6 +42,20 @@ const DEFAULTS: Record<string, () => Row> = {
   meeting_notes: () => ({ pipedrive_note_id: null, written_at: null }),
   meeting_suggestions: () => ({ id: `s${++seq}`, status: "pending", decided_by: null, decided_at: null, last_error: null }),
   notifications: () => ({ id: ++seq, read_at: null }),
+  notes: () => ({ id: `n${++seq}`, deleted_at: null }),
+  activities: () => ({
+    id: `a${++seq}`,
+    duration_minutes: 30,
+    done: false,
+    completed_at: null,
+    outcome_id: null,
+    meeting_outcome: null,
+    deleted_at: null,
+    lead_id: null,
+    deal_id: null,
+    person_id: null,
+    organization_id: null,
+  }),
 };
 
 /** Colunas que `calendar_mark_synced` grava; as demais chaves de `p_fields` são ignoradas, como no banco. */
@@ -106,9 +120,41 @@ function checkCompletion(row: Row): void {
 }
 
 /**
+ * Exceção levantada pelo banco (`raise exception 'OXYN_...' using detail = ...`): em vez de rejeitar a promessa,
+ * vira `{ data: null, error: { code: "P0001", message, details } }`, como o PostgREST devolve.
+ */
+class DbFailure extends Error {
+  constructor(
+    message: string,
+    readonly details: string | null = null,
+  ) {
+    super(message);
+  }
+}
+
+const MEETING_OUTCOMES = ["held", "no_show", "rescheduled", "canceled"];
+
+/**
+ * Parte do gatilho `deals_required_fields` (update de `stage_id`): as chaves de `stages.required_fields` da etapa
+ * nova. `cf:<chave>` confere `custom_fields`; as demais, a coluna do negócio. `contract` e `products` não são imitadas.
+ */
+function checkDealRequiredFields(tables: Tables, deal: Row): void {
+  const stage = (tables.stages ?? []).find((s) => s.id === deal.stage_id);
+  const required = (stage?.required_fields ?? []) as string[];
+  const missing = required.filter((k) => {
+    if (k.startsWith("cf:")) {
+      const v = ((deal.custom_fields ?? {}) as Row)[k.slice(3)];
+      return v == null || String(v).trim() === "";
+    }
+    return deal[k] == null;
+  });
+  if (missing.length > 0) throw new DbFailure("OXYN_REQUIRED_FIELDS", missing.join(","));
+}
+
+/**
  * Funções do banco (`db.rpc`) que os testes usam: recebem as tabelas e os argumentos e devolvem o `data`. O banco
  * falso não tem gatilhos, então a marca de sessão (`oxyn.calendar_inbound`) não tem efeito aqui; quem testa confere
- * pelo `log` que a gravação passou pela função.
+ * pelo `log` que a gravação passou pela função. Função que lança `DbFailure` devolve o erro no `error`.
  */
 const RPCS: Record<string, (tables: Tables, args: Row) => unknown> = {
   // Volta do envio à Agenda: só as colunas da Agenda; chave ausente mantém o valor, chave com null grava null.
@@ -162,7 +208,29 @@ const RPCS: Record<string, (tables: Tables, args: Row) => unknown> = {
     (tables.activities ??= []).push(row);
     return row.id;
   },
+  // Conclusão (parte da validação de `complete_activity`): atividade aberta e não apagada; tipo de reunião exige
+  // `p_meeting_outcome` válido, os demais exigem `p_outcome_id`. `p_meeting` e `p_next` não criam atividades aqui.
+  complete_activity: (tables, args) => {
+    const row = (tables.activities ?? []).find((r) => r.id === args.p_id && (r.deleted_at ?? null) === null);
+    if (!row) throw new DbFailure("OXYN_NOT_FOUND");
+    if (row.done) throw new DbFailure("OXYN_ALREADY_DONE");
+    const meeting = (tables.activity_types ?? []).find((t) => t.id === row.type_id)?.is_meeting === true;
+    const mo = (args.p_meeting_outcome ?? null) as string | null;
+    if (meeting ? !mo || !MEETING_OUTCOMES.includes(mo) : mo !== null || args.p_outcome_id == null) {
+      throw new DbFailure("OXYN_OUTCOME_REQUIRED");
+    }
+    Object.assign(row, {
+      done: true,
+      completed_at: new Date().toISOString(),
+      outcome_id: args.p_outcome_id ?? null,
+      meeting_outcome: mo,
+      completion_note: typeof args.p_note === "string" && args.p_note.trim() ? args.p_note.trim() : null,
+    });
+    return { meeting_id: null, next_id: null, rule: "off" };
+  },
 };
+
+const failure = (e: DbFailure) => ({ data: null, error: { code: "P0001", message: e.message, details: e.details } });
 
 const time = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
 function cmp(a: unknown, b: unknown): number {
@@ -180,7 +248,9 @@ const unquote = (s: string) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1
  * `onConflict`/`ignoreDuplicates`, update, delete e o `.or` do lease). Chave única violada devolve 23505.
  * Com `clock`, imita o trigger `set_updated_at` de `meetings` (insert e update gravam a hora do relógio).
  * `.rpc` executa as funções de `RPCS` (função desconhecida devolve o erro PGRST202) e entra no `log` como
- * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa.
+ * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa;
+ * exceção do banco (`DbFailure`, inclusive a do gatilho de obrigatórios da etapa no update de `deals.stage_id`)
+ * volta no `error`.
  */
 export function fakeDb(tables: Tables, clock?: () => Date) {
   const log: { table: string; op: string; values?: unknown }[] = [];
@@ -288,6 +358,9 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
               }
             }
           } else if (op === "update") {
+            if (table === "deals" && "stage_id" in payload[0]) {
+              for (const r of match) checkDealRequiredFields(tables, { ...r, ...payload[0] });
+            }
             for (const r of match) {
               Object.assign(r, structuredClone(payload[0]));
               stamp(table, r);
@@ -306,6 +379,7 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
           }
           return resolve({ data: op === "select" || returning ? out : null, error: null });
         } catch (e) {
+          if (e instanceof DbFailure) return resolve(failure(e));
           if (reject) return reject(e);
           throw e;
         }
@@ -319,6 +393,7 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
       try {
         return Promise.resolve({ data: fn(tables, args), error: null });
       } catch (e) {
+        if (e instanceof DbFailure) return Promise.resolve(failure(e));
         return Promise.reject(e);
       }
     },

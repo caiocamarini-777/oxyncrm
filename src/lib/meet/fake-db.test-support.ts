@@ -39,7 +39,7 @@ const DEFAULTS: Record<string, () => Row> = {
     title: "",
     updated_at: "2026-11-05T15:00:00.000Z",
   }),
-  meeting_notes: () => ({ pipedrive_note_id: null, written_at: null }),
+  meeting_notes: () => ({ pipedrive_note_id: null, crm_note_id: null, written_at: null }),
   meeting_suggestions: () => ({ id: `s${++seq}`, status: "pending", decided_by: null, decided_at: null, last_error: null }),
   notifications: () => ({ id: ++seq, read_at: null }),
   notes: () => ({ id: `n${++seq}`, deleted_at: null }),

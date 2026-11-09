@@ -113,18 +113,21 @@ export function eventTimes(ev: CalendarEvent): { dueAt: string; durationMinutes:
 }
 
 /**
- * Classifica o evento que veio da Agenda. A ordem importa: cancelado primeiro (um evento apagado nem traz horário),
- * depois o que nunca vira atividade, e só então o vínculo com uma atividade já conhecida.
+ * Classifica o evento que veio da Agenda. Evento já ligado a uma atividade nunca é pulado: ou foi cancelado
+ * (`cancelled`), ou vira `linked`, mesmo recusado, antes de `since` ou de dia inteiro (quem aplica o `linked` vê que
+ * `eventTimes` é `null` e deixa o horário como está). As regras de pular valem só para evento desconhecido, nesta
+ * ordem: cancelado (um evento apagado nem traz horário), dia inteiro, tipo, recusado, antes de `since`, recorrente longe.
  */
 export function classifyInbound(
   ev: CalendarEvent,
   ctx: { knownActivityId: string | null; since: Date; now: Date },
 ): Inbound {
-  if (ev.status === "cancelled") {
-    return ctx.knownActivityId
+  if (ctx.knownActivityId) {
+    return ev.status === "cancelled"
       ? { kind: "cancelled", activityId: ctx.knownActivityId }
-      : { kind: "skip", reason: "cancelled_unknown" };
+      : { kind: "linked", activityId: ctx.knownActivityId };
   }
+  if (ev.status === "cancelled") return { kind: "skip", reason: "cancelled_unknown" };
   const times = eventTimes(ev);
   if (!times) return { kind: "skip", reason: "all_day" };
   if (ev.eventType && SKIPPED_EVENT_TYPES.includes(ev.eventType)) return { kind: "skip", reason: "event_type" };
@@ -134,7 +137,7 @@ export function classifyInbound(
   if (ev.recurringEventId && startMs > ctx.now.getTime() + RECURRING_WINDOW_DAYS * DAY_MS) {
     return { kind: "skip", reason: "recurring_far" };
   }
-  return ctx.knownActivityId ? { kind: "linked", activityId: ctx.knownActivityId } : { kind: "new" };
+  return { kind: "new" };
 }
 
 /** Link da videochamada do evento (Meet ou outro), se houver. */

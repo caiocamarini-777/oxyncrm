@@ -247,6 +247,41 @@ describe("classifyInbound", () => {
     expect(classifyInbound(event(), ctx("act-9"))).toEqual({ kind: "linked", activityId: "act-9" });
     expect(classifyInbound(event(), ctx())).toEqual({ kind: "new" });
   });
+
+  describe("evento já ligado a uma atividade nunca é pulado", () => {
+    const linked = { kind: "linked", activityId: "act-9" };
+
+    it("recusado pelo vendedor: linked", () => {
+      const declined = event({ attendees: [{ email: "eu@oxyn.com", self: true, responseStatus: "declined" }] });
+      expect(classifyInbound(declined, ctx("act-9"))).toEqual(linked);
+    });
+
+    it("início antes da data de partida: linked", () => {
+      const old = event({
+        start: { dateTime: "2026-10-31T10:00:00-03:00" },
+        end: { dateTime: "2026-10-31T11:00:00-03:00" },
+      });
+      expect(classifyInbound(old, ctx("act-9"))).toEqual(linked);
+    });
+
+    it("dia inteiro: linked (quem aplica vê eventTimes nulo e deixa o horário)", () => {
+      const allDay = event({ start: { date: "2026-11-10" }, end: { date: "2026-11-11" } });
+      expect(classifyInbound(allDay, ctx("act-9"))).toEqual(linked);
+    });
+
+    it("recorrente além de 7 dias e tipo especial: linked", () => {
+      const far = event({ recurringEventId: "rec-1", start: { dateTime: "2027-03-01T10:00:00-03:00" } });
+      expect(classifyInbound(far, ctx("act-9"))).toEqual(linked);
+      expect(classifyInbound(event({ eventType: "focusTime" }), ctx("act-9"))).toEqual(linked);
+    });
+
+    it("cancelado continua sendo cancelled, mesmo sem horário", () => {
+      expect(classifyInbound({ id: "ev-2", status: "cancelled" }, ctx("act-9"))).toEqual({
+        kind: "cancelled",
+        activityId: "act-9",
+      });
+    });
+  });
 });
 
 describe("newActivityFields", () => {

@@ -39,7 +39,7 @@ Não vai: o que só o CRM tem (contrato, cronograma de receita, canal das ativid
 - `external_ids` já liga cada registro importado ao id dele no Pipedrive.
 - **Criado no CRM:** é criado no Pipedrive, e o vínculo é gravado em `external_ids`, por uma função `security definer` nova só para o service role.
 - **Mapas ao contrário:** os de usuários, funis e etapas, etiquetas de lead e campos personalizados vêm do último job de importação (`import_jobs.mappings` e `cursor.cache`), lidos na direção inversa.
-- **Dono sem usuário no Pipedrive:** o registro fica com o usuário do token.
+- **Dono sem usuário no Pipedrive:** o dono não vai. Na atualização, o registro mantém o dono atual no Pipedrive; na criação, fica com o usuário do token.
 - **Um registro do Pipedrive importado em mais de uma empresa:** vale a versão mudada por último no CRM.
 
 ### Quando e como roda
@@ -57,7 +57,7 @@ Não vai: o que só o CRM tem (contrato, cronograma de receita, canal das ativid
 
 - **Trava:** a rotina se recusa a rodar com o modo espelho ativo (o último job de importação é espelho e terminou há menos de 48 h). Ida e volta ao mesmo tempo apagariam dados.
 - **Ligar e desligar:**
-  - **O que liga:** uma configuração geral (`app_settings.pipedrive_backup_enabled`, ou uma linha numa tabela de configuração), e não uma variável no workflow.
+  - **O que liga:** uma configuração geral (`app_settings.pipedrive_backup_enabled`, ou uma linha numa tabela de configuração), e não uma variável no workflow. A variável `PIPEDRIVE_BACKUP` do repositório só deixa o job do workflow começar (fora do piloto ele não gasta minutos do Actions); ela é ligada e desligada junto com a configuração.
   - **Quem mexe:** o controlador liga no dia da virada e desliga no fim do piloto, sempre com o ok do usuário.
   - **Cursor ao ligar:** começa no momento em que foi ligado. Antes disso, o Pipedrive já está igual ao CRM pela última sincronização do espelho.
 

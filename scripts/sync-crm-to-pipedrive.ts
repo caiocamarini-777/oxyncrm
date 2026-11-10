@@ -1,10 +1,12 @@
 // Piloto pós-virada: o CRM atualiza o Pipedrive. pnpm sync:crm-para-pipedrive
-// Sem argumentos, roda uma rodada (até 50 min): copia para o Pipedrive o que foi criado, mudado ou apagado no CRM
-// desde o cursor da última rodada. Com a rotina desligada, ou com o modo espelho ainda ativo, sai na hora (skipped).
-//   --ligar     liga a rotina; o cursor começa no fim da última sincronização do Pipedrive.
-//   --desligar  desliga a rotina (o cursor fica onde está).
-//   --status    mostra a configuração, a última rodada e a fila de retry; não envia nada.
-// Rode --ligar só depois da última sincronização sem espelho (pnpm sync:pipedrive sem --espelho).
+// Sem argumentos, roda uma rodada (até 45 min): copia para o Pipedrive o que foi criado, mudado ou apagado no CRM
+// desde o cursor de cada entidade. Com a rotina desligada, com o modo espelho ainda ativo ou com outra rodada em
+// andamento, sai na hora (skipped).
+//   --ligar     liga a rotina; os cursores começam no início da última sincronização do Pipedrive.
+//   --desligar  desliga a rotina (os cursores ficam onde estão).
+//   --status    mostra a configuração, os cursores, a última rodada e a fila de retry; não envia nada.
+// Rode --ligar só depois da última sincronização sem espelho (pnpm sync:pipedrive sem --espelho). Ligue e desligue
+// junto a variável PIPEDRIVE_BACKUP do repositório, que deixa o workflow de hora em hora rodar.
 // O token vem de PIPEDRIVE_API_TOKEN e nunca é impresso. Código de saída 1 se a rodada falhar.
 import { loadEnv } from "./load-env";
 import { createAdminClient } from "../src/lib/supabase/admin";
@@ -14,8 +16,11 @@ import { PUSH_ORDER, supabasePushStore, MIRROR_GUARD_MS } from "../src/lib/piped
 
 loadEnv();
 
-/** Tempo máximo de uma rodada: o workflow tem timeout de 55 min, e a rodada para sozinha antes. */
-const BUDGET_MS = 50 * 60_000;
+/**
+ * Tempo máximo de uma rodada: o workflow tem timeout de 55 min, e a rodada para sozinha antes, com folga para a
+ * instalação e para um registro lento (as esperas do cliente no 429).
+ */
+const BUDGET_MS = 45 * 60_000;
 /** Linhas de erro e de fila de retry que o script lista (o resto fica só na contagem). */
 const LIST_MAX = 20;
 const FLAGS = ["--ligar", "--desligar", "--status"];
@@ -29,6 +34,7 @@ type RunRow = {
   status: string;
   counters: Record<string, Record<string, number>> | null;
   errors: { entity: string; id: string; reason: string }[] | null;
+  warnings: string[] | null;
 };
 
 /** Data e hora no horário de Brasília, que é como a equipe lê o GitHub Actions. */
@@ -55,11 +61,22 @@ function printErrors(errors: { entity: string; id: string; reason: string }[]): 
   if (errors.length > LIST_MAX) console.log(`  ... e mais ${errors.length - LIST_MAX} (o relatório completo fica em pipedrive_push_runs)`);
 }
 
+function printWarnings(warnings: string[]): void {
+  if (!warnings.length) return;
+  console.log(`Avisos (${warnings.length}):`);
+  for (const w of warnings) console.log(`  ${w}`);
+}
+
 function printReport(r: PushReport): void {
   printCounters(r.counters);
   printErrors(r.errors);
+  printWarnings(r.warnings);
   console.log(`Status: ${r.status}${r.reason ? ` (${r.reason})` : ""}`);
 }
+
+const VARIABLE_HINT =
+  "Lembre de ligar ou desligar junto a variável PIPEDRIVE_BACKUP do repositório " +
+  "(gh variable set PIPEDRIVE_BACKUP --body on|off): sem ela em on, o workflow de hora em hora nem começa.";
 
 async function showStatus(admin: Admin, store: ReturnType<typeof supabasePushStore>): Promise<void> {
   const { data: settings, error } = await admin
@@ -68,9 +85,15 @@ async function showStatus(admin: Admin, store: ReturnType<typeof supabasePushSto
     .eq("id", 1)
     .maybeSingle();
   if (error) throw new Error(`Não foi possível ler a configuração: ${error.message}`);
+  const { cursors } = await store.settings();
   console.log(`Rotina: ${settings?.enabled ? "ligada" : "desligada"}`);
   console.log(`  ligada em: ${when(settings?.enabled_at)}`);
-  console.log(`  cursor (mudanças do CRM enviadas até): ${when(settings?.cursor)}`);
+  console.log(`  cursor inicial (ao ligar): ${when(settings?.cursor)}`);
+  console.log("  cursores (mudanças do CRM enviadas até):");
+  for (const entity of PUSH_ORDER) {
+    const c = cursors[entity];
+    console.log(`    ${entity}: ${c ? `${when(c.at)}${c.id ? ` (parou no ${c.id})` : ""}` : "o inicial"}`);
+  }
   const mirror = await store.mirrorActive(new Date());
   console.log(
     `Modo espelho: ${mirror ? `ATIVO (a última importação do Pipedrive foi espelho há menos de ${MIRROR_GUARD_MS / 3600_000} h; a rotina não roda)` : "inativo"}`,
@@ -78,7 +101,7 @@ async function showStatus(admin: Admin, store: ReturnType<typeof supabasePushSto
 
   const { data: last, error: lastError } = await admin
     .from("pipedrive_push_runs")
-    .select("started_at, finished_at, cursor_from, cursor_to, status, counters, errors")
+    .select("started_at, finished_at, cursor_from, cursor_to, status, counters, errors, warnings")
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -90,9 +113,10 @@ async function showStatus(admin: Admin, store: ReturnType<typeof supabasePushSto
     console.log(`Última rodada: ${run.status}`);
     console.log(`  início: ${when(run.started_at)}`);
     console.log(`  fim: ${run.finished_at ? when(run.finished_at) : "não terminou (rodando agora, ou foi interrompida)"}`);
-    console.log(`  cursor: ${when(run.cursor_from)} -> ${when(run.cursor_to)}`);
+    console.log(`  cursor mais antigo: ${when(run.cursor_from)} -> ${when(run.cursor_to)}`);
     printCounters(run.counters);
     printErrors(run.errors ?? []);
+    printWarnings(run.warnings ?? []);
   }
 
   const { data: queue, count, error: queueError } = await admin
@@ -132,7 +156,7 @@ async function main() {
     const after = await store.settings();
     if (enable) {
       console.log(before.enabled ? "A rotina já estava ligada: nada mudou." : "Rotina ligada.");
-      console.log(`Cursor: ${when(after.cursor)}`);
+      console.log(`Cursor inicial: ${when(after.cursor)}`);
       if (await store.mirrorActive(new Date())) {
         console.warn(
           "Atenção: a última importação do Pipedrive rodou como espelho há menos de 48 h. A rotina não envia nada até " +
@@ -142,6 +166,7 @@ async function main() {
     } else {
       console.log(before.enabled ? "Rotina desligada." : "A rotina já estava desligada.");
     }
+    console.log(VARIABLE_HINT);
     return;
   }
 

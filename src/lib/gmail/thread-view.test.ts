@@ -22,6 +22,7 @@ const msg = (over: Partial<MessageRow>): MessageRow => ({
   cc: [],
   sent_at: "2026-01-01T10:00:00Z",
   snippet: "",
+  rfc_message_id: null,
   attachments: [],
   direction: "in",
   ...over,
@@ -55,6 +56,16 @@ describe("buildRecordThreads", () => {
   it("caixa própria: e-mail da caixa, isMine e pode desvincular", () => {
     const t1 = buildRecordThreads(base).find((t) => t.threadId === "t1")!;
     expect(t1).toMatchObject({ isMine: true, canUnlink: true, accountEmail: "eu@oxyn.com", linkId: "l1" });
+  });
+
+  it("conversas do Gmail marcadas com source gmail e Message-ID de cada mensagem", () => {
+    const out = buildRecordThreads({
+      ...base,
+      messages: [msg({ id: "m1", rfc_message_id: "<a@x>" }), msg({ id: "m2", sent_at: "2026-01-02T00:00:00Z" })],
+    });
+    expect(out.map((t) => t.source)).toEqual(["gmail", "gmail"]);
+    const t1 = out.find((t) => t.threadId === "t1")!;
+    expect(t1.messages.map((m) => m.rfcMessageId)).toEqual(["<a@x>", null]);
   });
 
   it("caixa de outro usuário: e-mail vem da mensagem enviada e só desvincula quem edita o registro", () => {

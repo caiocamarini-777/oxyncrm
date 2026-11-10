@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth/session";
+import { afterActivityWrite } from "@/lib/calendar/activity-hooks";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { firstIssue } from "@/lib/records/action-helpers";
 import { createServerClient } from "@/lib/supabase/server";
@@ -19,6 +20,7 @@ import {
 
 const uuid = z.string().uuid();
 const NO_PERMISSION = "Você não tem permissão para esta ação.";
+const LINK_BEFORE_NEXT = "Vincule a atividade a um lead, negócio, pessoa ou organização antes de agendar a próxima.";
 const INVALID = { ok: false, error: "Dados inválidos." } as const;
 const touched = () => revalidatePath("/", "layout");
 
@@ -56,6 +58,7 @@ export async function createActivity(companyId: string, input: ActivityInput): P
     .select("id")
     .single();
   if (error) return { ok: false, error: translateDbError(error) };
+  await afterActivityWrite(data.id);
   touched();
   return { ok: true, data: { id: data.id } };
 }
@@ -98,6 +101,7 @@ export async function updateActivity(id: string, input: ActivityInput): Promise<
     .select("id");
   if (error) return { ok: false, error: translateDbError(error) };
   if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  await afterActivityWrite(id);
   touched();
   return { ok: true, data: undefined };
 }
@@ -112,6 +116,8 @@ export type CompleteResult =
  * Conclui via RPC `complete_activity`. `next.ownerId` só segue quando o usuário escolheu outro
  * responsável (passar o do registro de origem exige a permissão de reatribuir). Sucesso devolve
  * `rule` (off | suggest | require) para a tela decidir se sugere a próxima atividade.
+ * A próxima atividade e a reunião (remarcada ou marcada) herdam os vínculos da concluída: sem nenhum (atividade que
+ * veio da Agenda do Google), a conclusão pede o vínculo antes, em vez de o banco recusar com um erro técnico.
  */
 export async function completeActivity(id: string, input: CompleteInput): Promise<CompleteResult> {
   if (!uuid.safeParse(id).success) return INVALID;
@@ -129,6 +135,17 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
   }
   const d = parsed.data;
   const supabase = await createServerClient();
+  if (d.next || d.meeting) {
+    const { data: src, error: srcError } = await supabase
+      .from("activities")
+      .select("lead_id, deal_id, person_id, organization_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (srcError) return { ok: false, error: translateDbError(srcError) };
+    if (src && !src.lead_id && !src.deal_id && !src.person_id && !src.organization_id) {
+      return { ok: false, error: LINK_BEFORE_NEXT };
+    }
+  }
   let nextOwner = d.next?.ownerId;
   if (nextOwner) {
     // dono igual ao da atividade de origem: omitir (informar exige a permissão de reatribuir)
@@ -167,6 +184,9 @@ export async function completeActivity(id: string, input: CompleteInput): Promis
     return completeFailure(error);
   }
   const r = (data ?? {}) as { meeting_id?: string | null; next_id?: string | null; rule?: CompleteOk["rule"] };
+  // A concluída e as que a conclusão criou (reunião e próxima atividade) vão juntas, dentro de um único teto.
+  const written = [id, r.meeting_id, r.next_id].filter((v): v is string => !!v);
+  await Promise.all(written.map((activityId) => afterActivityWrite(activityId)));
   touched();
   return { ok: true, data: { meetingId: r.meeting_id ?? null, nextId: r.next_id ?? null, rule: r.rule ?? null } };
 }
@@ -178,6 +198,7 @@ export async function reopenActivity(id: string): Promise<ActionResult> {
   const supabase = await createServerClient();
   const { error } = await supabase.rpc("reopen_activity", { p_id: id });
   if (error) return { ok: false, error: translateDbError(error) };
+  await afterActivityWrite(id);
   touched();
   return { ok: true, data: undefined };
 }
@@ -190,6 +211,7 @@ async function setDeletedAt(id: string, value: string | null): Promise<ActionRes
   const { data, error } = await supabase.from("activities").update({ deleted_at: value }).eq("id", id).select("id");
   if (error) return { ok: false, error: translateDbError(error) };
   if (!data || data.length === 0) return { ok: false, error: "Registro não encontrado ou sem permissão." };
+  await afterActivityWrite(id);
   touched();
   return { ok: true, data: undefined };
 }

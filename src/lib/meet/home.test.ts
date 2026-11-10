@@ -139,9 +139,14 @@ describe("toScheduledMeeting", () => {
     deal: null,
     person: null,
     organization: null,
+    personHasEmail: false,
+    recordPersonHasEmail: false,
     bookedByActivityId: null,
     legacy: false,
     status: "today",
+    meetUrl: null,
+    calendarState: "none",
+    calendarError: null,
   };
 
   it("monta assunto, horário, situação e o card com link da empresa do próprio registro", () => {

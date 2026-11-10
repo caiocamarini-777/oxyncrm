@@ -7,7 +7,14 @@ import { AgendaMonth } from "@/components/activities/agenda-month";
 import { AgendaWeek } from "@/components/activities/agenda-week";
 import type { CompanyCtx, PageCtx } from "@/components/activities/page-context";
 import { Pagination } from "@/components/records/pagination";
-import { AGENDA_LIMIT, countOverdue, getActivityCatalog, getAgenda, listActivities } from "@/lib/activities/queries";
+import {
+  AGENDA_LIMIT,
+  countOverdue,
+  getActivityCatalog,
+  getAgenda,
+  getCalendarSyncEnabled,
+  listActivities,
+} from "@/lib/activities/queries";
 import { dayKey } from "@/lib/activities/time";
 import { agendaRange, parseActivityListQuery, parseAnchor, parseView } from "@/lib/activities/view";
 import { requireUser } from "@/lib/auth/session";
@@ -48,12 +55,13 @@ export default async function ActivitiesPage({
   const [perCompany, teams] = await Promise.all([
     Promise.all(
       scoped.map(async (company) => {
-        const [permissions, owners, catalog] = await Promise.all([
+        const [permissions, owners, catalog, calendarSync] = await Promise.all([
           getEntityPermissions(company.id, "leads"),
           listAssignableOwners(company.id),
           getActivityCatalog(company.id),
+          getCalendarSyncEnabled(company.id),
         ]);
-        return { company, permissions, owners, catalog };
+        return { company, permissions, owners, catalog, calendarSync };
       }),
     ),
     listTeams(),
@@ -71,6 +79,7 @@ export default async function ActivitiesPage({
         name: c.company.name,
         catalog: c.catalog,
         owners: c.owners,
+        calendarSync: c.calendarSync,
         canCreate: c.permissions.create,
         canEdit: c.permissions.edit,
         canReassign: c.permissions.reassign,

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  CALENDAR_SCOPE,
   callbackRedirectUri,
   decideMailbox,
   gmailErrorMessage,
   GMAIL_ERROR_MESSAGES,
+  hasCalendarScope,
   hasMeetScopes,
+  needsGoogleReconnect,
   hasRequiredScopes,
   MEET_SCOPES,
   REQUIRED_GMAIL_SCOPES,
@@ -121,7 +124,7 @@ describe("hasMeetScopes", () => {
   it("exige os três escopos do assistente", () => {
     expect(MEET_SCOPES).toEqual([
       "https://www.googleapis.com/auth/meetings.space.readonly",
-      "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/drive.meet.readonly",
     ]);
     expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, ...MEET_SCOPES])).toBe(true);
@@ -130,5 +133,50 @@ describe("hasMeetScopes", () => {
     // Conectada antes das anotações do Gemini: falta o escopo do Drive, precisa reconectar.
     expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], MEET_SCOPES[1]])).toBe(false);
     expect(hasMeetScopes([])).toBe(false);
+  });
+
+  it("aceita o escopo de leitura da Agenda das caixas conectadas antes (o assistente só lê)", () => {
+    const readonly = "https://www.googleapis.com/auth/calendar.events.readonly";
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], readonly, MEET_SCOPES[2]])).toBe(true);
+    // Sem nenhum dos dois escopos da Agenda, falta acesso.
+    expect(hasMeetScopes([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], MEET_SCOPES[2]])).toBe(false);
+    // O readonly não serve à sincronização com a Agenda.
+    expect(hasCalendarScope([...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], readonly, MEET_SCOPES[2]])).toBe(false);
+  });
+});
+
+describe("hasCalendarScope", () => {
+  it("é o escopo de leitura e gravação de eventos, o mesmo que o assistente pede", () => {
+    expect(CALENDAR_SCOPE).toBe("https://www.googleapis.com/auth/calendar.events");
+    expect(MEET_SCOPES).toContain(CALENDAR_SCOPE);
+  });
+
+  it("exige o escopo de gravação: o readonly antigo não basta", () => {
+    expect(hasCalendarScope([...REQUIRED_GMAIL_SCOPES, CALENDAR_SCOPE])).toBe(true);
+    expect(hasCalendarScope([...REQUIRED_GMAIL_SCOPES, "https://www.googleapis.com/auth/calendar.events.readonly"])).toBe(false);
+    expect(hasCalendarScope(REQUIRED_GMAIL_SCOPES)).toBe(false);
+    expect(hasCalendarScope([])).toBe(false);
+    expect(hasCalendarScope(null)).toBe(false);
+  });
+});
+
+describe("needsGoogleReconnect", () => {
+  const readonly = "https://www.googleapis.com/auth/calendar.events.readonly";
+  const old = [...REQUIRED_GMAIL_SCOPES, MEET_SCOPES[0], readonly, MEET_SCOPES[2]];
+  const full = [...REQUIRED_GMAIL_SCOPES, ...MEET_SCOPES];
+
+  it("caixa antiga (readonly): o assistente segue; a Agenda ligada pede reconexão", () => {
+    expect(needsGoogleReconnect(old, { meet: true, calendar: false })).toBe(false);
+    expect(needsGoogleReconnect(old, { meet: false, calendar: true })).toBe(true);
+    expect(needsGoogleReconnect(old, { meet: true, calendar: true })).toBe(true);
+  });
+
+  it("sem os escopos do Meet, pede reconexão só com o assistente ligado", () => {
+    expect(needsGoogleReconnect(REQUIRED_GMAIL_SCOPES, { meet: true, calendar: false })).toBe(true);
+    expect(needsGoogleReconnect(REQUIRED_GMAIL_SCOPES, { meet: false, calendar: false })).toBe(false);
+  });
+
+  it("caixa com todos os escopos nunca pede", () => {
+    expect(needsGoogleReconnect(full, { meet: true, calendar: true })).toBe(false);
   });
 });

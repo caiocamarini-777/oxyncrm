@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FormValues } from "./activity-form";
-import { defaultDue, primaryLink, toCreateInput, toEditInput } from "./helpers";
+import { defaultDue, isUnlinked, primaryLink, showsInviteHint, toCreateInput, toEditInput } from "./helpers";
 
 const base: FormValues = {
   typeId: "t",
@@ -57,4 +57,32 @@ describe("primaryLink", () => {
     expect(primaryLink(row({ organization: { id: "o", name: "O" } }))?.href).toBe("/volt/contatos/organizacoes/o");
   });
   it("sem vínculo visível retorna null", () => expect(primaryLink(row({}))).toBeNull());
+});
+
+describe("showsInviteHint", () => {
+  const on = { calendarSync: true, isMeeting: true, person: null, fallback: false };
+
+  it("reunião com a pessoa escolhida que tem e-mail (na criação e na edição)", () => {
+    expect(showsInviteHint({ ...on, person: { hasEmail: true } })).toBe(true);
+    expect(showsInviteHint({ ...on, person: { hasEmail: false }, fallback: true })).toBe(false);
+  });
+
+  it("sem pessoa escolhida, vale a pessoa do negócio ou do lead", () => {
+    expect(showsInviteHint({ ...on, fallback: true })).toBe(true);
+    expect(showsInviteHint(on)).toBe(false);
+  });
+
+  it("Agenda desligada ou tipo que não é reunião: sem aviso", () => {
+    expect(showsInviteHint({ ...on, calendarSync: false, person: { hasEmail: true } })).toBe(false);
+    expect(showsInviteHint({ ...on, isMeeting: false, person: { hasEmail: true } })).toBe(false);
+  });
+});
+
+describe("isUnlinked", () => {
+  it("só sem nenhum dos quatro vínculos", () => {
+    const none = { leadId: null, dealId: null, personId: null, organizationId: null };
+    expect(isUnlinked(none)).toBe(true);
+    expect(isUnlinked({ ...none, organizationId: "o1" })).toBe(false);
+    expect(isUnlinked({ ...none, leadId: "l1" })).toBe(false);
+  });
 });

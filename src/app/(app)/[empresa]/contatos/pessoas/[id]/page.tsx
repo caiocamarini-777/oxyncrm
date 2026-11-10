@@ -8,12 +8,14 @@ import { NoteComposer } from "@/components/records/note-composer";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { RecordHistory } from "@/components/records/record-history";
+import { RecordFiles } from "@/components/records/record-files";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
 import { getTimeline } from "@/lib/timeline/queries";
 import { requireUser } from "@/lib/auth/session";
 import { getAccessibleCompanies, resolveCompanyScope } from "@/lib/companies/scope";
+import { primaryEmail } from "@/lib/calendar/mapping";
 import { getPerson } from "@/lib/persons/queries";
 import { listActiveCustomFieldDefs, listCompanyLabels } from "@/lib/records/lookups";
 import { listAssignableOwners } from "@/lib/records/owners";
@@ -33,7 +35,7 @@ export default async function PersonPage({ params }: { params: Promise<{ empresa
 
   const [timeline, activity, owners, labels, defs, permissions, orgPermissions] = await Promise.all([
     getTimeline("persons", person.id),
-    loadRecordActivity({ entity: "persons", recordId: person.id, companyId: person.companyId, partyName: person.fullName }),
+    loadRecordActivity({ entity: "persons", recordId: person.id, companyId: person.companyId, partyName: person.fullName, personHasEmail: primaryEmail(person.emails) !== null }),
     listAssignableOwners(person.companyId),
     listCompanyLabels(person.companyId),
     listActiveCustomFieldDefs(person.companyId, "persons"),
@@ -76,6 +78,7 @@ export default async function PersonPage({ params }: { params: Promise<{ empresa
             canEdit={permissions.edit}
             canCreateOrganization={orgPermissions.create}
           />
+          <RecordFiles entity="persons" recordId={person.id} />
         </div>
       }
       main={

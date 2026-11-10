@@ -29,12 +29,17 @@ export type ThreadMessageView = {
   /** Corpo já em mãos (caixa ao vivo). Nos cards fica ausente e é buscado ao abrir a mensagem. */
   bodyHtml?: string | null;
   bodyText?: string | null;
-  attachments: { filename: string }[];
+  /** Message-ID do cabeçalho (RFC 5322): esconde o e-mail importado do Pipedrive que já veio pelo Gmail. */
+  rfcMessageId: string | null;
+  /** `fileId`: arquivo em `record_files` (anexo importado do Pipedrive), baixado pela rota `/api/arquivos/[id]`. */
+  attachments: { filename: string; fileId?: string }[];
   direction: "in" | "out";
 };
 
 export type RecordThread = {
   threadId: string;
+  /** Gmail (sincronizado) ou importado do Pipedrive (só leitura: sem responder nem desvincular). */
+  source: "gmail" | "pipedrive";
   /** Caixa da conversa e id da conversa no Gmail (para responder). */
   accountId: string;
   gmailThreadId: string;
@@ -66,13 +71,14 @@ export type MessageRow = {
   cc: unknown;
   sent_at: string;
   snippet: string;
+  rfc_message_id: string | null;
   attachments: unknown;
   direction: "in" | "out";
 };
 
 export type LinkRow = { id: string; thread_id: string };
 
-function addresses(v: unknown): Address[] {
+export function addresses(v: unknown): Address[] {
   if (!Array.isArray(v)) return [];
   const out: Address[] = [];
   for (const a of v) {
@@ -128,6 +134,7 @@ export function buildRecordThreads(input: {
       cc: addresses(m.cc),
       sentAt: m.sent_at,
       snippet: decodeSnippet(m.snippet),
+      rfcMessageId: m.rfc_message_id ?? null,
       attachments: attachmentNames(m.attachments),
       direction: m.direction,
     }));
@@ -137,6 +144,7 @@ export function buildRecordThreads(input: {
     const accountEmail = mineEmail ?? messages.find((m) => m.direction === "out")?.fromEmail ?? null;
     out.push({
       threadId: t.id,
+      source: "gmail",
       accountId: t.account_id,
       gmailThreadId: t.gmail_thread_id,
       linkId,

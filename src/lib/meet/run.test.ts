@@ -1395,6 +1395,127 @@ describe("processMeeting: registro apagado no Pipedrive", () => {
   });
 });
 
+/** Atividade de reunião do CRM ligada ao evento "ev1" da Agenda (o mesmo id que a reunião do Meet traz). */
+const eventActivity = (over: Row = {}): Row => ({
+  id: "a1",
+  company_id: "co",
+  calendar_account_id: "acc1",
+  calendar_event_id: "ev1",
+  done: false,
+  deleted_at: null,
+  deal_id: null,
+  lead_id: null,
+  person_id: null,
+  organization_id: null,
+  due_at: "2026-11-05T14:00:00.000Z",
+  ...over,
+});
+
+/** Reunião em `processing`, sem vínculo, vinda do evento "ev1", com transcrição. */
+function eventTables(activities: Row[], over: Tables = {}): Tables {
+  return baseTables({
+    activities,
+    leads: [{ id: "l1", company_id: "co", title: "Lead Acme", estimated_value: 0, person_id: "pe1", organization_id: "o1", deleted_at: null }],
+    persons: [{ id: "pe1", company_id: "co", full_name: "Cliente", organization_id: "o1", deleted_at: null }],
+    external_ids: [
+      ...(baseTables().external_ids ?? []),
+      { source: "pipedrive", entity: "leads", external_id: "401", company_id: "co", record_id: "l1" },
+    ],
+    meetings: [processingMeeting({ entity: null, record_id: null, calendar_event_id: "ev1", attempts: 0, last_error: null })],
+    meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+    ...over,
+  });
+}
+
+describe("processMeeting: vínculo pelo evento da Agenda", () => {
+  it("rodada inteira: a reunião do evento ev1 vai para o negócio da atividade com o mesmo evento, antes do casador", async () => {
+    // O casador apontaria para outro negócio; a âncora do evento vale mais.
+    loader.candidates = [
+      { ...dealCandidate, deals: [{ id: "d9", personId: "pe1", organizationId: "o1", lastActivityAt: null }] },
+    ];
+    const t = setup({ tables: baseTables({ activities: [eventActivity({ deal_id: "d1", person_id: "pe1" })] }) });
+    vi.mocked(loadCandidates).mockClear();
+    await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({
+      calendar_event_id: "ev1",
+      entity: "deals",
+      record_id: "d1",
+      anchor_activity_id: "a1",
+      status: "done",
+    });
+    expect(loadCandidates).not.toHaveBeenCalled();
+    expect(t.sink.writeNote).toHaveBeenCalledTimes(1);
+  });
+
+  it("ordem de registro: negócio, depois lead, depois pessoa; organização não serve", async () => {
+    const cases: [Row, { entity: string; record_id: string } | null][] = [
+      [{ deal_id: "d1", lead_id: "l1", person_id: "pe1", organization_id: "o1" }, { entity: "deals", record_id: "d1" }],
+      [{ lead_id: "l1", person_id: "pe1", organization_id: "o1" }, { entity: "leads", record_id: "l1" }],
+      [{ person_id: "pe1", organization_id: "o1" }, { entity: "persons", record_id: "pe1" }],
+      [{ organization_id: "o1" }, null],
+    ];
+    for (const [links, expected] of cases) {
+      resetSeq();
+      loader.candidates = [];
+      const t = setup({ tables: eventTables([eventActivity(links)]) });
+      vi.mocked(loadCandidates).mockClear();
+      await processMeeting(t.deps, "m1");
+      if (expected) {
+        expect(t.tables.meetings[0]).toMatchObject({ ...expected, anchor_activity_id: "a1", status: "done" });
+        expect(loadCandidates).not.toHaveBeenCalled();
+      } else {
+        // Só organização: cai no casador (sem candidatos aqui), que deixa a reunião sem vínculo.
+        expect(t.tables.meetings[0]).toMatchObject({ entity: null, record_id: null, anchor_activity_id: null, status: "unlinked" });
+        expect(loadCandidates).toHaveBeenCalledTimes(1);
+      }
+    }
+  });
+
+  it.each([
+    ["concluída", { done: true }],
+    ["na lixeira", { deleted_at: "2026-11-05T13:00:00.000Z" }],
+    ["de outra empresa", { company_id: "outra" }],
+    ["de outro evento", { calendar_event_id: "ev2" }],
+  ])("atividade %s não ancora: cai no casador por horário", async (_name, over) => {
+    const t = setup({ tables: eventTables([eventActivity({ deal_id: "d1", ...over })]) });
+    vi.mocked(loadCandidates).mockClear();
+    await processMeeting(t.deps, "m1");
+    expect(loadCandidates).toHaveBeenCalledTimes(1);
+    // Foi o casador que escolheu o negócio d1, e ele não traz âncora.
+    expect(t.tables.meetings[0]).toMatchObject({ entity: "deals", record_id: "d1", anchor_activity_id: null, status: "done" });
+  });
+
+  it("reunião sem evento (calendar_event_id nulo) nem consulta as atividades", async () => {
+    const t = setup({ tables: eventTables([eventActivity({ deal_id: "d1" })]) });
+    t.tables.meetings[0].calendar_event_id = null;
+    t.log.length = 0;
+    await processMeeting(t.deps, "m1");
+    expect(t.log.some((l) => l.table === "activities")).toBe(false);
+    expect(t.tables.meetings[0]).toMatchObject({ entity: "deals", anchor_activity_id: null });
+  });
+
+  it("vínculo já gravado (casado antes ou escolhido pelo vendedor) não é trocado pela âncora", async () => {
+    const t = setup({
+      tables: eventTables([eventActivity({ lead_id: "l1" })], {
+        meetings: [processingMeeting({ calendar_event_id: "ev1", attempts: 0, last_error: null })],
+      }),
+    });
+    await processMeeting(t.deps, "m1");
+    expect(t.tables.meetings[0]).toMatchObject({ entity: "deals", record_id: "d1", anchor_activity_id: null });
+  });
+
+  it("a mesma atividade em duas Agendas: vale a da caixa que trouxe a reunião", async () => {
+    const t = setup({
+      tables: eventTables([
+        eventActivity({ id: "a0", calendar_account_id: "acc2", lead_id: "l1" }),
+        eventActivity({ id: "a1", calendar_account_id: "acc1", deal_id: "d1" }),
+      ]),
+    });
+    await processMeeting(t.deps, "m1");
+    expect(t.tables.meetings[0]).toMatchObject({ entity: "deals", record_id: "d1", anchor_activity_id: "a1" });
+  });
+});
+
 describe("aviso de reunião sem vínculo", () => {
   it("fica lido quando a reunião é vinculada e concluída", async () => {
     loader.candidates = [];

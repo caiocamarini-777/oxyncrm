@@ -10,6 +10,7 @@ import { REMINDER_OPTIONS } from "@/lib/activities/reminders";
 import type { AssignableOwner } from "@/lib/records/types";
 import { cn } from "cn";
 import { TypeIcon } from "./activity-chip";
+import { showsInviteHint } from "./helpers";
 
 export type FormType = { id: string; name: string; isMeeting: boolean };
 export type FormChannel = { id: string; name: string };
@@ -75,6 +76,8 @@ export function ActivityForm({
   canReassign,
   initial,
   parties,
+  calendarSync = false,
+  inviteFallback = false,
   withDescription = true,
   autoFocusFirst = false,
   submitLabel,
@@ -91,6 +94,10 @@ export function ActivityForm({
   initial: FormInitial;
   /** Quais vínculos relacionados o usuário pode ajustar. */
   parties: ("person" | "organization")[];
+  /** A empresa sincroniza com a Agenda do Google: reunião com pessoa que tem e-mail convida o cliente. */
+  calendarSync?: boolean;
+  /** Sem pessoa escolhida, a reunião convida a pessoa do negócio ou do lead: ela tem e-mail. */
+  inviteFallback?: boolean;
   withDescription?: boolean;
   /** Foca o primeiro campo (tipo) ao abrir. */
   autoFocusFirst?: boolean;
@@ -160,6 +167,12 @@ export function ActivityForm({
   }
 
   const currentType = types.find((t) => t.id === typeId);
+  const showInviteHint = showsInviteHint({
+    calendarSync,
+    isMeeting: currentType?.isMeeting === true,
+    person: shownPerson,
+    fallback: inviteFallback,
+  });
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-3" data-testid="activity-form">
@@ -294,6 +307,11 @@ export function ActivityForm({
             </div>
           ) : null}
         </div>
+      ) : null}
+      {showInviteHint ? (
+        <p data-testid="calendar-invite-hint" className="text-xs text-muted-foreground">
+          O cliente recebe o convite com link do Meet.
+        </p>
       ) : null}
       {errors.links ? <p role="alert" className="text-xs text-destructive">{errors.links}</p> : null}
       {formError && Object.keys(errors).length === 0 ? (

@@ -8,6 +8,8 @@ export type CompanyCtx = {
   name: string;
   catalog: ActivityCatalog;
   owners: AssignableOwner[];
+  /** A empresa sincroniza com a Agenda do Google. */
+  calendarSync: boolean;
   canCreate: boolean;
   canEdit: boolean;
   canReassign: boolean;
@@ -30,6 +32,8 @@ export function completeDataFor(ctx: PageCtx, company: CompanyCtx): RecordActivi
     recordId: "",
     links: { leadId: null, dealId: null, personId: null, organizationId: null },
     partyName: "",
+    personHasEmail: false,
+    calendarSync: company.calendarSync,
     open: [],
     catalog: company.catalog,
     owners: company.owners,

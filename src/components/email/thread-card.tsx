@@ -67,6 +67,7 @@ export function ThreadCard({ thread, extra }: { thread: RecordThread; extra?: Re
       </button>
       <div className="flex items-center gap-3 px-3 pb-2 pt-1.5 text-xs text-muted-foreground">
         <span className="rounded bg-muted px-1.5 py-0.5">{s.direction === "out" ? "Enviado" : "Recebido"}</span>
+        {thread.source === "pipedrive" && <span className="rounded bg-muted px-1.5 py-0.5">Importado do Pipedrive</span>}
         {s.messages > 1 ? (
           <span className="flex items-center gap-1">
             <MessagesSquare className="size-3.5" aria-hidden /> {s.messages} mensagens
@@ -86,16 +87,22 @@ export function ThreadCard({ thread, extra }: { thread: RecordThread; extra?: Re
       </div>
       {open && (
         <div id={panelId} className="flex flex-col gap-2 border-t p-3">
-          {thread.accountEmail && (
+          {thread.source === "gmail" && thread.accountEmail && (
             <p className="text-xs text-muted-foreground">
               Caixa: {thread.accountEmail}
               {thread.isMine ? " (sua)" : ""}
             </p>
           )}
           {thread.messages.map((m, i) => (
-            <MessageView key={m.id} message={m} subject={subject} defaultOpen={i === thread.messages.length - 1} />
+            <MessageView
+              key={m.id}
+              message={m}
+              subject={subject}
+              source={thread.source}
+              defaultOpen={i === thread.messages.length - 1}
+            />
           ))}
-          {thread.canUnlink && (
+          {thread.source === "gmail" && thread.canUnlink && (
             <div className="flex justify-end">
               <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void unlink()}>
                 Desvincular

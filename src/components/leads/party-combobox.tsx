@@ -8,7 +8,12 @@ import { searchPersonsByName } from "@/lib/leads/actions";
 import { searchOrganizations } from "@/lib/persons/actions";
 
 /** `id: null` = ainda não existe; será criada junto com o lead. */
-export type PartyValue = { id: string | null; name: string };
+export type PartyValue = {
+  id: string | null;
+  name: string;
+  /** Só pessoas escolhidas na busca: a pessoa tem e-mail (o formulário de atividade usa para o aviso do convite). */
+  hasEmail?: boolean;
+};
 
 const NOUN = {
   person: { label: "Pessoa", lower: "pessoa", none: "Nenhuma pessoa encontrada.", create: "Criar pessoa nova" },
@@ -39,7 +44,7 @@ export function PartyCombobox({
   const noun = NOUN[kind];
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
-  const [results, setResults] = useState<{ id: string; name: string }[]>([]);
+  const [results, setResults] = useState<{ id: string; name: string; hasEmail?: boolean }[]>([]);
 
   useEffect(() => {
     if (!open) return;

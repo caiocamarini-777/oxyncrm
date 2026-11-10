@@ -1,5 +1,7 @@
 import "server-only";
 import { cache } from "react";
+import { primaryEmail } from "@/lib/calendar/mapping";
+import { readCalendarSettings } from "@/lib/calendar/settings";
 import type { CompanyScope } from "@/lib/companies/pure";
 import { safeTerm } from "@/lib/records/list-helpers";
 import { PAGE_SIZE, type ListQuery, type Paged, type RecordEntity } from "@/lib/records/types";
@@ -176,6 +178,36 @@ export async function getActivitiesFor(
   if (done.error) fail("concluídas do registro", done.error);
   const toRows = (d: unknown) => ((d ?? []) as RawRow[]).map((r) => toActivityRow(r, now));
   return { open: toRows(open.data), done: toRows(done.data) };
+}
+
+/**
+ * A empresa sincroniza as atividades com a Agenda do Google? Só informa a tela (aviso do convite no formulário), então
+ * falha na leitura conta como desligada, sem derrubar a página.
+ */
+export async function getCalendarSyncEnabled(companyId: string): Promise<boolean> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from("companies").select("settings").eq("id", companyId).maybeSingle();
+  if (error) {
+    console.error("[atividades] configuração da Agenda:", error.code, error.message);
+    return false;
+  }
+  return readCalendarSettings((data as { settings?: unknown } | null)?.settings).enabled;
+}
+
+/**
+ * A pessoa do negócio ou do lead tem e-mail (fora da lixeira): a reunião criada no registro sem escolher pessoa
+ * convida essa pessoa pela Agenda. Só informa a tela (aviso do convite), então falha na leitura conta como não.
+ */
+export async function getRecordPersonHasEmail(entity: "deals" | "leads", id: string): Promise<boolean> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.from(entity).select("person:persons(emails, deleted_at)").eq("id", id).maybeSingle();
+  if (error) {
+    console.error("[atividades] pessoa do registro:", error.code, error.message);
+    return false;
+  }
+  const rel = (data as { person?: unknown } | null)?.person;
+  const person = (Array.isArray(rel) ? rel[0] : rel) as { emails: unknown; deleted_at: string | null } | null | undefined;
+  return !!person && !person.deleted_at && primaryEmail(person.emails) !== null;
 }
 
 export type ActivityCatalogItem = { id: string; name: string; active: boolean };

@@ -8,6 +8,8 @@
 // de registro perderia mais de 5% de uma vez, nada é apagado e o script falha. --sem-trava tira o limite;
 // --simular só conta o que seria apagado.
 // Depois rode pnpm import:pipedrive-etapas para refazer o histórico de etapas.
+// Não roda com a atualização do Pipedrive pelo CRM ligada (pnpm sync:crm-para-pipedrive): as duas ao mesmo tempo
+// sobrescreveriam e apagariam o que o CRM ainda não enviou.
 // O token vem de PIPEDRIVE_API_TOKEN e nunca é impresso.
 import { loadEnv } from "./load-env";
 import { createAdminClient } from "../src/lib/supabase/admin";
@@ -16,6 +18,7 @@ import { runImportToEnd } from "../src/lib/import/engine";
 import { pruneMissingCompanies } from "../src/lib/import/mapping";
 import { ImportMappings } from "../src/lib/import/pipedrive/types";
 import { createSupabaseStore } from "../src/lib/import/store";
+import { assertPushDisabled } from "../src/lib/pipedrive-push/store";
 
 loadEnv();
 
@@ -24,13 +27,15 @@ const MAX_PRUNE_RATIO = 0.05;
 type PruneResult = { counts: Record<string, { apagar: number; total: number }>; blocked: string[]; applied: boolean };
 
 async function main() {
+  const admin = createAdminClient();
+  // antes de qualquer coisa: com a atualização do Pipedrive pelo CRM ligada, sai com o código 1
+  await assertPushDisabled(admin);
   const args = new Set(process.argv.slice(2));
   const mirror = args.has("--espelho");
   const simulate = args.has("--simular");
   const noLimit = args.has("--sem-trava");
   const token = process.env.PIPEDRIVE_API_TOKEN;
   if (!token) throw new Error("PIPEDRIVE_API_TOKEN ausente.");
-  const admin = createAdminClient();
 
   const { data: last, error } = await admin
     .from("import_jobs")

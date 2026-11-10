@@ -1,0 +1,48 @@
+name: Pipedrive atualizado pelo CRM
+
+# Piloto pós-virada: de hora em hora, copia para o Pipedrive o que foi criado, mudado ou apagado no CRM
+# (organizações, pessoas, leads, negócios, atividades e anotações). O CRM é a origem; o Pipedrive é a cópia de segurança.
+# Duas chaves, ligadas e desligadas juntas (docs/piloto-pipedrive.md):
+# - a variável PIPEDRIVE_BACKUP do repositório em "on" deixa o job começar; fora do piloto ele nem roda e não gasta
+#   minutos do Actions (gh variable set PIPEDRIVE_BACKUP --body on|off);
+# - a configuração no banco (pnpm sync:crm-para-pipedrive --ligar/--desligar) diz se a rodada envia algo. Desligada,
+#   com o modo espelho ainda ativo ou com outra rodada em andamento, a rodada sai na hora (skipped) e o workflow
+#   termina verde.
+# Agendamentos só rodam a partir da branch padrão. O GitHub pode atrasar o horário; os cursores no banco cobrem o atraso.
+# Também roda à mão em Actions > Pipedrive atualizado pelo CRM > Run workflow.
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipedrive-backup
+  cancel-in-progress: false
+
+jobs:
+  push:
+    if: vars.PIPEDRIVE_BACKUP == 'on'
+    runs-on: ubuntu-latest
+    # a rodada para sozinha aos 45 min; o timeout é só a rede de segurança
+    timeout-minutes: 55
+    # secrets do ambiente "producao" (banco real), separados dos secrets do CI
+    environment: producao
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # sem secrets na instalação: os scripts das dependências não veem a chave do banco nem o token
+      - run: pnpm install --frozen-lockfile
+      - name: Atualizar o Pipedrive com o que mudou no CRM
+        run: pnpm sync:crm-para-pipedrive
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}

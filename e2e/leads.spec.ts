@@ -26,7 +26,7 @@ const permissions = {
 };
 
 async function newPage(browser: Browser): Promise<Page> {
-  const ctx = await browser.newContext({ baseURL: "http://localhost:3000", acceptDownloads: true });
+  const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL, acceptDownloads: true });
   const page = await ctx.newPage();
   await login(page, email, password);
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));

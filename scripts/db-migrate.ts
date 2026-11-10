@@ -1,4 +1,4 @@
-// Aplica supabase/migrations/*.sql no projeto Supabase de dev (SUPABASE_DB_URL).
+// Aplica supabase/migrations/*.sql no projeto Supabase de SUPABASE_DB_URL (.env.local, ou ENV_FILE).
 import { spawnSync } from "node:child_process";
 import { loadEnv, requireDbUrl } from "./load-env";
 

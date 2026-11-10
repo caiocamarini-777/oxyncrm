@@ -22,6 +22,11 @@ const NEW_PER = "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e"; // criada no CRM, ainda 
 const STAGE = "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f";
 const NEW_STAGE = "10101010-1010-4010-8010-101010101010"; // etapa criada no CRM durante o piloto
 const PD_LEAD = "5d2b1f9a-7c1e-4b8e-9f00-aaaaaaaaaaaa";
+// na lixeira do CRM (e apagados no Pipedrive pela rodada): vínculo vazio
+const GONE_ORG = "1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a";
+const GONE_PER = "1b1b1b1b-1b1b-4b1b-8b1b-1b1b1b1b1b1b";
+const GONE_DEAL = "1d1d1d1d-1d1d-4d1d-8d1d-1d1d1d1d1d1d";
+const gone = new Set([`organizations:${GONE_ORG}`, `persons:${GONE_PER}`, `deals:${GONE_DEAL}`]);
 
 const pdIds: Record<string, string> = {
   [`organizations:${ORG}`]: "8",
@@ -40,6 +45,7 @@ const outcomes: Record<string, number> = {
 const ctx: PushCtx = {
   pdUserOf: (id) => (id === U1 ? 5 : null),
   pdIdOf: (entity, id) => (id ? (pdIds[`${entity}:${id}`] ?? null) : null),
+  isGone: (entity, id) => gone.has(`${entity}:${id}`),
   pdStageOf: (id) => (id === STAGE ? 10 : null),
   pdLeadLabelOf: (company) => (company === C1 ? "label-c1" : null),
   customFields: [
@@ -52,7 +58,8 @@ const ctx: PushCtx = {
     { crmKey: "observacao", pdKey: "hash_obs", type: "varchar" },
     { crmKey: "inicio", pdKey: "hash_inicio", type: "date" },
   ],
-  pdActivityTypeOf: (name, isMeeting) => (name === "Ligação" ? "call" : isMeeting ? "meeting" : "task"),
+  pdActivityTypeOf: (name, isMeeting, channel) =>
+    channel === "WhatsApp" ? "whatsapp" : name === "Ligação" ? "call" : isMeeting ? "meeting" : "task",
   pdOutcomeOf: (label) => (label ? (outcomes[label] ?? null) : null),
 };
 
@@ -146,6 +153,10 @@ describe("toPdPerson", () => {
       error: "organização ainda sem id no Pipedrive",
     });
   });
+
+  it("organização na lixeira do CRM vira vínculo vazio, e a pessoa vai", () => {
+    expect(bodyOf(toPdPerson({ ...person, organization_id: GONE_ORG }, ctx)).org_id).toBeNull();
+  });
 });
 
 describe("toPdLead", () => {
@@ -160,7 +171,7 @@ describe("toPdLead", () => {
     status: "open",
   };
 
-  it("título, vínculos, dono, valor e a etiqueta de lead da empresa", () => {
+  it("título, vínculos, dono e valor; a etiqueta de lead da empresa só na criação (o PATCH trocaria as do lead)", () => {
     expect(toPdLead(lead, ctx)).toEqual({
       path: "/v1/leads",
       body: {
@@ -169,14 +180,16 @@ describe("toPdLead", () => {
         organization_id: 8,
         owner_id: 5,
         value: { amount: 1500, currency: "BRL" },
-        label_ids: ["label-c1"],
         is_archived: false,
       },
+      createOnly: { label_ids: ["label-c1"] },
     });
   });
 
   it("empresa sem etiqueta de lead não manda label_ids; sem valor vai null", () => {
-    const b = bodyOf(toPdLead({ ...lead, company_id: C2, estimated_value: null }, ctx));
+    const p = toPdLead({ ...lead, company_id: C2, estimated_value: null }, ctx);
+    expect(p).not.toHaveProperty("createOnly");
+    const b = bodyOf(p);
     expect(b).not.toHaveProperty("label_ids");
     expect(b.value).toBeNull();
   });
@@ -195,10 +208,23 @@ describe("toPdLead", () => {
     expect(toPdLead({ ...lead, person_id: NEW_PER }, ctx)).toEqual({ error: "pessoa ainda sem id no Pipedrive" });
   });
 
-  it("sem pessoa nem organização é erro (o Pipedrive exige um dos dois)", () => {
-    expect(toPdLead({ ...lead, person_id: null, organization_id: null }, ctx)).toEqual({
-      error: "lead sem pessoa nem organização (o Pipedrive exige um dos dois)",
-    });
+  it("sem pessoa nem organização não cria (o Pipedrive exige um dos dois); a atualização vai sem as duas chaves", () => {
+    for (const links of [
+      { person_id: null, organization_id: null },
+      { person_id: GONE_PER, organization_id: GONE_ORG },
+    ]) {
+      const p = toPdLead({ ...lead, ...links }, ctx);
+      expect(p).toMatchObject({ createError: "lead sem pessoa nem organização (o Pipedrive exige um dos dois)" });
+      expect(bodyOf(p)).not.toHaveProperty("person_id");
+      expect(bodyOf(p)).not.toHaveProperty("organization_id");
+      expect(bodyOf(p).title).toBe("Lead Acme");
+    }
+  });
+
+  it("pessoa na lixeira do CRM vira vínculo vazio, e o lead vai pela organização", () => {
+    const p = toPdLead({ ...lead, person_id: GONE_PER }, ctx);
+    expect(p).not.toHaveProperty("createError");
+    expect(bodyOf(p)).toMatchObject({ person_id: null, organization_id: 8 });
   });
 });
 
@@ -272,11 +298,20 @@ describe("toPdDeal", () => {
     expect(toPdDeal({ ...deal, person_id: NEW_PER }, ctx)).toEqual({ error: "pessoa ainda sem id no Pipedrive" });
   });
 
-  it("sem pessoa nem organização é erro; só com a organização vai a pessoa null", () => {
-    expect(toPdDeal({ ...deal, person_id: null, organization_id: null }, ctx)).toEqual({
-      error: "negócio sem pessoa nem organização (o Pipedrive exige um dos dois)",
+  it("sem pessoa nem organização não cria; a atualização vai sem as duas; só com a organização vai a pessoa null", () => {
+    const p = toPdDeal({ ...deal, person_id: GONE_PER, organization_id: null }, ctx);
+    expect(p).toMatchObject({
+      createError: "negócio sem pessoa nem organização (o Pipedrive exige um dos dois)",
+      body: { title: "Negócio A", status: "open", stage_id: 10 },
     });
+    expect(bodyOf(p)).not.toHaveProperty("person_id");
+    expect(bodyOf(p)).not.toHaveProperty("org_id");
     expect(bodyOf(toPdDeal({ ...deal, person_id: null }, ctx))).toMatchObject({ person_id: null, org_id: 8 });
+    expect(toPdDeal({ ...deal, person_id: null }, ctx)).not.toHaveProperty("createError");
+  });
+
+  it("pessoa na lixeira do CRM vira vínculo vazio (não espera por ela)", () => {
+    expect(bodyOf(toPdDeal({ ...deal, person_id: GONE_PER }, ctx))).toMatchObject({ person_id: null, org_id: 8 });
   });
 
   it("dono sem usuário no Pipedrive fica de fora", () => {
@@ -373,6 +408,13 @@ describe("toPdActivity", () => {
     expect(bodyOf(toPdActivity(held, ctx))).not.toHaveProperty("outcome");
   });
 
+  it("o tipo sai do nome do tipo, de reunião e do canal (o canal vem do embed)", () => {
+    const task = { ...meeting, activity_type: { name: "Tarefa", is_meeting: false }, meeting_outcome: null, outcome: null };
+    expect(bodyOf(toPdActivity({ ...task, channel: { name: "WhatsApp" } }, ctx)).type).toBe("whatsapp");
+    expect(bodyOf(toPdActivity({ ...task, channel: { name: "Não informado" } }, ctx)).type).toBe("task");
+    expect(bodyOf(toPdActivity({ ...task, channel: null }, ctx)).type).toBe("task");
+  });
+
   it("tentativa concluída leva o resultado pelo inverso da importação", () => {
     const call = {
       ...meeting,
@@ -412,6 +454,18 @@ describe("toPdActivity", () => {
 
   it("relacionado ainda sem id no Pipedrive é erro", () => {
     expect(toPdActivity({ ...meeting, person_id: NEW_PER }, ctx)).toEqual({ error: "pessoa ainda sem id no Pipedrive" });
+  });
+
+  it("relacionado na lixeira do CRM fica de fora; só com vínculos na lixeira, a atualização vai e a criação não", () => {
+    const p = toPdActivity({ ...meeting, deal_id: GONE_DEAL }, ctx);
+    expect(p).not.toHaveProperty("createError");
+    expect(bodyOf(p)).not.toHaveProperty("deal_id");
+    expect(bodyOf(p)).toMatchObject({ person_id: 7, org_id: 8 });
+
+    const orphan = toPdActivity({ ...meeting, deal_id: GONE_DEAL, person_id: GONE_PER, organization_id: null }, ctx);
+    expect(orphan).toMatchObject({ createError: "atividade só com vínculos na lixeira do CRM", body: { subject: "Reunião de diagnóstico" } });
+    expect(bodyOf(orphan)).not.toHaveProperty("deal_id");
+    expect(bodyOf(orphan)).not.toHaveProperty("person_id");
   });
 
   it("sem tipo carregado, sem data ou sem vínculo é erro", () => {
@@ -457,5 +511,13 @@ describe("toPdNote", () => {
       error: "pessoa ainda sem id no Pipedrive",
     });
     expect(toPdNote({ ...note, body: "  " }, ctx)).toEqual({ error: "anotação vazia" });
+  });
+
+  it("registro vinculado na lixeira do CRM: a atualização vai só com o conteúdo, e a criação não", () => {
+    expect(toPdNote({ ...note, record_id: GONE_DEAL }, ctx)).toEqual({
+      path: "/v1/notes",
+      body: { content: "Linha 1<br>Linha &lt;2&gt;", user_id: 5 },
+      createError: "anotação de um registro na lixeira do CRM",
+    });
   });
 });

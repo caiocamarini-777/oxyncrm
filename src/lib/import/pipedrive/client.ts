@@ -201,14 +201,17 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     post: (path: string, body: unknown): Promise<unknown> => write("POST", path, body),
     put: (path: string, body: unknown): Promise<unknown> => write("PUT", path, body),
     patch: (path: string, body: unknown): Promise<unknown> => write("PATCH", path, body),
-    /** DELETE com as mesmas tentativas; 404 não é erro (o registro já foi apagado). O corpo da resposta é ignorado. */
+    /**
+     * DELETE com as mesmas tentativas; 404 e 410 não são erro (o registro já foi apagado). O corpo da resposta é
+     * ignorado.
+     */
     async del(path: string): Promise<void> {
       try {
         await fetchWithRetry(path, { ...JSON_MODE, method: "DELETE", errorDetail: true }, async (res) => {
           await res.body?.cancel().catch(() => {});
         });
       } catch (e) {
-        if (e instanceof PipedriveError && e.status === 404) return;
+        if (e instanceof PipedriveError && (e.status === 404 || e.status === 410)) return;
         throw e;
       }
     },

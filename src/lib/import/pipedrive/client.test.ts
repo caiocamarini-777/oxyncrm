@@ -407,10 +407,12 @@ describe("cliente do Pipedrive", () => {
       }
     });
 
-    it("404 no del não lança (já apagado) e não repete", async () => {
-      const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 404 }));
-      await expect(mk(fetchImpl).del("/v1/persons/9")).resolves.toBeUndefined();
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    it("404 e 410 no del não lançam (já apagado) e não repetem", async () => {
+      for (const status of [404, 410]) {
+        const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status }));
+        await expect(mk(fetchImpl).del("/v1/persons/9")).resolves.toBeUndefined();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      }
     });
 
     it("404 em post, put e patch continua sendo erro", async () => {

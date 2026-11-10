@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PdFieldDef, PdItem } from "@/lib/import/pipedrive/types";
 import { fakeDb, resetSeq, type Tables } from "@/lib/meet/fake-db.test-support";
-import { MIRROR_GUARD_MS, supabasePushStore, type PushMetaClient } from "./store";
+import {
+  assertPushDisabled,
+  MIRROR_GUARD_MS,
+  PUSH_ENABLED_MESSAGE,
+  RUN_LOCK_MS,
+  supabasePushStore,
+  type PushMetaClient,
+} from "./store";
 
 const C1 = "11111111-1111-4111-8111-111111111111";
 const C2 = "22222222-2222-4222-8222-222222222222";
@@ -21,8 +28,18 @@ const NOW = new Date("2026-11-09T15:00:00.000Z");
 /** Ids que ordenam como texto na ordem dos números (o banco ordena uuid do mesmo jeito). */
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
-function client(over: Partial<{ deal: PdFieldDef[]; activity: PdFieldDef[]; types: PdItem[] }> = {}): PushMetaClient {
+type MetaOver = Partial<{ deal: PdFieldDef[]; activity: PdFieldDef[]; types: PdItem[]; stages: PdItem[]; pipelines: PdItem[] }>;
+
+function client(over: MetaOver = {}, calls: string[] = []): PushMetaClient {
   return {
+    stages: async () => {
+      calls.push("stages");
+      return over.stages ?? [];
+    },
+    pipelines: async () => {
+      calls.push("pipelines");
+      return over.pipelines ?? [];
+    },
     dealFields: async () =>
       over.deal ?? [
         { key: "hash_setup", name: "Setup", field_type: "monetary" },
@@ -43,6 +60,8 @@ function client(over: Partial<{ deal: PdFieldDef[]; activity: PdFieldDef[]; type
       over.types ?? [
         { name: "Reunião", key_string: "meeting", active_flag: true },
         { name: "Chamada", key_string: "call", active_flag: true },
+        { name: "E-mail", key_string: "email", active_flag: true },
+        { name: "Tarefa", key_string: "task", active_flag: true },
         { name: "WhatsApp", key_string: "whatsapp", active_flag: true },
         { name: "Visita", key_string: "visita", active_flag: false },
       ],
@@ -55,6 +74,8 @@ function importJob(over: Record<string, unknown> = {}) {
     source: "pipedrive",
     status: "done",
     mirror: false,
+    created_at: "2026-11-08T08:59:00.000Z",
+    started_at: "2026-11-08T09:00:00.000Z",
     finished_at: "2026-11-08T10:00:00.000Z",
     mappings: {
       users: { "5": U1, "9": U1, "6": U2 },
@@ -75,7 +96,7 @@ function importJob(over: Record<string, unknown> = {}) {
 
 function setup(tables: Tables = {}, meta: PushMetaClient = client()) {
   const base: Tables = {
-    pipedrive_push_settings: [{ id: 1, enabled: false, enabled_at: null, cursor: null }],
+    pipedrive_push_settings: [{ id: 1, enabled: false, enabled_at: null, cursor: null, cursors: {} }],
     pipedrive_push_runs: [],
     pipedrive_push_retry: [],
     external_ids: [],
@@ -89,18 +110,36 @@ function setup(tables: Tables = {}, meta: PushMetaClient = client()) {
 beforeEach(() => resetSeq());
 
 describe("settings e liga/desliga", () => {
-  it("lê a configuração; sem a linha, desligada e sem cursor", async () => {
-    const { store } = setup({ pipedrive_push_settings: [{ id: 1, enabled: true, enabled_at: CURSOR, cursor: CURSOR }] });
-    expect(await store.settings()).toEqual({ enabled: true, cursor: CURSOR });
-    expect(await setup({ pipedrive_push_settings: [] }).store.settings()).toEqual({ enabled: false, cursor: null });
+  it("lê a configuração com os cursores por entidade; sem a linha, desligada e sem cursor", async () => {
+    const T = "2026-11-09T13:00:00.123456+00:00";
+    const { store } = setup({
+      pipedrive_push_settings: [
+        {
+          id: 1,
+          enabled: true,
+          enabled_at: CURSOR,
+          cursor: CURSOR,
+          cursors: { organizations: { at: T, id: ORG }, persons: { at: T }, outra: { at: T }, deals: { id: DEAL } },
+        },
+      ],
+    });
+    expect(await store.settings()).toEqual({
+      enabled: true,
+      cursor: CURSOR,
+      cursors: { organizations: { at: T, id: ORG }, persons: { at: T } },
+    });
+    expect(await setup({ pipedrive_push_settings: [] }).store.settings()).toEqual({ enabled: false, cursor: null, cursors: {} });
   });
 
-  it("ligar grava enabled_at agora e o cursor no fim da última importação concluída", async () => {
+  it("ligar grava enabled_at agora, o cursor no início da última importação concluída e zera os cursores", async () => {
     const { store, tables } = setup({
+      pipedrive_push_settings: [
+        { id: 1, enabled: false, enabled_at: null, cursor: CURSOR, cursors: { organizations: { at: CURSOR } } },
+      ],
       import_jobs: [
-        importJob({ id: "job-antigo", mirror: false, finished_at: "2026-11-07T10:00:00.000Z" }),
-        importJob({ id: "job-ultimo", mirror: true, finished_at: "2026-11-09T09:30:00.000Z" }),
-        importJob({ id: "job-rodando", status: "running", finished_at: null }),
+        importJob({ id: "job-antigo", mirror: false, started_at: "2026-11-07T09:00:00.000Z", finished_at: "2026-11-07T10:00:00.000Z" }),
+        importJob({ id: "job-ultimo", mirror: true, started_at: "2026-11-09T09:00:00.000Z", finished_at: "2026-11-09T09:30:00.000Z" }),
+        importJob({ id: "job-rodando", status: "running", started_at: "2026-11-09T10:00:00.000Z", finished_at: null }),
         importJob({ id: "job-outra-fonte", source: "csv", finished_at: "2026-11-09T11:00:00.000Z" }),
       ],
     });
@@ -109,8 +148,16 @@ describe("settings e liga/desliga", () => {
       id: 1,
       enabled: true,
       enabled_at: NOW.toISOString(),
-      cursor: "2026-11-09T09:30:00.000Z",
+      // o que entrou no CRM durante a sincronização final também vai
+      cursor: "2026-11-09T09:00:00.000Z",
+      cursors: {},
     });
+  });
+
+  it("ligar com a última importação sem started_at: usa o created_at dela", async () => {
+    const { store, tables } = setup({ import_jobs: [importJob({ started_at: null })] });
+    await store.setEnabled(true, NOW);
+    expect(tables.pipedrive_push_settings[0].cursor).toBe("2026-11-08T08:59:00.000Z");
   });
 
   it("ligar sem nenhuma importação concluída: o cursor é o momento em que foi ligado", async () => {
@@ -119,26 +166,77 @@ describe("settings e liga/desliga", () => {
     expect(tables.pipedrive_push_settings[0]).toMatchObject({ enabled_at: NOW.toISOString(), cursor: NOW.toISOString() });
   });
 
-  it("ligar de novo a rotina já ligada não mexe no cursor", async () => {
+  it("ligar de novo a rotina já ligada não mexe nos cursores", async () => {
+    const cursors = { organizations: { at: "2026-11-09T13:00:00.000Z" } };
     const { store, tables } = setup({
-      pipedrive_push_settings: [{ id: 1, enabled: true, enabled_at: CURSOR, cursor: CURSOR }],
+      pipedrive_push_settings: [{ id: 1, enabled: true, enabled_at: CURSOR, cursor: CURSOR, cursors }],
     });
     await store.setEnabled(true, NOW);
-    expect(tables.pipedrive_push_settings[0]).toMatchObject({ enabled: true, enabled_at: CURSOR, cursor: CURSOR });
+    expect(tables.pipedrive_push_settings[0]).toMatchObject({ enabled: true, enabled_at: CURSOR, cursor: CURSOR, cursors });
   });
 
-  it("desligar só desliga (o cursor fica para consulta)", async () => {
+  it("desligar só desliga (os cursores ficam para consulta)", async () => {
+    const cursors = { organizations: { at: "2026-11-09T13:00:00.000Z" } };
     const { store, tables } = setup({
-      pipedrive_push_settings: [{ id: 1, enabled: true, enabled_at: CURSOR, cursor: CURSOR }],
+      pipedrive_push_settings: [{ id: 1, enabled: true, enabled_at: CURSOR, cursor: CURSOR, cursors }],
     });
     await store.setEnabled(false, NOW);
-    expect(tables.pipedrive_push_settings[0]).toMatchObject({ enabled: false, cursor: CURSOR });
+    expect(tables.pipedrive_push_settings[0]).toMatchObject({ enabled: false, cursor: CURSOR, cursors });
   });
 
-  it("saveCursor grava o cursor", async () => {
-    const { store, tables } = setup();
-    await store.saveCursor("2026-11-09T14:00:00.000Z");
-    expect(tables.pipedrive_push_settings[0].cursor).toBe("2026-11-09T14:00:00.000Z");
+  it("saveCursors grava os cursores por entidade, sem mexer no inicial", async () => {
+    const { store, tables } = setup({
+      pipedrive_push_settings: [{ id: 1, enabled: true, enabled_at: CURSOR, cursor: CURSOR, cursors: {} }],
+    });
+    const cursors = { organizations: { at: "2026-11-09T14:00:00.000Z" }, persons: { at: "2026-11-09T13:00:00.000Z", id: PER } };
+    await store.saveCursors(cursors);
+    expect(tables.pipedrive_push_settings[0]).toMatchObject({ cursor: CURSOR, cursors });
+  });
+});
+
+describe("trava da sincronização do Pipedrive para o CRM (assertPushDisabled)", () => {
+  it("com a atualização ligada, recusa com a mensagem; desligada ou sem a linha, deixa rodar", async () => {
+    const on = fakeDb({ pipedrive_push_settings: [{ id: 1, enabled: true }] }).db;
+    await expect(assertPushDisabled(on)).rejects.toThrow(PUSH_ENABLED_MESSAGE);
+    expect(PUSH_ENABLED_MESSAGE).toBe(
+      "A atualização do Pipedrive pelo CRM está ligada: a sincronização do Pipedrive para o CRM não pode rodar junto " +
+        "(desligue com pnpm sync:crm-para-pipedrive --desligar).",
+    );
+    await expect(assertPushDisabled(fakeDb({ pipedrive_push_settings: [{ id: 1, enabled: false }] }).db)).resolves.toBeUndefined();
+    await expect(assertPushDisabled(fakeDb({ pipedrive_push_settings: [] }).db)).resolves.toBeUndefined();
+  });
+
+  const failing = (error: { code?: string; message: string }) => {
+    const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: null, error }) };
+    return { from: () => query } as unknown as Parameters<typeof assertPushDisabled>[0];
+  };
+
+  it("tabela ainda não criada (migration não aplicada): a rotina não existe, deixa rodar", async () => {
+    await expect(assertPushDisabled(failing({ code: "PGRST205", message: "Could not find the table" }))).resolves.toBeUndefined();
+    await expect(assertPushDisabled(failing({ code: "42P01", message: "relation does not exist" }))).resolves.toBeUndefined();
+  });
+
+  it("outra falha ao ler a configuração: recusa (na dúvida, não sincroniza)", async () => {
+    await expect(assertPushDisabled(failing({ code: "57014", message: "timeout" }))).rejects.toThrow(/conferir.*timeout/);
+  });
+});
+
+describe("runActive (trava de rodadas simultâneas)", () => {
+  const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+
+  it("rodada running iniciada há menos de 55 min trava; mais antiga (morta) ou terminada, não", async () => {
+    expect(RUN_LOCK_MS).toBe(55 * 60_000);
+    const recent = setup({ pipedrive_push_runs: [{ id: "r1", status: "running", started_at: minutesAgo(10) }] });
+    expect(await recent.store.runActive(NOW)).toBe(true);
+    const stale = setup({ pipedrive_push_runs: [{ id: "r1", status: "running", started_at: minutesAgo(56) }] });
+    expect(await stale.store.runActive(NOW)).toBe(false);
+    const finished = setup({
+      pipedrive_push_runs: [
+        { id: "r1", status: "done", started_at: minutesAgo(5) },
+        { id: "r2", status: "failed", started_at: minutesAgo(3) },
+      ],
+    });
+    expect(await finished.store.runActive(NOW)).toBe(false);
   });
 });
 
@@ -302,12 +400,32 @@ describe("loadOne", () => {
     expect(ctx.pdIdOf("organizations", ORG)).toBe("8");
   });
 
-  it("registro na lixeira ou que não existe: null", async () => {
+  it("registro na lixeira ou que não existe: null, e o contexto passa a vê-lo em isGone", async () => {
     const { store } = setup({
       persons: [{ id: PER, company_id: C1, full_name: "Ana", updated_at: CURSOR, deleted_at: CURSOR }],
     });
+    const ctx = await store.buildContext();
+    expect(ctx.isGone("persons", PER)).toBe(false); // ainda não conferido
     expect(await store.loadOne("persons", PER)).toBeNull();
     expect(await store.loadOne("persons", NEW_PER)).toBeNull();
+    expect(ctx.isGone("persons", PER)).toBe(true);
+    expect(ctx.isGone("persons", NEW_PER)).toBe(true);
+    expect(ctx.isGone("organizations", PER)).toBe(false);
+  });
+
+  it("isGone: as exclusões lidas também valem; registro vivo ou religado deixa de valer", async () => {
+    const { store, tables } = setup({
+      persons: [{ id: PER, company_id: C1, full_name: "Ana", updated_at: CURSOR, deleted_at: "2026-11-09T13:00:00.000Z" }],
+    });
+    const ctx = await store.buildContext();
+    await store.deleted("persons", CURSOR);
+    expect(ctx.isGone("persons", PER)).toBe(true);
+    tables.persons[0].deleted_at = null; // restaurada
+    await store.loadOne("persons", PER);
+    expect(ctx.isGone("persons", PER)).toBe(false);
+    await store.deleted("persons", CURSOR);
+    await store.link("persons", "70", C1, PER);
+    expect(ctx.isGone("persons", PER)).toBe(false);
   });
 });
 
@@ -354,6 +472,52 @@ describe("vínculos", () => {
     const broken = { ...db, rpc: async () => ({ data: null, error: { message: "sem permissão" } }) } as unknown as typeof db;
     const store = supabasePushStore(broken, client());
     await expect(store.link("persons", "70", C1, NEW_PER)).rejects.toThrow(/sem permissão/);
+  });
+});
+
+describe("linkedChildren e requeue (registro criado de novo no Pipedrive)", () => {
+  it("atividades e anotações vivas do registro que já têm id no Pipedrive", async () => {
+    const act = (n: number, over: Record<string, unknown>) => ({ id: id(n), company_id: C1, deleted_at: null, deal_id: null, ...over });
+    const { store } = setup({
+      activities: [
+        act(1, { deal_id: DEAL }), // com id
+        act(2, { deal_id: DEAL }), // sem id
+        act(3, { deal_id: DEAL, deleted_at: CURSOR }), // na lixeira
+        act(4, { person_id: PER }), // de outro registro
+      ],
+      notes: [
+        { id: id(11), company_id: C2, entity: "deals", record_id: DEAL, deleted_at: null },
+        { id: id(12), company_id: C1, entity: "persons", record_id: DEAL, deleted_at: null },
+      ],
+      external_ids: [1, 3, 4, 11, 12].map((n) => ({
+        source: "pipedrive",
+        entity: n > 10 ? "notes" : "activities",
+        external_id: String(300 + n),
+        company_id: C1,
+        record_id: id(n),
+        imported_at: CURSOR,
+      })),
+    });
+    expect(await store.linkedChildren("deals", DEAL)).toEqual([
+      { entity: "activities", id: id(1), company_id: C1 },
+      { entity: "notes", id: id(11), company_id: C2 },
+    ]);
+    expect(await store.linkedChildren("notes", DEAL)).toEqual([]);
+  });
+
+  it("requeue põe na fila sem contar tentativa; quem já está na fila fica como está", async () => {
+    const { store, tables } = setup({
+      pipedrive_push_retry: [{ entity: "notes", record_id: id(2), company_id: C1, attempts: 3, last_error: "400" }],
+    });
+    await store.requeue("activities", id(1), C1, "deals x criado de novo no Pipedrive");
+    await store.requeue("notes", id(2), C1, "deals x criado de novo no Pipedrive");
+    expect(tables.pipedrive_push_retry).toEqual([
+      expect.objectContaining({ entity: "notes", record_id: id(2), attempts: 3, last_error: "400" }),
+      expect.objectContaining({ entity: "activities", record_id: id(1), company_id: C1, attempts: 0, last_error: "deals x criado de novo no Pipedrive" }),
+    ]);
+    // a primeira falha depois do requeue conta como a primeira tentativa
+    await store.queueRetry("activities", id(1), C1, "Pipedrive respondeu 400");
+    expect(tables.pipedrive_push_retry[1]).toMatchObject({ attempts: 1 });
   });
 });
 
@@ -405,12 +569,14 @@ describe("relatório das rodadas", () => {
 
     const counters = { organizations: { created: 1, updated: 0, deleted: 0, errors: 0 } };
     const errors = [{ entity: "deals", id: DEAL, reason: "etapa sem correspondente" }];
-    await store.finishRun(runId, { status: "done", cursorTo: "2026-11-09T14:00:00.000Z", counters, errors });
+    const warnings = ["etapa x do CRM corresponde a 2 etapas do Pipedrive"];
+    await store.finishRun(runId, { status: "done", cursorTo: "2026-11-09T14:00:00.000Z", counters, errors, warnings });
     expect(tables.pipedrive_push_runs[0]).toMatchObject({
       status: "done",
       cursor_to: "2026-11-09T14:00:00.000Z",
       counters,
       errors,
+      warnings,
     });
     expect(tables.pipedrive_push_runs[0].finished_at).toEqual(expect.any(String));
   });
@@ -426,10 +592,69 @@ describe("buildContext", () => {
   });
 
   it("etapa pelo mapeamento e pelo cache dos funis criados na importação; etapa nova, null", async () => {
-    const ctx = await setup().store.buildContext();
+    const calls: string[] = [];
+    const warnings: string[] = [];
+    const ctx = await setup({}, client({}, calls)).store.buildContext((m) => warnings.push(m));
     expect(ctx.pdStageOf(STAGE_MAPPED)).toBe(10);
     expect(ctx.pdStageOf(STAGE_CACHED)).toBe(20);
     expect(ctx.pdStageOf(STAGE_NEW)).toBeNull();
+    // sem ambiguidade: nem lê os funis do Pipedrive, nem avisa
+    expect(calls).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("várias etapas do Pipedrive na mesma do CRM: a primeira na ordem do funil, com um aviso por etapa", async () => {
+    const calls: string[] = [];
+    const warnings: string[] = [];
+    const { store } = setup(
+      {
+        import_jobs: [
+          importJob({
+            mappings: {
+              ...importJob().mappings,
+              pipelines: {
+                "1": { stages: { "10": STAGE_MAPPED, "12": STAGE_MAPPED } },
+                "2": { stages: { "21": STAGE_MAPPED, "22": STAGE_NEW } },
+              },
+            },
+            // o cache não vale para etapa que está no mapeamento
+            cursor: { cache: { pipelines: { "3": { stages: { "5": STAGE_MAPPED, "30": STAGE_CACHED } } } } },
+          }),
+        ],
+      },
+      client(
+        {
+          // funil 2 antes do funil 1; no funil 2, a etapa 21 é a primeira
+          pipelines: [{ id: 1, order_nr: 2 }, { id: 2, order_nr: 1 }],
+          stages: [
+            { id: 10, pipeline_id: 1, order_nr: 1 },
+            { id: 12, pipeline_id: 1, order_nr: 2 },
+            { id: 21, pipeline_id: 2, order_nr: 3 },
+          ],
+        },
+        calls,
+      ),
+    );
+    const ctx = await store.buildContext((m) => warnings.push(m));
+    expect(calls.sort()).toEqual(["pipelines", "stages"]);
+    expect(ctx.pdStageOf(STAGE_MAPPED)).toBe(21);
+    expect(ctx.pdStageOf(STAGE_MAPPED)).toBe(21);
+    expect(ctx.pdStageOf(STAGE_NEW)).toBe(22);
+    expect(ctx.pdStageOf(STAGE_CACHED)).toBe(30);
+    expect(warnings).toEqual([
+      `etapa ${STAGE_MAPPED} do CRM corresponde a 3 etapas do Pipedrive (21, 10, 12): vai a 21, a primeira na ordem do funil no Pipedrive`,
+    ]);
+  });
+
+  it("etapa ambígua sem as etapas no Pipedrive (apagadas lá): a de menor id, sempre a mesma", async () => {
+    const { store } = setup({
+      import_jobs: [
+        importJob({
+          mappings: { ...importJob().mappings, pipelines: { "1": { stages: { "40": STAGE_MAPPED, "11": STAGE_MAPPED } } } },
+        }),
+      ],
+    });
+    expect((await store.buildContext()).pdStageOf(STAGE_MAPPED)).toBe(11);
   });
 
   it("etiqueta de lead da empresa, sem as etiquetas ignoradas", async () => {
@@ -450,12 +675,38 @@ describe("buildContext", () => {
 
   it("tipo de atividade pelo nome, por apelido ou pelo padrão", async () => {
     const ctx = await setup().store.buildContext();
-    expect(ctx.pdActivityTypeOf("reuniao", true)).toBe("meeting");
-    expect(ctx.pdActivityTypeOf("WhatsApp", false)).toBe("whatsapp");
-    expect(ctx.pdActivityTypeOf("Ligação", false)).toBe("call"); // apelido: o Pipedrive chama de "Chamada"
-    expect(ctx.pdActivityTypeOf("Visita", false)).toBe("task"); // tipo inativo no Pipedrive
-    expect(ctx.pdActivityTypeOf("Demonstração", true)).toBe("meeting");
-    expect(ctx.pdActivityTypeOf("Follow-up", false)).toBe("task");
+    expect(ctx.pdActivityTypeOf("reuniao", true, null)).toBe("meeting");
+    expect(ctx.pdActivityTypeOf("WhatsApp", false, null)).toBe("whatsapp");
+    expect(ctx.pdActivityTypeOf("Ligação", false, "Não informado")).toBe("call"); // apelido: o Pipedrive chama de "Chamada"
+    expect(ctx.pdActivityTypeOf("Visita", false, null)).toBe("task"); // tipo inativo no Pipedrive
+    expect(ctx.pdActivityTypeOf("Demonstração", true, null)).toBe("meeting");
+    expect(ctx.pdActivityTypeOf("Follow-up", false, null)).toBe("task");
+  });
+
+  it("tipo pelo canal, o inverso da importação (que achata ligação, e-mail e WhatsApp em Tarefa)", async () => {
+    const ctx = await setup().store.buildContext();
+    // ligação, e-mail e WhatsApp importados: tipo "Tarefa" com o canal da origem
+    expect(ctx.pdActivityTypeOf("Tarefa", false, "Telefone")).toBe("call");
+    expect(ctx.pdActivityTypeOf("Tarefa", false, "E-mail")).toBe("email");
+    expect(ctx.pdActivityTypeOf("Tarefa", false, "WhatsApp")).toBe("whatsapp");
+    // tarefa (e prazo, tipos próprios...): canal "Não informado" → pelo nome do tipo
+    expect(ctx.pdActivityTypeOf("Tarefa", false, "Não informado")).toBe("task");
+    // reunião: o canal não muda o tipo
+    expect(ctx.pdActivityTypeOf("Reunião", true, "Telefone")).toBe("meeting");
+    // criada no CRM: "Mensagem" pelo WhatsApp
+    expect(ctx.pdActivityTypeOf("Mensagem", false, "WhatsApp")).toBe("whatsapp");
+    // canal sem tipo na conta (LinkedIn): pelo nome do tipo
+    expect(ctx.pdActivityTypeOf("Tarefa", false, "LinkedIn")).toBe("task");
+  });
+
+  it("WhatsApp sem a key whatsapp na conta: o tipo chamado WhatsApp; sem ele, pelo nome do tipo", async () => {
+    const own = await setup({}, client({ types: [{ name: "WhatsApp", key_string: "task", active_flag: true }, { name: "Chamada", key_string: "call" }] }))
+      .store.buildContext();
+    expect(own.pdActivityTypeOf("Tarefa", false, "WhatsApp")).toBe("task");
+    const custom = await setup({}, client({ types: [{ name: "WhatsApp", key_string: "wpp_1", active_flag: true }] })).store.buildContext();
+    expect(custom.pdActivityTypeOf("Tarefa", false, "WhatsApp")).toBe("wpp_1");
+    const none = await setup({}, client({ types: [{ name: "Chamada", key_string: "call", active_flag: true }] })).store.buildContext();
+    expect(none.pdActivityTypeOf("Ligação", false, "WhatsApp")).toBe("call");
   });
 
   it("resultado pelo rótulo, sem acento e sem maiúsculas", async () => {

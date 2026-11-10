@@ -1,9 +1,14 @@
 -- Pipedrive atualizado pelo CRM (piloto pós-virada).
 -- Uma rotina de hora em hora copia para o Pipedrive o que foi criado, mudado ou apagado no CRM.
 --
--- * pipedrive_push_settings: liga/desliga da rotina e o cursor (até onde as mudanças já foram enviadas). Linha única.
--- * pipedrive_push_runs: relatório de cada rodada (contadores e até 500 erros).
--- * pipedrive_push_retry: registros que falharam e entram de novo na rodada seguinte (pk entity + record_id).
+-- * pipedrive_push_settings: liga/desliga da rotina e os cursores (até onde as mudanças já foram enviadas). Linha única.
+--   `cursor` é o cursor inicial comum, gravado ao ligar; `cursors` guarda o de cada entidade, que a rodada avança
+--   ({"organizations": {"at": "<updated_at>", "id": "<uuid, se parou no meio do mesmo updated_at>"}, ...}). A entidade
+--   sem cursor próprio começa no inicial.
+-- * pipedrive_push_runs: relatório de cada rodada (contadores, até 500 erros e os avisos). cursor_from/cursor_to: o
+--   mais antigo dos cursores por entidade no início e no fim.
+-- * pipedrive_push_retry: registros que falharam (ou que precisam ir de novo) e entram na rodada seguinte
+--   (pk entity + record_id).
 -- * pipedrive_push_link / pipedrive_push_unlink: únicas escritas da rotina em external_ids (a tabela só aceita
 --   escrita por funções definer). O vínculo gravado aqui não tem job (job_id nulo).
 -- As três tabelas são lidas e escritas só pelo service role; os usuários não as veem.
@@ -13,7 +18,8 @@ create table public.pipedrive_push_settings (
   id int primary key check (id = 1),
   enabled boolean not null default false,
   enabled_at timestamptz,
-  cursor timestamptz
+  cursor timestamptz,
+  cursors jsonb not null default '{}' check (jsonb_typeof(cursors) = 'object')
 );
 insert into public.pipedrive_push_settings (id) values (1);
 
@@ -25,16 +31,18 @@ create table public.pipedrive_push_runs (
   cursor_to timestamptz,
   status text not null default 'running' check (status in ('running', 'done', 'failed')),
   counters jsonb not null default '{}',
-  errors jsonb not null default '[]' check (jsonb_typeof(errors) = 'array')
+  errors jsonb not null default '[]' check (jsonb_typeof(errors) = 'array'),
+  warnings jsonb not null default '[]' check (jsonb_typeof(warnings) = 'array')
 );
 create index pipedrive_push_runs_started_idx on public.pipedrive_push_runs (started_at desc);
 
--- attempts: a linha só existe depois da primeira falha, então já nasce com 1
+-- attempts: falhas do registro. Nasce com 1 na primeira falha, ou com 0 quando o registro só precisa ir de novo (a
+-- atividade ou anotação de um registro criado de novo no Pipedrive).
 create table public.pipedrive_push_retry (
   entity text not null,
   record_id uuid not null,
   company_id uuid not null references public.companies on delete cascade,
-  attempts int not null default 1 check (attempts >= 1),
+  attempts int not null default 1 check (attempts >= 0),
   last_error text,
   updated_at timestamptz not null default now(),
   primary key (entity, record_id)
@@ -52,12 +60,16 @@ grant all on public.pipedrive_push_settings, public.pipedrive_push_runs, public.
   to service_role;
 
 -- Vínculos -------------------------------------------------------------------------------------------
+-- As duas funções só aceitam as entidades que a rotina envia (em pipedrive_push_link o nome vira tabela no format).
 -- Grava/atualiza o vínculo registro do CRM <-> id no Pipedrive, com o carimbo do registro (mesma conta de import_link).
 create function public.pipedrive_push_link(p_entity text, p_external_id text, p_company uuid, p_record uuid) returns void
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   v_upd timestamptz;
 begin
+  if p_entity is null or p_entity not in ('organizations', 'persons', 'leads', 'deals', 'activities', 'notes') then
+    raise exception 'entidade inválida para a atualização do Pipedrive: %', coalesce(p_entity, 'nula');
+  end if;
   execute format('select updated_at from public.%I where id = $1', p_entity) into v_upd using p_record;
   insert into public.external_ids (source, entity, external_id, company_id, record_id, job_id, record_updated_at)
   values ('pipedrive', p_entity, p_external_id, p_company, p_record, null, v_upd)
@@ -70,6 +82,9 @@ end $$;
 create function public.pipedrive_push_unlink(p_entity text, p_record uuid) returns void
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
+  if p_entity is null or p_entity not in ('organizations', 'persons', 'leads', 'deals', 'activities', 'notes') then
+    raise exception 'entidade inválida para a atualização do Pipedrive: %', coalesce(p_entity, 'nula');
+  end if;
   delete from public.external_ids
    where source = 'pipedrive' and entity = p_entity and record_id = p_record;
 end $$;

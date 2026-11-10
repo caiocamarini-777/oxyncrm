@@ -1,17 +1,25 @@
 /**
  * Conversões CRM → Pipedrive (API v1), ao contrário de `src/lib/import/mapping.ts`. Funções puras: recebem a linha
  * do CRM, lida com `PUSH_SELECT`, e devolvem o caminho da coleção e o corpo. Quem envia decide entre o POST no
- * caminho (registro sem id no Pipedrive) e o PUT/PATCH em `${path}/{id}`.
+ * caminho (registro sem id no Pipedrive) e o PUT/PATCH em `${path}/{id}`: o POST leva também `createOnly`, e não
+ * acontece com `createError`.
  *
  * Vai só o que o Pipedrive tem campo para receber (spec "O que vai e o que não vai"). Campo vazio no CRM vai null
- * para limpar o Pipedrive. Dono sem usuário no Pipedrive fica de fora, e o Pipedrive usa o usuário do token.
+ * para limpar o Pipedrive. Dono sem usuário no Pipedrive fica de fora: na atualização o Pipedrive mantém o dono
+ * atual, e na criação usa o usuário do token.
+ *
+ * Relacionado na lixeira ou apagado no CRM (`isGone`) vira vínculo vazio: quando o Pipedrive apagou o relacionado,
+ * ele já desfez o vínculo dos dependentes. Só o relacionado vivo no CRM e ainda sem id no Pipedrive é erro ("ainda
+ * sem id no Pipedrive"), para a rodada criar ou esperar por ele.
  */
 
 export type PushEntity = "organizations" | "persons" | "leads" | "deals" | "activities" | "notes";
 
 export type PushCtx = {
-  pdUserOf(profileId: string | null): number | null; // mapa de usuários ao contrário; null → usuário do token
+  pdUserOf(profileId: string | null): number | null; // mapa de usuários ao contrário; null → o dono fica de fora
   pdIdOf(entity: PushEntity, crmId: string | null): string | null; // external_ids
+  /** Relacionado que a rodada já viu na lixeira ou apagado no CRM (sem id no Pipedrive: vínculo vazio, não espera). */
+  isGone(entity: PushEntity, crmId: string): boolean;
   pdStageOf(stageId: string): number | null; // etapa CRM → etapa Pipedrive
   pdLeadLabelOf(companyId: string): string | null; // empresa → etiqueta de lead
   /**
@@ -19,7 +27,12 @@ export type PushCtx = {
    * contract_months). `type` é o tipo do campo no Pipedrive ou no CRM. `options`: rótulo da opção → id no Pipedrive.
    */
   customFields: { crmKey: string; pdKey: string; type: string; options?: Record<string, string> }[];
-  pdActivityTypeOf(typeName: string, isMeeting: boolean): string; // tipo do CRM → key do tipo no Pipedrive (fallback "meeting"/"task")
+  /**
+   * Tipo e canal do CRM → key do tipo no Pipedrive, o inverso de `channelFor`/`activityKind` da importação: fora das
+   * reuniões, o canal (Telefone → "call", E-mail → "email", LinkedIn, WhatsApp) decide antes do nome do tipo, que a
+   * importação achata em "Tarefa". Sem correspondente, "meeting"/"task".
+   */
+  pdActivityTypeOf(typeName: string, isMeeting: boolean, channelName: string | null): string;
   /**
    * Resultado da reunião → opção do campo `outcome`. Recebe o rótulo da opção no Pipedrive, já convertido do CRM
    * (ex.: "Concluída qualificada", "Não compareceu"); o store compara sem acento e sem maiúsculas.
@@ -27,15 +40,30 @@ export type PushCtx = {
   pdOutcomeOf(meetingOutcome: string | null): number | null;
 };
 
-export type PushPayload = { path: string; body: Record<string, unknown> } | { error: string };
+export type PushPayload =
+  | {
+      path: string;
+      /** Corpo da atualização (PUT/PATCH) e da criação. */
+      body: Record<string, unknown>;
+      /** Só na criação: o que a atualização não manda (ex.: `label_ids` do lead, que o PATCH substituiria inteiro). */
+      createOnly?: Record<string, unknown>;
+      /** O registro não pode ser criado no Pipedrive (ex.: os relacionados estão todos na lixeira); a atualização vai. */
+      createError?: string;
+    }
+  | { error: string };
 
-/** Colunas que o store lê de cada tabela: além da linha, o nome do motivo de perda e o tipo e o resultado da atividade. */
+/**
+ * Colunas que o store lê de cada tabela: além da linha, o nome do motivo de perda e o tipo, o canal e o resultado da
+ * atividade. As atividades têm dois FKs para `activity_channels` (`channel_id` e `origin_channel_id`): o embed do
+ * canal diz qual.
+ */
 export const PUSH_SELECT: Record<PushEntity, string> = {
   organizations: "*",
   persons: "*",
   leads: "*",
   deals: "*, lost_reason:lost_reasons(name)",
-  activities: "*, activity_type:activity_types(name, is_meeting), outcome:activity_outcomes(name)",
+  activities:
+    "*, activity_type:activity_types(name, is_meeting), outcome:activity_outcomes(name), channel:activity_channels!channel_id(name)",
   notes: "*",
 };
 
@@ -100,16 +128,36 @@ function pdNumber(id: string): number | string {
   return /^\d+$/.test(id) ? Number(id) : id;
 }
 
-/** Id do relacionado no Pipedrive: null sem vínculo no CRM; erro quando o relacionado ainda não foi criado lá. */
+/**
+ * Id do relacionado no Pipedrive: null sem vínculo no CRM ou com o relacionado na lixeira (ou apagado) no CRM; erro
+ * quando o relacionado está vivo no CRM e ainda não foi criado lá.
+ */
 function pdRef(entity: PushEntity, crmId: unknown, ctx: PushCtx): number | string | null | Fail {
   const id = str(crmId);
   if (!id) return null;
   const pd = ctx.pdIdOf(entity, id);
-  if (!pd) return fail(`${NAMES[entity]} ainda sem id no Pipedrive`);
-  return entity === "leads" ? pd : pdNumber(pd);
+  if (pd) return entity === "leads" ? pd : pdNumber(pd);
+  if (ctx.isGone(entity, id)) return null;
+  return fail(`${NAMES[entity]} ainda sem id no Pipedrive`);
 }
 
-/** Dono pelo mapa de usuários; sem usuário no Pipedrive a chave fica de fora. */
+/**
+ * Pessoa e organização de lead e negócio. O Pipedrive exige uma das duas: sem nenhuma (ex.: as duas na lixeira), o
+ * registro não é criado e a atualização vai sem as duas chaves, deixando lá os vínculos como estão.
+ */
+function personAndOrg(
+  what: string,
+  person: number | string | null,
+  org: number | string | null,
+  orgKey: "org_id" | "organization_id",
+): { links: Row; createError?: string } {
+  if (person === null && org === null) {
+    return { links: {}, createError: `${what} sem pessoa nem organização (o Pipedrive exige um dos dois)` };
+  }
+  return { links: { person_id: person, [orgKey]: org } };
+}
+
+/** Dono pelo mapa de usuários; sem usuário no Pipedrive a chave fica de fora (a atualização mantém o dono atual). */
 function owner(key: string, profileId: unknown, ctx: PushCtx): Row {
   const user = ctx.pdUserOf(str(profileId));
   return user === null ? {} : { [key]: user };
@@ -315,7 +363,7 @@ export function toPdLead(row: Row, ctx: PushCtx): PushPayload {
   if (isFail(person)) return person;
   const org = pdRef("organizations", row.organization_id, ctx);
   if (isFail(org)) return org;
-  if (person === null && org === null) return fail("lead sem pessoa nem organização (o Pipedrive exige um dos dois)");
+  const { links, createError } = personAndOrg("lead", person, org, "organization_id");
   const amount = num(row.estimated_value);
   const company = str(row.company_id);
   const label = company ? ctx.pdLeadLabelOf(company) : null;
@@ -323,14 +371,16 @@ export function toPdLead(row: Row, ctx: PushCtx): PushPayload {
     path: PATHS.leads,
     body: {
       title,
-      person_id: person,
-      organization_id: org,
+      ...links,
       ...owner("owner_id", row.owner_id, ctx),
       value: amount === null ? null : { amount, currency: CURRENCY },
-      ...(label ? { label_ids: [label] } : {}),
       // o Pipedrive só lista leads em aberto; convertido ou desqualificado no CRM sai da lista arquivado
       is_archived: ["archived", "converted", "disqualified"].includes(str(row.status) ?? ""),
     },
+    // `label_ids` substitui a lista inteira no PATCH: a etiqueta da empresa vai só na criação, e a atualização não
+    // apaga as outras etiquetas do lead no Pipedrive
+    ...(label ? { createOnly: { label_ids: [label] } } : {}),
+    ...(createError ? { createError } : {}),
   };
 }
 
@@ -347,7 +397,7 @@ export function toPdDeal(row: Row, ctx: PushCtx): PushPayload {
   if (isFail(person)) return person;
   const org = pdRef("organizations", row.organization_id, ctx);
   if (isFail(org)) return org;
-  if (person === null && org === null) return fail("negócio sem pessoa nem organização (o Pipedrive exige um dos dois)");
+  const { links, createError } = personAndOrg("negócio", person, org, "org_id");
   const reason = status === "lost" ? nameOf(row.lost_reason) : null;
   return {
     path: PATHS.deals,
@@ -356,14 +406,14 @@ export function toPdDeal(row: Row, ctx: PushCtx): PushPayload {
       title,
       value: num(row.estimated_value) ?? 0,
       currency: CURRENCY,
-      person_id: person,
-      org_id: org,
+      ...links,
       ...owner("user_id", row.owner_id, ctx),
       stage_id: stage,
       status,
       ...(reason ? { lost_reason: reason } : {}),
       expected_close_date: dateOnly(row.expected_close_date),
     },
+    ...(createError ? { createError } : {}),
   };
 }
 
@@ -383,12 +433,16 @@ export function toPdActivity(row: Row, ctx: PushCtx): PushPayload {
   const due = utcParts(row.due_at);
   if (!due) return fail("atividade sem data");
   const links: Row = {};
+  let anyLink = false;
   for (const [entity, column, key] of ACTIVITY_LINKS) {
+    anyLink ||= str(row[column]) !== null;
     const ref = pdRef(entity, row[column], ctx);
     if (isFail(ref)) return ref;
     if (ref !== null) links[key] = ref;
   }
-  if (!Object.keys(links).length) return fail("atividade sem negócio, lead, pessoa ou organização");
+  if (!anyLink) return fail("atividade sem negócio, lead, pessoa ou organização");
+  // os vínculos que sobraram estão todos na lixeira: a atualização vai sem eles, mas não dá para criar
+  const createError = Object.keys(links).length ? undefined : "atividade só com vínculos na lixeira do CRM";
   const done = row.done === true;
   const outcome = done ? pdOutcome(row, isMeeting, ctx) : null;
   const duration = hhmm(row.duration_minutes);
@@ -397,7 +451,7 @@ export function toPdActivity(row: Row, ctx: PushCtx): PushPayload {
     path: PATHS.activities,
     body: {
       subject,
-      type: ctx.pdActivityTypeOf(str((type as Row).name) ?? "", isMeeting),
+      type: ctx.pdActivityTypeOf(str((type as Row).name) ?? "", isMeeting, nameOf(row.channel)),
       due_date: due.date,
       due_time: due.time,
       ...(duration ? { duration } : {}),
@@ -407,6 +461,7 @@ export function toPdActivity(row: Row, ctx: PushCtx): PushPayload {
       ...owner("user_id", row.owner_id, ctx),
       ...(outcome !== null ? { outcome } : {}),
     },
+    ...(createError ? { createError } : {}),
   };
 }
 
@@ -424,11 +479,13 @@ export function toPdNote(row: Row, ctx: PushCtx): PushPayload {
   const entity = str(row.entity);
   const key = entity ? NOTE_LINKS[entity] : undefined;
   if (!entity || !key) return fail(`anotação com vínculo inválido: ${entity ?? "vazio"}`);
+  if (!str(row.record_id)) return fail("anotação sem registro vinculado");
   const ref = pdRef(entity as PushEntity, row.record_id, ctx);
   if (isFail(ref)) return ref;
-  if (ref === null) return fail("anotação sem registro vinculado");
-  return {
-    path: PATHS.notes,
-    body: { content: pdHtml(content), [key]: ref, ...owner("user_id", row.created_by, ctx) },
-  };
+  const author = owner("user_id", row.created_by, ctx);
+  // registro vinculado na lixeira: a atualização vai só com o conteúdo, mas não dá para criar a anotação solta
+  if (ref === null) {
+    return { path: PATHS.notes, body: { content: pdHtml(content), ...author }, createError: "anotação de um registro na lixeira do CRM" };
+  }
+  return { path: PATHS.notes, body: { content: pdHtml(content), [key]: ref, ...author } };
 }

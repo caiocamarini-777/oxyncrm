@@ -832,7 +832,7 @@ type NotesRow = {
   qualification: MeetingNotes["qualification"];
   next_steps: MeetingNotes["next_steps"];
   raw: unknown;
-  /** Só a coluna do modo é lida (`pipedrive_note_id` ou `crm_note_id`). */
+  /** No modo Pipedrive, só `pipedrive_note_id` é lida; no modo CRM, as duas (a do Pipedrive também conta). */
   pipedrive_note_id?: number | null;
   crm_note_id?: string | null;
 };
@@ -1165,11 +1165,11 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   }
 
   // 0. Notas guardadas (tentativa anterior) ou a transcrição para gerar as novas. Sem nenhuma das duas não há
-  //    o que fazer, e o vínculo nem é procurado. Das colunas da anotação, só a do modo (a outra não conta).
-  const noteColumn = mode === "crm" ? "crm_note_id" : "pipedrive_note_id";
+  //    o que fazer, e o vínculo nem é procurado. Das colunas da anotação: no Pipedrive, só a dele; no CRM, as duas.
+  const noteColumns = mode === "crm" ? "crm_note_id, pipedrive_note_id" : "pipedrive_note_id";
   const stored = await db
     .from("meeting_notes")
-    .select(`summary, pains, objections, qualification, next_steps, raw, ${noteColumn}`)
+    .select(`summary, pains, objections, qualification, next_steps, raw, ${noteColumns}`)
     .eq("meeting_id", m.id)
     .maybeSingle();
   check(stored.error, "ler as notas guardadas");
@@ -1226,9 +1226,11 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
     return "unlinked";
   }
 
-  // 4. Anotação, uma vez só: o id da anotação (no CRM ou no Pipedrive) é guardado logo depois da gravação.
+  // 4. Anotação, uma vez só: o id da anotação (no CRM ou no Pipedrive) é guardado logo depois da gravação. No CRM,
+  //    a anotação já gravada no Pipedrive (reunião em andamento na virada) também conta: a sincronização a traz, e
+  //    gravar de novo deixaria duas cópias.
   if (mode === "crm") {
-    if (notesRow?.crm_note_id == null) await writeNoteToCrm(deps, m, link, notes);
+    if (notesRow?.crm_note_id == null && notesRow?.pipedrive_note_id == null) await writeNoteToCrm(deps, m, link, notes);
   } else if (link.entity === "organizations") {
     throw new Error("Reunião vinculada a organização não é gravada no Pipedrive.");
   } else if (notesRow?.pipedrive_note_id == null) {

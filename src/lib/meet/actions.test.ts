@@ -308,18 +308,20 @@ function expectNoPipedrive(fetchSpy: ReturnType<typeof vi.fn>) {
 }
 
 describe("confirmSuggestion no modo CRM", () => {
-  it("resultado da reunião: conclui a âncora com o cliente do usuário e confirma a sugestão", async () => {
+  it("resultado da reunião: conclui a âncora com o cliente admin e confirma a sugestão", async () => {
     const fetchSpy = crmMode();
     const t = setup(crmTables({ meeting_suggestions: [suggestion("meeting_outcome", { outcome: "Realizada" })] }));
     expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
-    expect(completeCrmMeeting).toHaveBeenCalledWith(state.userClient, DEAL_TARGET, {
+    expect(completeCrmMeeting).toHaveBeenCalledWith(state.db, DEAL_TARGET, {
       anchorActivityId: ANCHOR,
       outcomeLabel: "Realizada",
       subject: "Apresentação Acme",
       startedAt: "2026-11-05T14:00:00.000Z",
       ownerId: "u1",
+      actorId: "u1",
     });
     expect(t.tables.activities[0]).toMatchObject({ id: ANCHOR, done: true, meeting_outcome: "held" });
+    expect(t.tables.meetings[0].anchor_activity_id).toBe(ANCHOR);
     expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "confirmed", last_error: null, decided_by: "u1" });
     expectNoPipedrive(fetchSpy);
   });
@@ -328,16 +330,24 @@ describe("confirmSuggestion no modo CRM", () => {
     const fetchSpy = crmMode();
     const t = setup(crmTables({ meeting_suggestions: [suggestion("next_activity", NEXT)] }));
     expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
-    expect(createCrmActivity).toHaveBeenCalledWith(state.userClient, DEAL_TARGET, {
+    expect(createCrmActivity).toHaveBeenCalledWith(state.db, DEAL_TARGET, {
       type: "Ligação",
       subject: "Retornar com a proposta",
       dueDate: "2026-11-10",
       dueTime: "10:30",
       ownerId: "u1",
+      actorId: "u1",
       anchorActivityId: ANCHOR,
     });
     expect(t.tables.activities).toHaveLength(2);
-    expect(t.tables.activities[1]).toMatchObject({ type_id: "t-call", channel_id: "ch-phone", deal_id: "d1", owner_id: "u1", done: false });
+    expect(t.tables.activities[1]).toMatchObject({
+      type_id: "t-call",
+      channel_id: "ch-phone",
+      deal_id: "d1",
+      owner_id: "u1",
+      created_by: "u1",
+      done: false,
+    });
     expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "confirmed" });
     expectNoPipedrive(fetchSpy);
   });
@@ -351,12 +361,12 @@ describe("confirmSuggestion no modo CRM", () => {
     expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "confirmed", payload: edited });
   });
 
-  it("etapa: move o negócio no CRM com o cliente do usuário e confirma", async () => {
+  it("etapa: move o negócio no CRM com o cliente admin e confirma", async () => {
     const fetchSpy = crmMode();
     const t = setup(crmTables({ meeting_suggestions: [suggestion("stage", { stage: "Proposta" })] }));
     expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
-    expect(moveCrmStage).toHaveBeenCalledWith(state.userClient, "d1", "Proposta");
-    expect(t.tables.deals[0].stage_id).toBe("st2");
+    expect(moveCrmStage).toHaveBeenCalledWith(state.db, "d1", "Proposta");
+    expect(t.tables.deals[0]).toMatchObject({ stage_id: "st2", position: 0 });
     expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "confirmed" });
     expectNoPipedrive(fetchSpy);
   });
@@ -430,6 +440,76 @@ describe("confirmSuggestion no modo CRM", () => {
     expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "pending" });
   });
 
+  it("reunião de outro dono, confirmada por quem edita o registro: conclui a âncora do dono e cria a próxima atividade em nome dele", async () => {
+    crmMode();
+    // O SDR (u1) agendou a reunião; o closer (u2), dono do negócio, confirma.
+    state.profile = { id: "u2", isSuperAdmin: false, active: true };
+    const t = setup(
+      crmTables({
+        meeting_suggestions: [
+          suggestion("meeting_outcome", { outcome: "Realizada" }),
+          suggestion("next_activity", NEXT, { id: "33333333-3333-4333-8333-333333333333" }),
+        ],
+      }),
+    );
+    expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
+    expect(await confirmSuggestion("33333333-3333-4333-8333-333333333333")).toEqual({ ok: true, data: undefined });
+    expect(t.tables.activities).toHaveLength(2);
+    expect(t.tables.activities[0]).toMatchObject({ id: ANCHOR, owner_id: "u1", done: true, meeting_outcome: "held" });
+    expect(t.tables.activities[1]).toMatchObject({ owner_id: "u1", created_by: "u2", done: false });
+    expect(t.tables.meeting_suggestions.map((s) => [s.status, s.decided_by])).toEqual([
+      ["confirmed", "u2"],
+      ["confirmed", "u2"],
+    ]);
+  });
+
+  it("sem âncora: cria a reunião concluída, que vira a âncora; confirmar de novo (confirmação não registrada) não cria outra", async () => {
+    crmMode();
+    const t = setup(
+      crmTables({
+        meetings: [meeting({ status: "done", attempts: 0, last_error: null, entity: "deals", record_id: "d1", anchor_activity_id: null })],
+        activities: [],
+        meeting_suggestions: [suggestion("meeting_outcome", { outcome: "Realizada" })],
+      }),
+    );
+    expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
+    expect(t.tables.activities).toHaveLength(1);
+    const created = t.tables.activities[0];
+    expect(created).toMatchObject({ deal_id: "d1", owner_id: "u1", created_by: "u1", done: true, meeting_outcome: "held" });
+    expect(t.tables.meetings[0].anchor_activity_id).toBe(created.id);
+
+    // A gravação aconteceu, mas a sugestão ficou pendente (o registro da confirmação falhou): repetir não duplica.
+    Object.assign(t.tables.meeting_suggestions[0], { status: "pending", decided_by: null, decided_at: null });
+    expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
+    expect(t.tables.activities).toHaveLength(1);
+    expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "confirmed" });
+  });
+
+  it("âncora já concluída com outro resultado: a sugestão fica failed com o resultado gravado, sem criar outra reunião", async () => {
+    crmMode();
+    const t = setup(crmTables({ meeting_suggestions: [suggestion("meeting_outcome", { outcome: "Realizada" })] }));
+    Object.assign(t.tables.activities[0], { done: true, completed_at: "2026-11-05T14:40:00.000Z", meeting_outcome: "no_show" });
+    expect(await confirmSuggestion(S)).toEqual({
+      ok: false,
+      error: 'Não foi possível gravar no CRM: Esta reunião já foi concluída como "No-show".',
+    });
+    expect(t.tables.activities).toHaveLength(1);
+    expect(t.tables.activities[0]).toMatchObject({ meeting_outcome: "no_show" });
+    expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "failed", last_error: 'Esta reunião já foi concluída como "No-show".' });
+  });
+
+  it("sem permissão para editar o registro vinculado: não grava nada e a sugestão fica pendente", async () => {
+    crmMode();
+    const t = setup(crmTables({ meeting_suggestions: [suggestion("next_activity", NEXT)] }));
+    const userClient = state.userClient as { rpc: (name: string, args?: Row) => Promise<unknown> };
+    const rpc = userClient.rpc;
+    userClient.rpc = (name, args) => (name === "can_edit_record" ? Promise.resolve({ data: false, error: null }) : rpc(name, args));
+    expect(await confirmSuggestion(S)).toEqual({ ok: false, error: "Você não tem permissão para esta ação." });
+    expect(createCrmActivity).not.toHaveBeenCalled();
+    expect(t.tables.activities).toHaveLength(1);
+    expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "pending", decided_by: null });
+  });
+
   describe("reunião vinculada a uma organização", () => {
     const orgMeeting = () =>
       meeting({ status: "done", attempts: 0, last_error: null, entity: "organizations", record_id: "o1", anchor_activity_id: null });
@@ -441,7 +521,7 @@ describe("confirmSuggestion no modo CRM", () => {
         crmTables({ meetings: [orgMeeting()], activities: [], meeting_suggestions: [suggestion("meeting_outcome", { outcome: "No-show" })] }),
       );
       expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
-      expect(completeCrmMeeting).toHaveBeenCalledWith(state.userClient, ORG_TARGET, expect.objectContaining({ anchorActivityId: null }));
+      expect(completeCrmMeeting).toHaveBeenCalledWith(state.db, ORG_TARGET, expect.objectContaining({ anchorActivityId: null }));
       expect(t.tables.activities).toHaveLength(1);
       expect(t.tables.activities[0]).toMatchObject({ organization_id: "o1", type_id: "t-meet", done: true, meeting_outcome: "no_show" });
       expect(t.tables.meeting_suggestions[0]).toMatchObject({ status: "confirmed" });
@@ -451,7 +531,7 @@ describe("confirmSuggestion no modo CRM", () => {
       crmMode();
       const t = setup(crmTables({ meetings: [orgMeeting()], activities: [], meeting_suggestions: [suggestion("next_activity", NEXT)] }));
       expect(await confirmSuggestion(S)).toEqual({ ok: true, data: undefined });
-      expect(createCrmActivity).toHaveBeenCalledWith(state.userClient, ORG_TARGET, expect.objectContaining({ type: "Ligação" }));
+      expect(createCrmActivity).toHaveBeenCalledWith(state.db, ORG_TARGET, expect.objectContaining({ type: "Ligação" }));
       expect(t.tables.activities[0]).toMatchObject({ organization_id: "o1", type_id: "t-call", channel_id: "ch-video" });
     });
 
@@ -490,6 +570,7 @@ describe("linkMeeting", () => {
         { id: NEW, company_id: "co", pipeline_id: "pl1", stage_id: "st1", status: "open", deleted_at: null },
       ],
       external_ids: [],
+      notes: [{ id: "n-antiga", company_id: "co", entity: "deals", record_id: OLD, body: "<p>Resumo</p>", deleted_at: null }],
       meeting_notes: [{ meeting_id: M, summary: "s", pipedrive_note_id: 555, crm_note_id: "n-antiga", written_at: "2026-11-05T14:50:00.000Z" }],
       meeting_suggestions: [
         suggestion("stage", { stage: "Proposta" }),
@@ -498,7 +579,7 @@ describe("linkMeeting", () => {
     });
   }
 
-  it("modo CRM: vincula a registro sem id no Pipedrive, solta o crm_note_id e processa", async () => {
+  it("modo CRM: vincula a registro sem id no Pipedrive, manda a anotação antiga para a lixeira, solta os ids e processa", async () => {
     const fetchSpy = crmMode();
     const t = setup(relinkTables());
     let seen: Row | null = null;
@@ -508,7 +589,9 @@ describe("linkMeeting", () => {
     };
     expect(await linkMeeting(M, "deals", NEW)).toEqual({ ok: true, data: undefined });
     expect(seen).toMatchObject({ status: "processing", entity: "deals", record_id: NEW, anchor_activity_id: null });
-    expect(t.tables.meeting_notes[0]).toMatchObject({ crm_note_id: null, written_at: null, pipedrive_note_id: 555 });
+    // As duas colunas: no modo CRM, `pipedrive_note_id` preenchido também conta como anotação gravada.
+    expect(t.tables.meeting_notes[0]).toMatchObject({ crm_note_id: null, written_at: null, pipedrive_note_id: null });
+    expect(t.tables.notes[0].deleted_at).toEqual(expect.any(String));
     expect(t.tables.meeting_suggestions.map((s) => s.id)).toEqual(["s-ok"]);
     expect(processMeeting).toHaveBeenCalledTimes(1);
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -523,6 +606,16 @@ describe("linkMeeting", () => {
     });
     expect(t.tables.meetings[0]).toMatchObject({ status: "done", record_id: OLD });
     expect(t.tables.meeting_notes[0]).toMatchObject({ crm_note_id: "n-antiga", pipedrive_note_id: 555 });
+    expect(t.tables.notes[0].deleted_at).toBeNull();
     expect(processMeeting).not.toHaveBeenCalled();
+  });
+
+  it("modo Pipedrive: solta só o pipedrive_note_id e não mexe nas anotações do CRM", async () => {
+    vi.stubEnv("MEETING_SINK", "pipedrive");
+    const t = setup({ ...relinkTables(), external_ids: [{ company_id: "co", entity: "deals", record_id: NEW, source: "pipedrive", external_id: "77" }] });
+    state.onProcess = () => Object.assign(t.tables.meetings[0], { status: "done" });
+    expect(await linkMeeting(M, "deals", NEW)).toEqual({ ok: true, data: undefined });
+    expect(t.tables.meeting_notes[0]).toMatchObject({ pipedrive_note_id: null, crm_note_id: "n-antiga", written_at: null });
+    expect(t.tables.notes[0].deleted_at).toBeNull();
   });
 });

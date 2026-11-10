@@ -36,8 +36,9 @@ import { MIRROR_ACTIVE_ERROR, meetingSinkMode, type MeetingSinkMode, mirrorActiv
  * USUÁRIO (`can_edit_meeting`, que segue a regra do registro vinculado) e só depois a escrita acontece com o
  * cliente administrativo, porque as tabelas de reunião não têm política de escrita para o usuário. Vincular,
  * descartar e tentar de novo pedem ainda o dono da reunião ou o admin geral.
- * No modo CRM (`MEETING_SINK=crm`), o que a sugestão confirmada grava no CRM (atividades e etapa do negócio) vai
- * com o cliente do usuário, com RLS e gatilhos normais, e o histórico registra quem confirmou.
+ * No modo CRM (`MEETING_SINK=crm`), o que a sugestão confirmada grava no CRM (atividades e etapa do negócio) também
+ * vai com o cliente administrativo, depois de conferir que o vendedor pode editar o registro vinculado; a atividade
+ * criada leva `created_by` = quem confirmou.
  */
 
 const uuid = z.string().uuid();
@@ -121,13 +122,21 @@ type Suggestion = { id: string; meeting_id: string; kind: SuggestionKind; payloa
 class UserError extends Error {}
 
 /**
- * Modo CRM: grava a sugestão direto no CRM com o cliente do USUÁRIO que confirmou; o cliente administrativo fica
- * só nas leituras de controle (espelho e registro vivo).
+ * Modo CRM: grava a sugestão direto no CRM com o cliente administrativo (as travas do usuário logado ficam de fora:
+ * a reunião de outro dono, a conclusão automática), depois de conferir com o cliente do USUÁRIO que ele pode editar
+ * o registro vinculado. A atividade criada leva `created_by` = `actorId` (quem confirmou).
  * - Com o espelho do Pipedrive ativo, não grava (o Pipedrive apagaria): `UserError` com o aviso.
  * - Organização recebe o resultado e a próxima atividade; a etapa é só de negócio.
- * - Tipo, resultado ou etapa que não existem no CRM e campo obrigatório da etapa faltando: `CrmSinkUserError`.
+ * - Tipo, resultado ou etapa que não existem no CRM, campo obrigatório da etapa faltando e reunião já concluída com
+ *   outro resultado: `CrmSinkUserError`.
  */
-async function applyToCrm(db: Admin, m: MeetingRow, kind: SuggestionKind, payload: EditedPayload): Promise<void> {
+async function applyToCrm(
+  db: Admin,
+  m: MeetingRow,
+  kind: SuggestionKind,
+  payload: EditedPayload,
+  actorId: string,
+): Promise<void> {
   if (await mirrorActive(db, new Date())) throw new UserError(MIRROR_ACTIVE_ERROR);
   if (!m.entity || !m.record_id) throw new UserError("A reunião não está vinculada a um registro do CRM.");
   if (kind === "stage" && m.entity !== "deals") throw new UserError("A etapa só pode ser movida em um negócio.");
@@ -135,37 +144,49 @@ async function applyToCrm(db: Admin, m: MeetingRow, kind: SuggestionKind, payloa
   if (rec.error) throw new Error(`Falha ao ler o registro vinculado: ${rec.error.message}`);
   const row = rec.data as { deleted_at: string | null } | null;
   if (!row || row.deleted_at) throw new UserError("O registro não existe ou está na lixeira.");
+  // As gravações abaixo passam por cima do RLS: a permissão do vendedor no registro vinculado vale aqui.
+  const supabase = await createServerClient();
+  const editable = await supabase.rpc("can_edit_record", { p_entity: m.entity, p_record_id: m.record_id });
+  if (editable.error) throw new Error(`Falha ao conferir a permissão no registro: ${editable.error.message}`);
+  if (editable.data !== true) throw new UserError(DENIED.error);
 
-  const client = await createServerClient();
   const target: CrmTarget = { companyId: m.company_id, entity: m.entity, recordId: m.record_id };
 
   if (kind === "meeting_outcome") {
     const { outcome } = payload as { outcome: string };
-    await completeCrmMeeting(client, target, {
+    const created = await completeCrmMeeting(db, target, {
       anchorActivityId: m.anchor_activity_id,
       outcomeLabel: outcome,
       subject: m.title,
       startedAt: m.started_at ?? m.ended_at ?? new Date().toISOString(),
       ownerId: m.owner_id,
+      actorId,
     });
+    // A reunião criada vira a âncora: repetir a confirmação (resposta perdida, confirmação não registrada) a encontra
+    // concluída e não cria outra. Falhar aqui não desfaz a gravação, que já aconteceu.
+    if (created) {
+      const anchored = await db.from("meetings").update({ anchor_activity_id: created }).eq("id", m.id);
+      if (anchored.error) console.error("meet: reunião criada no CRM sem virar a âncora", m.id, created, anchored.error.message);
+    }
     return;
   }
 
   if (kind === "next_activity") {
     const a = payload as { type: string; subject: string; due_date: string; due_time: string | null };
-    await createCrmActivity(client, target, {
+    await createCrmActivity(db, target, {
       type: a.type,
       subject: a.subject,
       dueDate: a.due_date,
       dueTime: a.due_time,
       ownerId: m.owner_id,
+      actorId,
       anchorActivityId: m.anchor_activity_id,
     });
     return;
   }
 
   const { stage } = payload as { stage: string };
-  await moveCrmStage(client, m.record_id, stage);
+  await moveCrmStage(db, m.record_id, stage);
 }
 
 /**
@@ -179,8 +200,9 @@ async function applySuggestion(
   kind: SuggestionKind,
   payload: EditedPayload,
   mode: MeetingSinkMode,
+  actorId: string,
 ): Promise<void> {
-  if (mode === "crm") return applyToCrm(db, m, kind, payload);
+  if (mode === "crm") return applyToCrm(db, m, kind, payload, actorId);
   if (!m.entity || !m.record_id || m.entity === "organizations") {
     throw new UserError("A reunião não está vinculada a um negócio, lead ou pessoa.");
   }
@@ -270,7 +292,7 @@ export async function confirmSuggestion(id: string, edited?: unknown): Promise<A
 
   const mode = meetingSinkMode();
   try {
-    await applySuggestion(auth.db, auth.meeting, suggestion.kind, valid.payload, mode);
+    await applySuggestion(auth.db, auth.meeting, suggestion.kind, valid.payload, mode, profile.id);
   } catch (e) {
     if (e instanceof UserError) return { ok: false, error: e.message };
     if (e instanceof SinkError || e instanceof CrmSinkUserError) {
@@ -408,14 +430,26 @@ export async function linkMeeting(meetingId: string, entity: "deals" | "leads" |
     }
   }
 
-  // Reunião concluída: a anotação foi para o registro antigo. Solta o id da anotação do modo (só ele conta na
-  // gravação; ela será reescrita no novo registro) e apaga as sugestões não decididas; confirmadas e descartadas
-  // ficam.
+  // Reunião concluída: a anotação foi para o registro antigo. Solta o id da anotação (ela será reescrita no novo
+  // registro) e apaga as sugestões não decididas; confirmadas e descartadas ficam. No CRM, a anotação antiga vai
+  // antes para a lixeira (escondida no histórico só enquanto o `crm_note_id` apontava para ela, voltaria se o registro
+  // antigo saísse da lixeira), e as duas colunas são soltas: lá, `pipedrive_note_id` preenchido também conta como
+  // gravada.
   if (meeting.status === "done") {
-    const noteColumn = mode === "crm" ? "crm_note_id" : "pipedrive_note_id";
-    const note = await db.from("meeting_notes").update({ [noteColumn]: null, written_at: null }).eq("meeting_id", meetingId);
+    const prepareFailed = { ok: false, error: "Não foi possível preparar a reunião para o novo vínculo. Tente novamente." } as const;
+    if (mode === "crm") {
+      const old = await db.from("meeting_notes").select("crm_note_id").eq("meeting_id", meetingId).maybeSingle();
+      if (old.error) return prepareFailed;
+      const oldNoteId = (old.data as { crm_note_id: string | null } | null)?.crm_note_id;
+      if (oldNoteId) {
+        const trashed = await db.from("notes").update({ deleted_at: new Date().toISOString() }).eq("id", oldNoteId).is("deleted_at", null);
+        if (trashed.error) return prepareFailed;
+      }
+    }
+    const released = mode === "crm" ? { crm_note_id: null, pipedrive_note_id: null } : { pipedrive_note_id: null };
+    const note = await db.from("meeting_notes").update({ ...released, written_at: null }).eq("meeting_id", meetingId);
     const sugg = await db.from("meeting_suggestions").delete().eq("meeting_id", meetingId).in("status", ["pending", "failed"]);
-    if (note.error || sugg.error) return { ok: false, error: "Não foi possível preparar a reunião para o novo vínculo. Tente novamente." };
+    if (note.error || sugg.error) return prepareFailed;
   }
 
   // Troca de status condicional ANTES de processar: duas chamadas (ou o cron) não processam a mesma reunião.

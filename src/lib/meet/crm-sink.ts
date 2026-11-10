@@ -1,8 +1,10 @@
 /**
  * Gravações do assistente de reuniões direto no CRM (destino depois da virada, com `MEETING_SINK=crm`), com os ids
- * do CRM. A anotação vem do cron: cliente admin, autoria do dono da reunião. Conclusão da reunião, próxima atividade e
- * etapa vêm de sugestões confirmadas e usam o cliente do USUÁRIO que confirmou (RLS e gatilhos normais; o histórico
- * registra quem confirmou).
+ * do CRM, todas com o cliente admin. A anotação vem do cron, com autoria do dono da reunião. Conclusão da reunião,
+ * próxima atividade e etapa vêm de sugestões confirmadas: quem chama confere antes que o vendedor pode editar o
+ * registro vinculado, e a atividade criada leva `created_by` = quem confirmou. Sem `auth.uid()`, as travas do usuário
+ * logado (conclusão direta, colunas da Agenda) não valem; os checks da tabela e o gatilho de campos obrigatórios da
+ * etapa valem.
  * Sem tentativas aqui: escrever é efeito colateral (repetir duplicaria nota/atividade), então quem chama decide.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -45,7 +47,14 @@ const LINK_COLUMN = {
 type DbError = { code?: string; message?: string; details?: string | null };
 type TypeRow = { id: string; name: string; is_meeting: boolean; active: boolean };
 type ChannelRow = { id: string; name: string; is_legacy: boolean };
-type AnchorRow = { id: string; type_id: string; channel_id: string; done: boolean; deleted_at: string | null };
+type AnchorRow = {
+  id: string;
+  type_id: string;
+  channel_id: string;
+  done: boolean;
+  meeting_outcome: MeetingOutcome | null;
+  deleted_at: string | null;
+};
 
 const norm = (s: string) => s.trim().toLocaleLowerCase("pt-BR");
 /** Rótulo do resultado da reunião: sem diferenciar maiúsculas nem espaços ("no - show" = "No-show"). */
@@ -95,12 +104,12 @@ async function companyTypes(client: SupabaseClient, companyId: string): Promise<
   return (data ?? []) as TypeRow[];
 }
 
-/** Atividade âncora como o usuário a vê (`null`: sem âncora, apagada de vez ou invisível para ele). */
+/** Atividade âncora, lida com o cliente admin (`null`: sem âncora ou apagada de vez). */
 async function readAnchor(client: SupabaseClient, id: string | null): Promise<AnchorRow | null> {
   if (!id) return null;
   const { data, error } = await client
     .from("activities")
-    .select("id, type_id, channel_id, done, deleted_at")
+    .select("id, type_id, channel_id, done, meeting_outcome, deleted_at")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`Falha ao ler a atividade da reunião: ${error.message}`);
@@ -129,11 +138,24 @@ async function pickChannel(client: SupabaseClient, companyId: string, anchor: An
   return chosen.id;
 }
 
-/** Insere a atividade aberta, vinculada ao alvo (a conclusão direta é bloqueada no banco; só a RPC conclui). */
+/**
+ * Insere a atividade vinculada ao alvo, com `created_by` = quem confirmou (o padrão `auth.uid()` fica nulo no cliente
+ * admin). A reunião criada sem âncora já entra concluída (`done`, `completed_at` e `meeting_outcome`).
+ */
 async function insertActivity(
   client: SupabaseClient,
   t: CrmTarget,
-  row: { owner_id: string; type_id: string; channel_id: string; subject: string; due_at: string },
+  row: {
+    owner_id: string;
+    created_by: string;
+    type_id: string;
+    channel_id: string;
+    subject: string;
+    due_at: string;
+    done?: true;
+    completed_at?: string;
+    meeting_outcome?: MeetingOutcome;
+  },
 ): Promise<string> {
   const { data, error } = await client
     .from("activities")
@@ -145,80 +167,104 @@ async function insertActivity(
 }
 
 /**
- * Conclui a reunião pela função do banco, só com o resultado. "Remarcada" sem `p_meeting` é aceita: a nova reunião é
- * opcional na função e o vendedor a cria pela sugestão de próxima atividade.
+ * Conclui a âncora aberta direto, como a função `complete_activity` grava (`done`, `completed_at`, `meeting_outcome`).
+ * Cliente admin: a trava de conclusão direta só vale para o usuário logado, e a regra de próxima atividade
+ * obrigatória do funil não se aplica à conclusão automática. Só se ainda estiver aberta e fora da lixeira: `false`
+ * quando outra gravação mudou a âncora entre a leitura e aqui.
  */
-async function completeMeeting(client: SupabaseClient, activityId: string, outcome: MeetingOutcome): Promise<void> {
-  const { error } = await client.rpc("complete_activity", {
-    p_id: activityId,
-    p_outcome_id: null,
-    p_meeting_outcome: outcome,
-    p_note: null,
-    p_meeting: null,
-    p_next: null,
-  });
+async function closeAnchor(admin: SupabaseClient, id: string, outcome: MeetingOutcome): Promise<boolean> {
+  const { data, error } = await admin
+    .from("activities")
+    .update({ done: true, completed_at: new Date().toISOString(), meeting_outcome: outcome })
+    .eq("id", id)
+    .eq("done", false)
+    .is("deleted_at", null)
+    .select("id");
   if (error) throw writeFailure(error, "concluir a reunião no CRM");
+  return (data ?? []).length > 0;
 }
 
 /**
- * Conclui a reunião com o resultado (rótulo de `MEETING_OUTCOME_LABELS`).
- * - Âncora aberta (não apagada, tipo de reunião): conclui a âncora.
- * - Âncora concluída, na lixeira, sumida ou que deixou de ser reunião: segue como sem âncora.
- * - Sem âncora: cria a atividade de reunião (primeiro tipo de reunião ativo da empresa, canal pela regra de
- *   `pickChannel`, no horário em que a reunião começou) e a conclui. Se o banco recusar a conclusão (por exemplo, o
- *   funil exige a próxima atividade), a reunião criada vai para a lixeira, para a nova tentativa não duplicar.
+ * Conclui a reunião com o resultado (rótulo de `MEETING_OUTCOME_LABELS`), com o cliente admin. Devolve o id da reunião
+ * criada, ou `null` quando a âncora resolveu.
+ * - Âncora de reunião aberta: conclui a âncora (`closeAnchor`).
+ * - Âncora de reunião já concluída (pelo vendedor, por outra confirmação ou por uma resposta perdida): com o mesmo
+ *   resultado, nada a gravar; com outro, `CrmSinkUserError`. Nunca cria uma segunda reunião.
+ * - Sem âncora, âncora apagada (lixeira ou de vez) ou que deixou de ser reunião: cria a reunião JÁ CONCLUÍDA num
+ *   único insert (primeiro tipo de reunião ativo da empresa, canal pela regra de `pickChannel`, no horário em que a
+ *   reunião começou), com o dono da reunião e `created_by` = quem confirmou. Sem passo de desfazer.
  */
 export async function completeCrmMeeting(
-  client: SupabaseClient,
+  admin: SupabaseClient,
   t: CrmTarget,
-  a: { anchorActivityId: string | null; outcomeLabel: string; subject: string; startedAt: string; ownerId: string },
-): Promise<void> {
+  a: {
+    anchorActivityId: string | null;
+    outcomeLabel: string;
+    subject: string;
+    startedAt: string;
+    ownerId: string;
+    actorId: string;
+  },
+): Promise<string | null> {
   const outcome = OUTCOME_BY_LABEL.get(squash(a.outcomeLabel));
   if (!outcome) throw new CrmSinkUserError(`O resultado "${a.outcomeLabel.trim()}" não existe no CRM.`);
 
-  const [anchor, types] = await Promise.all([readAnchor(client, a.anchorActivityId), companyTypes(client, t.companyId)]);
-  const anchorIsMeeting = !!anchor && types.find((ty) => ty.id === anchor.type_id)?.is_meeting === true;
-  if (anchor && !anchor.done && !anchor.deleted_at && anchorIsMeeting) {
-    await completeMeeting(client, anchor.id, outcome);
-    return;
+  const [first, types] = await Promise.all([readAnchor(admin, a.anchorActivityId), companyTypes(admin, t.companyId)]);
+  /** Âncora que ainda é a reunião: fora da lixeira e de um tipo de reunião. */
+  const isMeeting = (row: AnchorRow | null): row is AnchorRow =>
+    !!row && !row.deleted_at && types.find((ty) => ty.id === row.type_id)?.is_meeting === true;
+
+  let anchor = first;
+  if (isMeeting(anchor) && !anchor.done) {
+    if (await closeAnchor(admin, anchor.id, outcome)) return null;
+    // Mudou entre a leitura e a gravação (outra confirmação ou o vendedor): decide pelo estado novo.
+    anchor = await readAnchor(admin, anchor.id);
+    if (isMeeting(anchor) && !anchor.done) {
+      throw new Error("Falha ao concluir a reunião no CRM: a atividade mudou durante a gravação.");
+    }
+  }
+  if (isMeeting(anchor)) {
+    if (anchor.meeting_outcome === outcome) return null;
+    const label = anchor.meeting_outcome ? MEETING_OUTCOME_LABELS[anchor.meeting_outcome] : null;
+    throw new CrmSinkUserError(label ? `Esta reunião já foi concluída como "${label}".` : "Esta reunião já foi concluída.");
   }
 
   const type = types.find((ty) => ty.active && ty.is_meeting);
   if (!type) throw new CrmSinkUserError("A empresa não tem um tipo de reunião ativo no CRM.");
-  const channelId = await pickChannel(client, t.companyId, anchor);
-  const id = await insertActivity(client, t, {
+  const channelId = await pickChannel(admin, t.companyId, anchor);
+  return insertActivity(admin, t, {
     owner_id: a.ownerId,
+    created_by: a.actorId,
     type_id: type.id,
     channel_id: channelId,
     subject: subjectOf(a.subject, MEETING_SUBJECT),
     due_at: a.startedAt,
+    done: true,
+    completed_at: new Date().toISOString(),
+    meeting_outcome: outcome,
   });
-  try {
-    await completeMeeting(client, id, outcome);
-  } catch (e) {
-    // Só na recusa do banco (a transação da função voltou atrás). Falha técnica pode ter concluído: não mexe.
-    if (e instanceof CrmSinkUserError) {
-      try {
-        await client.from("activities").update({ deleted_at: new Date().toISOString() }).eq("id", id);
-      } catch {
-        // melhor esforço: a recusa original é o que o vendedor precisa ver
-      }
-    }
-    throw e;
-  }
 }
 
 /**
- * Cria a próxima atividade. Tipo pelo nome (sem diferenciar maiúsculas) entre os ativos da empresa; `dueDate` e
- * `dueTime` no horário de São Paulo (sem hora, 09:00); canal pela regra de `pickChannel`; vínculo pelo alvo.
+ * Cria a próxima atividade aberta, com o cliente admin: dono da reunião como dono e `created_by` = quem confirmou.
+ * Tipo pelo nome (sem diferenciar maiúsculas) entre os ativos da empresa; `dueDate` e `dueTime` no horário de São
+ * Paulo (sem hora, 09:00); canal pela regra de `pickChannel`; vínculo pelo alvo.
  */
 export async function createCrmActivity(
-  client: SupabaseClient,
+  admin: SupabaseClient,
   t: CrmTarget,
-  a: { type: string; subject: string; dueDate: string; dueTime: string | null; ownerId: string; anchorActivityId: string | null },
+  a: {
+    type: string;
+    subject: string;
+    dueDate: string;
+    dueTime: string | null;
+    ownerId: string;
+    actorId: string;
+    anchorActivityId: string | null;
+  },
 ): Promise<void> {
   const wanted = norm(a.type);
-  const type = (await companyTypes(client, t.companyId)).find((ty) => ty.active && norm(ty.name) === wanted);
+  const type = (await companyTypes(admin, t.companyId)).find((ty) => ty.active && norm(ty.name) === wanted);
   if (!type) throw new CrmSinkUserError(`O tipo "${a.type.trim()}" não existe no CRM.`);
   let dueAt: string;
   try {
@@ -226,10 +272,11 @@ export async function createCrmActivity(
   } catch {
     throw new CrmSinkUserError("Data e hora inválidas.");
   }
-  const anchor = await readAnchor(client, a.anchorActivityId);
-  const channelId = await pickChannel(client, t.companyId, anchor);
-  await insertActivity(client, t, {
+  const anchor = await readAnchor(admin, a.anchorActivityId);
+  const channelId = await pickChannel(admin, t.companyId, anchor);
+  await insertActivity(admin, t, {
     owner_id: a.ownerId,
+    created_by: a.actorId,
     type_id: type.id,
     channel_id: channelId,
     subject: subjectOf(a.subject, type.name),
@@ -255,11 +302,12 @@ async function missingFieldsMessage(client: SupabaseClient, companyId: string, e
 
 /**
  * Move o negócio aberto para a etapa pelo nome (sem diferenciar maiúsculas), dentro do funil dele e sem as
- * arquivadas. Ganho ou perdido: `CrmSinkUserError`, sem gravar. Negócio já na etapa: nada a gravar. Campos
- * obrigatórios da etapa faltando: `CrmSinkUserError` com a lista.
+ * arquivadas, com o cliente admin. Como o `moveDeal`, o negócio vai para o fim da etapa (maior posição + 1024, ou 0
+ * se vazia). Ganho ou perdido: `CrmSinkUserError`, sem gravar. Negócio já na etapa: nada a gravar. Campos
+ * obrigatórios da etapa faltando (o gatilho do banco vale também para o admin): `CrmSinkUserError` com a lista.
  */
-export async function moveCrmStage(client: SupabaseClient, dealId: string, stageName: string): Promise<void> {
-  const found = await client
+export async function moveCrmStage(admin: SupabaseClient, dealId: string, stageName: string): Promise<void> {
+  const found = await admin
     .from("deals")
     .select("id, company_id, pipeline_id, stage_id, status")
     .eq("id", dealId)
@@ -273,30 +321,41 @@ export async function moveCrmStage(client: SupabaseClient, dealId: string, stage
   // Mesma regra do `moveDeal`: ganho ou perdido não muda de etapa.
   if (deal.status !== "open") throw new CrmSinkUserError(NOT_OPEN);
 
-  const stages = await client.from("stages").select("id, name").eq("pipeline_id", deal.pipeline_id).is("archived_at", null);
+  const stages = await admin.from("stages").select("id, name").eq("pipeline_id", deal.pipeline_id).is("archived_at", null);
   if (stages.error) throw new Error(`Falha ao ler as etapas do funil: ${stages.error.message}`);
   const wanted = norm(stageName);
   const stage = ((stages.data ?? []) as { id: string; name: string }[]).find((s) => norm(s.name) === wanted);
   if (!stage) throw new CrmSinkUserError(`A etapa "${stageName.trim()}" não existe no funil deste negócio.`);
   if (stage.id === deal.stage_id) return;
 
-  const { data, error } = await client
+  const last = await admin
     .from("deals")
-    .update({ stage_id: stage.id })
+    .select("position")
+    .eq("stage_id", stage.id)
+    .neq("id", deal.id)
+    .is("deleted_at", null)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (last.error) throw new Error(`Falha ao ler as posições da etapa: ${last.error.message}`);
+  const lastPosition = (last.data as { position: number | string } | null)?.position;
+  const position = lastPosition == null ? 0 : Number(lastPosition) + 1024;
+
+  const { data, error } = await admin
+    .from("deals")
+    .update({ stage_id: stage.id, position })
     .eq("id", deal.id)
     .is("deleted_at", null)
     .eq("status", "open")
     .select("id");
   if (error) {
     if (error.message?.includes("OXYN_REQUIRED_FIELDS")) {
-      throw new CrmSinkUserError(await missingFieldsMessage(client, deal.company_id, error));
+      throw new CrmSinkUserError(await missingFieldsMessage(admin, deal.company_id, error));
     }
     throw writeFailure(error, "mover o negócio de etapa");
   }
   if (!data || data.length === 0) {
-    throw new CrmSinkUserError(
-      "Não foi possível mover: o negócio não está aberto, está na lixeira ou você não tem permissão.",
-    );
+    throw new CrmSinkUserError("Não foi possível mover: o negócio não está aberto ou está na lixeira.");
   }
 }
 

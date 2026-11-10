@@ -248,9 +248,9 @@ const unquote = (s: string) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1
  * `onConflict`/`ignoreDuplicates`, update, delete e o `.or` do lease). Chave única violada devolve 23505.
  * Com `clock`, imita o trigger `set_updated_at` de `meetings` (insert e update gravam a hora do relógio).
  * `.rpc` executa as funções de `RPCS` (função desconhecida devolve o erro PGRST202) e entra no `log` como
- * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa;
- * exceção do banco (`DbFailure`, inclusive a do gatilho de obrigatórios da etapa no update de `deals.stage_id`)
- * volta no `error`.
+ * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa, como
+ * o insert ou update de `activities` que quebra o check `done = (completed_at is not null)`; exceção do banco
+ * (`DbFailure`, inclusive a do gatilho de obrigatórios da etapa no update de `deals.stage_id`) volta no `error`.
  */
 export function fakeDb(tables: Tables, clock?: () => Date) {
   const log: { table: string; op: string; values?: unknown }[] = [];
@@ -340,6 +340,7 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
             if (fresh.some((r) => conflict(r))) {
               return resolve({ data: null, error: { code: "23505", message: "duplicate key value" } });
             }
+            if (table === "activities") fresh.forEach(checkCompletion);
             rows.push(...fresh);
             data = fresh;
           } else if (op === "upsert") {
@@ -361,6 +362,7 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
             if (table === "deals" && "stage_id" in payload[0]) {
               for (const r of match) checkDealRequiredFields(tables, { ...r, ...payload[0] });
             }
+            if (table === "activities") for (const r of match) checkCompletion({ ...r, ...payload[0] });
             for (const r of match) {
               Object.assign(r, structuredClone(payload[0]));
               stamp(table, r);

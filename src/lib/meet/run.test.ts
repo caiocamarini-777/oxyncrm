@@ -1760,20 +1760,18 @@ describe("processMeeting: modo CRM", () => {
     expect(t.tables.meeting_suggestions).toHaveLength(3);
   });
 
-  it("a verificação de já gravada olha a coluna do modo: anotação só no Pipedrive (antes da virada) é gravada no CRM", async () => {
+  it("virada com a reunião em andamento: anotação já gravada no Pipedrive (pipedrive_note_id) conta; o CRM não grava outra", async () => {
     const t = setup({
       sinkMode: "crm",
       tables: crmTables({ meeting_notes: [storedNotes({ pipedrive_note_id: 777, written_at: "2026-11-05T14:55:00.000Z" })] }),
     });
     await processMeeting(t.deps, "m1");
-    const written = crmNotes(t);
-    expect(written).toHaveLength(1);
-    expect(t.tables.meeting_notes[0]).toMatchObject({
-      pipedrive_note_id: 777,
-      crm_note_id: written[0].id,
-      written_at: NOW.toISOString(),
-    });
+    expect(crmNotes(t)).toHaveLength(0);
+    expect(t.tables.meeting_notes[0]).toMatchObject({ pipedrive_note_id: 777, written_at: "2026-11-05T14:55:00.000Z" });
+    expect(t.tables.meeting_notes[0].crm_note_id ?? null).toBeNull();
     expect(t.sink.writeNote).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", last_error: null });
+    expect(t.tables.meeting_suggestions).toHaveLength(3);
   });
 
   it("modo Pipedrive ignora crm_note_id: a anotação do Pipedrive ainda é gravada e a trava do espelho não vale", async () => {

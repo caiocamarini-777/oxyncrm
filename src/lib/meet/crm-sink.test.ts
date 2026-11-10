@@ -14,6 +14,8 @@ import {
 
 const CO = "c1";
 const OWNER = "u1";
+/** Quem confirmou a sugestão (outro vendedor que edita o registro). */
+const ACTOR = "u2";
 const STARTED = "2026-11-12T13:00:00.000Z";
 const deal: CrmTarget = { companyId: CO, entity: "deals", recordId: "d1" };
 
@@ -72,6 +74,7 @@ const meetingArgs = (over: Partial<Parameters<typeof completeCrmMeeting>[2]> = {
   subject: "Reunião com a Acme",
   startedAt: STARTED,
   ownerId: OWNER,
+  actorId: ACTOR,
   ...over,
 });
 
@@ -81,6 +84,7 @@ const activityArgs = (over: Partial<Parameters<typeof createCrmActivity>[2]> = {
   dueDate: "2026-11-12",
   dueTime: "14:30",
   ownerId: OWNER,
+  actorId: ACTOR,
   anchorActivityId: null,
   ...over,
 });
@@ -125,6 +129,45 @@ describe("writeCrmNote", () => {
 // ---- completeCrmMeeting --------------------------------------------------------------------------------------
 
 describe("completeCrmMeeting", () => {
+  const ISO = expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/);
+  const updates = (log: { table: string; op: string; values?: unknown }[]) =>
+    log.filter((e) => e.table === "activities" && e.op === "update").map((e) => e.values);
+
+  /**
+   * Muda a âncora entre a leitura e a gravação (outra confirmação ou o vendedor), como se a outra escrita tivesse
+   * chegado antes do update desta.
+   */
+  function changeBeforeUpdate(db: ReturnType<typeof fakeDb>["db"], tables: Tables, patch: Row) {
+    const from = db.from.bind(db);
+    vi.spyOn(db, "from").mockImplementation(((table: string) => {
+      const chain = from(table) as unknown as Record<string, (...args: unknown[]) => unknown>;
+      if (table === "activities") {
+        const update = chain.update;
+        chain.update = (v: unknown) => {
+          Object.assign(tables.activities[0], patch);
+          return update(v);
+        };
+      }
+      return chain;
+    }) as never);
+  }
+
+  /** A escrita (`op`) em `activities` devolve `error`, como o PostgREST; as leituras seguem o banco falso. */
+  function failActivities(db: ReturnType<typeof fakeDb>["db"], op: "insert" | "update", error: Row) {
+    const from = db.from.bind(db);
+    vi.spyOn(db, "from").mockImplementation(((table: string) => {
+      const chain = from(table) as unknown as Record<string, (...args: unknown[]) => unknown>;
+      if (table !== "activities") return chain;
+      const write = chain[op];
+      const then = chain.then;
+      let failing = false;
+      chain[op] = (...args: unknown[]) => ((failing = true), write(...args));
+      chain.then = (resolve: unknown, reject: unknown) =>
+        failing ? (resolve as (v: unknown) => void)({ data: null, error }) : then(resolve, reject);
+      return chain;
+    }) as never);
+  }
+
   it.each([
     ["Realizada", "held"],
     ["realizada", "held"],
@@ -136,9 +179,9 @@ describe("completeCrmMeeting", () => {
   ])("o rótulo %j vira o código %s", async (label, code) => {
     const t = baseTables();
     t.activities.push(anchor());
-    const { db, log } = fakeDb(t);
+    const { db, tables } = fakeDb(t);
     await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1", outcomeLabel: label }));
-    expect(rpcCalls(log)[0].args).toMatchObject({ p_meeting_outcome: code });
+    expect(tables.activities[0].meeting_outcome).toBe(code);
   });
 
   it("rótulo desconhecido lança CrmSinkUserError e não grava nada", async () => {
@@ -151,70 +194,48 @@ describe("completeCrmMeeting", () => {
     expect(writes(log)).toEqual([]);
   });
 
-  it("com âncora aberta: conclui a âncora pela RPC, com os demais parâmetros nulos", async () => {
+  it("com âncora aberta: conclui a âncora direto (done, completed_at, meeting_outcome), sem RPC nem insert", async () => {
     const t = baseTables();
     t.activities.push(anchor());
     const { db, log, tables } = fakeDb(t);
-    await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1", outcomeLabel: "No-show" }));
-    expect(rpcCalls(log)).toEqual([
-      {
-        name: "complete_activity",
-        args: {
-          p_id: "anc1",
-          p_outcome_id: null,
-          p_meeting_outcome: "no_show",
-          p_note: null,
-          p_meeting: null,
-          p_next: null,
-        },
-      },
-    ]);
+    const created = await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1", outcomeLabel: "No-show" }));
+    expect(created).toBeNull();
+    expect(rpcCalls(log)).toEqual([]);
+    expect(updates(log)).toEqual([[{ done: true, completed_at: ISO, meeting_outcome: "no_show" }]]);
     expect(log.some((e) => e.table === "activities" && e.op === "insert")).toBe(false);
     expect(tables.activities).toHaveLength(1);
-    expect(tables.activities[0]).toMatchObject({ done: true, meeting_outcome: "no_show" });
+    expect(tables.activities[0]).toMatchObject({ done: true, completed_at: ISO, meeting_outcome: "no_show", owner_id: OWNER });
   });
 
-  it("remarcada com âncora: conclui sem criar a nova reunião (p_meeting nulo é aceito pela função)", async () => {
+  it("remarcada com âncora: conclui sem criar a nova reunião (o vendedor a cria pela próxima atividade)", async () => {
     const t = baseTables();
     t.activities.push(anchor());
-    const { db, log, tables } = fakeDb(t);
+    const { db, tables } = fakeDb(t);
     await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1", outcomeLabel: "Remarcada" }));
-    expect(rpcCalls(log)[0].args).toMatchObject({ p_meeting_outcome: "rescheduled", p_meeting: null });
+    expect(tables.activities).toHaveLength(1);
     expect(tables.activities[0]).toMatchObject({ done: true, meeting_outcome: "rescheduled" });
   });
 
-  it("sem âncora: cria a reunião (tipo de reunião ativo da empresa, Videochamada) e conclui pela RPC", async () => {
+  it("sem âncora: cria a reunião JÁ CONCLUÍDA num único insert (dono da reunião, autoria de quem confirmou)", async () => {
     const { db, log, tables } = fakeDb(baseTables());
-    await completeCrmMeeting(db, deal, meetingArgs());
+    const created = await completeCrmMeeting(db, deal, meetingArgs());
     expect(tables.activities).toHaveLength(1);
-    const created = tables.activities[0];
-    expect(created).toMatchObject({
+    expect(created).toBe(tables.activities[0].id);
+    expect(tables.activities[0]).toMatchObject({
       company_id: CO,
       owner_id: OWNER,
+      created_by: ACTOR,
       type_id: "t-meet",
       channel_id: "ch-video",
       subject: "Reunião com a Acme",
       due_at: STARTED,
       deal_id: "d1",
+      done: true,
+      completed_at: ISO,
+      meeting_outcome: "held",
     });
-    // inserida aberta (a conclusão direta é bloqueada no banco); quem conclui é a RPC
-    const insert = log.find((e) => e.table === "activities" && e.op === "insert");
-    expect((insert?.values as Row[])[0]).not.toHaveProperty("done");
-    expect((insert?.values as Row[])[0]).not.toHaveProperty("meeting_outcome");
-    expect(rpcCalls(log)).toEqual([
-      {
-        name: "complete_activity",
-        args: {
-          p_id: created.id,
-          p_outcome_id: null,
-          p_meeting_outcome: "held",
-          p_note: null,
-          p_meeting: null,
-          p_next: null,
-        },
-      },
-    ]);
-    expect(created).toMatchObject({ done: true, meeting_outcome: "held" });
+    // Uma escrita só: sem RPC de conclusão e sem passo de desfazer.
+    expect(writes(log).map((e) => `${e.table}.${e.op}`)).toEqual(["activities.insert"]);
   });
 
   it.each([["deals"], ["leads"], ["persons"], ["organizations"]] as const)(
@@ -231,37 +252,78 @@ describe("completeCrmMeeting", () => {
     },
   );
 
-  it("âncora já concluída pelo vendedor: segue como sem âncora, com o canal dela", async () => {
+  it("âncora já concluída com o mesmo resultado: nada a gravar (repetir não cria outra reunião)", async () => {
     const t = baseTables();
     t.activities.push(anchor({ done: true, completed_at: "2026-11-12T14:00:00.000Z", meeting_outcome: "held" }));
     const { db, log, tables } = fakeDb(t);
-    await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }));
-    expect(tables.activities).toHaveLength(2);
-    const created = tables.activities[1];
-    expect(created).toMatchObject({ type_id: "t-meet", channel_id: "ch-phone", done: true, meeting_outcome: "held" });
-    expect(rpcCalls(log)).toHaveLength(1);
-    expect(rpcCalls(log)[0].args).toMatchObject({ p_id: created.id });
+    expect(await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1", outcomeLabel: "realizada" }))).toBeNull();
+    expect(writes(log)).toEqual([]);
+    expect(tables.activities).toHaveLength(1);
     expect(tables.activities[0].completed_at).toBe("2026-11-12T14:00:00.000Z");
   });
 
-  it("âncora na lixeira: segue como sem âncora", async () => {
+  it("âncora já concluída com outro resultado: CrmSinkUserError com o rótulo, sem gravar", async () => {
     const t = baseTables();
-    t.activities.push(anchor({ deleted_at: "2026-11-12T14:00:00.000Z" }));
+    t.activities.push(anchor({ done: true, completed_at: "2026-11-12T14:00:00.000Z", meeting_outcome: "no_show" }));
     const { db, log, tables } = fakeDb(t);
-    await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }));
-    expect(tables.activities).toHaveLength(2);
-    expect(rpcCalls(log)[0].args).toMatchObject({ p_id: tables.activities[1].id });
-    expect(tables.activities[0].done).toBe(false);
+    const p = completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }));
+    await expect(p).rejects.toBeInstanceOf(CrmSinkUserError);
+    await expect(p).rejects.toThrow('Esta reunião já foi concluída como "No-show".');
+    expect(writes(log)).toEqual([]);
+    expect(tables.activities).toHaveLength(1);
   });
 
-  it("âncora apagada de vez (ou invisível ao usuário): segue como sem âncora, com Videochamada", async () => {
+  it("âncora já concluída sem resultado de reunião (importada): CrmSinkUserError sem rótulo, sem gravar", async () => {
+    const t = baseTables();
+    t.activities.push(anchor({ done: true, completed_at: "2026-11-12T14:00:00.000Z" }));
+    const { db, log } = fakeDb(t);
+    await expect(completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }))).rejects.toThrow(
+      new CrmSinkUserError("Esta reunião já foi concluída."),
+    );
+    expect(writes(log)).toEqual([]);
+  });
+
+  it("âncora concluída por outra gravação entre a leitura e o update: mesmo resultado é sucesso, sem criar outra", async () => {
+    const t = baseTables();
+    t.activities.push(anchor());
+    const { db, tables } = fakeDb(t);
+    changeBeforeUpdate(db, tables, { done: true, completed_at: "2026-11-12T14:00:00.000Z", meeting_outcome: "held" });
+    expect(await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }))).toBeNull();
+    expect(tables.activities).toHaveLength(1);
+    expect(tables.activities[0].completed_at).toBe("2026-11-12T14:00:00.000Z");
+  });
+
+  it("âncora concluída por outra gravação entre a leitura e o update, com outro resultado: CrmSinkUserError", async () => {
+    const t = baseTables();
+    t.activities.push(anchor());
+    const { db, tables } = fakeDb(t);
+    changeBeforeUpdate(db, tables, { done: true, completed_at: "2026-11-12T14:00:00.000Z", meeting_outcome: "canceled" });
+    await expect(completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }))).rejects.toThrow(
+      new CrmSinkUserError('Esta reunião já foi concluída como "Cancelada".'),
+    );
+    expect(tables.activities).toHaveLength(1);
+    expect(tables.activities[0].meeting_outcome).toBe("canceled");
+  });
+
+  it("âncora na lixeira: cria a reunião concluída, com o canal dela; a âncora fica como estava", async () => {
+    const t = baseTables();
+    t.activities.push(anchor({ deleted_at: "2026-11-12T14:00:00.000Z" }));
+    const { db, tables } = fakeDb(t);
+    const created = await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }));
+    expect(tables.activities).toHaveLength(2);
+    expect(created).toBe(tables.activities[1].id);
+    expect(tables.activities[1]).toMatchObject({ channel_id: "ch-phone", done: true, meeting_outcome: "held" });
+    expect(tables.activities[0]).toMatchObject({ done: false, deleted_at: "2026-11-12T14:00:00.000Z" });
+  });
+
+  it("âncora apagada de vez: cria a reunião concluída, com Videochamada", async () => {
     const { db, tables } = fakeDb(baseTables());
     await completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "sumiu" }));
     expect(tables.activities).toHaveLength(1);
     expect(tables.activities[0]).toMatchObject({ channel_id: "ch-video", done: true });
   });
 
-  it("âncora que deixou de ser reunião (tipo trocado): segue como sem âncora", async () => {
+  it("âncora que deixou de ser reunião (tipo trocado): cria a reunião concluída e não mexe na âncora", async () => {
     const t = baseTables();
     t.activities.push(anchor({ type_id: "t-call" }));
     const { db, tables } = fakeDb(t);
@@ -289,41 +351,19 @@ describe("completeCrmMeeting", () => {
     expect(writes(log)).toEqual([]);
   });
 
-  it("erro OXYN da RPC vira CrmSinkUserError com o texto do translateDbError", async () => {
-    const t = baseTables();
-    t.activities.push(anchor());
-    const { db } = fakeDb(t);
-    vi.spyOn(db, "rpc").mockResolvedValueOnce({
-      data: null,
-      error: { code: "P0001", message: "OXYN_NEXT_ACTIVITY_REQUIRED" },
-    } as never);
-    const p = completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }));
+  it("erro OXYN do banco na gravação vira CrmSinkUserError com o texto do translateDbError", async () => {
+    const { db } = fakeDb(baseTables());
+    failActivities(db, "insert", { code: "P0001", message: "OXYN_CROSS_COMPANY" });
+    const p = completeCrmMeeting(db, deal, meetingArgs());
     await expect(p).rejects.toBeInstanceOf(CrmSinkUserError);
-    await expect(p).rejects.toThrow("Agende a próxima atividade para concluir.");
+    await expect(p).rejects.toThrow("Os registros ligados precisam ser da mesma empresa.");
   });
 
-  it("sem âncora e a RPC recusa: a reunião criada vai para a lixeira (repetir não duplica)", async () => {
-    const { db, tables } = fakeDb(baseTables());
-    vi.spyOn(db, "rpc").mockResolvedValueOnce({
-      data: null,
-      error: { code: "P0001", message: "OXYN_NEXT_ACTIVITY_REQUIRED" },
-    } as never);
-    await expect(completeCrmMeeting(db, deal, meetingArgs())).rejects.toThrow(
-      "Agende a próxima atividade para concluir.",
-    );
-    expect(tables.activities).toHaveLength(1);
-    expect(tables.activities[0].done).toBe(false);
-    expect(tables.activities[0].deleted_at).toEqual(expect.any(String));
-  });
-
-  it("erro da RPC sem código OXYN é falha técnica (Error comum)", async () => {
+  it("erro do banco sem código OXYN ao concluir a âncora é falha técnica (Error comum)", async () => {
     const t = baseTables();
     t.activities.push(anchor());
     const { db } = fakeDb(t);
-    vi.spyOn(db, "rpc").mockResolvedValueOnce({
-      data: null,
-      error: { code: "PGRST301", message: "conexão recusada" },
-    } as never);
+    failActivities(db, "update", { code: "PGRST301", message: "conexão recusada" });
     const p = completeCrmMeeting(db, deal, meetingArgs({ anchorActivityId: "anc1" }));
     await expect(p).rejects.not.toBeInstanceOf(CrmSinkUserError);
     await expect(p).rejects.toThrow("conexão recusada");
@@ -333,13 +373,14 @@ describe("completeCrmMeeting", () => {
 // ---- createCrmActivity ---------------------------------------------------------------------------------------
 
 describe("createCrmActivity", () => {
-  it("cria a atividade aberta com tipo, assunto, dono, horário de São Paulo e vínculo", async () => {
+  it("cria a atividade aberta com tipo, assunto, dono da reunião, autoria de quem confirmou, horário de São Paulo e vínculo", async () => {
     const { db, tables } = fakeDb(baseTables());
     await createCrmActivity(db, deal, activityArgs());
     expect(tables.activities).toHaveLength(1);
     expect(tables.activities[0]).toMatchObject({
       company_id: CO,
       owner_id: OWNER,
+      created_by: ACTOR,
       type_id: "t-call",
       channel_id: "ch-video",
       subject: "Retornar a proposta",
@@ -483,13 +524,36 @@ describe("moveCrmStage", () => {
     };
   }
 
-  it("acha a etapa pelo nome no funil do negócio (sem diferenciar maiúsculas) e grava stage_id", async () => {
+  it("acha a etapa pelo nome no funil do negócio (sem diferenciar maiúsculas) e grava stage_id (etapa vazia: posição 0)", async () => {
     const { db, log, tables } = fakeDb(stageTables());
     await moveCrmStage(db, "d1", "  proposta ");
     expect(tables.deals[0].stage_id).toBe("st2");
     expect(log.filter((e) => e.table === "deals" && e.op === "update").map((e) => e.values)).toEqual([
-      [{ stage_id: "st2" }],
+      [{ stage_id: "st2", position: 0 }],
     ]);
+  });
+
+  it("como o moveDeal, o negócio vai para o fim da etapa (maior posição + 1024; lixeira não conta)", async () => {
+    const t = stageTables();
+    t.deals[0].position = 5000;
+    const other = (id: string, stage_id: string, position: number, deleted_at: string | null = null): Row => ({
+      id,
+      company_id: CO,
+      pipeline_id: "p1",
+      stage_id,
+      status: "open",
+      deleted_at,
+      position,
+    });
+    t.deals.push(
+      other("d2", "st2", 1024),
+      other("d3", "st2", 3072),
+      other("d4", "st2", 9999, "2026-11-01T00:00:00.000Z"),
+      other("d5", "st1", 8000),
+    );
+    const { db, tables } = fakeDb(t);
+    await moveCrmStage(db, "d1", "Proposta");
+    expect(tables.deals[0]).toMatchObject({ stage_id: "st2", position: 4096 });
   });
 
   it.each([

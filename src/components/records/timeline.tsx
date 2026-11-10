@@ -205,18 +205,16 @@ function EntryContent({ entry, threadActions }: { entry: Entry; threadActions?: 
 /**
  * Histórico do card no formato do Pipedrive: filtros (Tudo, Anotações, Atividades, E-mails, Alterações),
  * trilho com ícones, as conversas de e-mail como cards e as reuniões do Meet como blocos (em Atividades).
- * `emailsLoading`: as conversas ainda estão chegando.
+ * `emailsLoading`: as conversas ainda estão chegando. As atividades planejadas ficam em `RecordHistory`.
  */
 export function Timeline({
   items,
-  planned,
   threads = [],
   meetings = [],
   threadActions,
   emailsLoading = false,
 }: {
   items: TimelineItem[];
-  planned?: ReactNode;
   threads?: RecordThread[];
   meetings?: RecordMeeting[];
   threadActions?: Record<string, ReactNode>;
@@ -254,53 +252,47 @@ export function Timeline({
   const visible = filter === "all" ? entries : entries.filter((e) => e.category === filter);
 
   return (
-    <div className="flex flex-col gap-4">
-      <section aria-label="Planejado">
-        <h3 className="mb-1 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">Planejado</h3>
-        {planned ?? <p className="text-sm text-muted-foreground">Nenhuma atividade planejada.</p>}
-      </section>
-      <section aria-label="Histórico">
-        <h3 className="mb-2 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">Histórico</h3>
-        <div role="group" aria-label="Filtrar histórico" className="mb-3 flex flex-wrap gap-1.5">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              aria-pressed={filter === f.key}
-              onClick={() => setFilter(f.key)}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                filter === f.key ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
+    <section aria-label="Histórico">
+      <h3 className="mb-2 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">Histórico</h3>
+      <div role="group" aria-label="Filtrar histórico" className="mb-3 flex flex-wrap gap-1.5">
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            aria-pressed={filter === f.key}
+            onClick={() => setFilter(f.key)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs font-medium",
+              filter === f.key ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {f.label}
+            {f.key !== "all" && counts[f.key] > 0 ? <span className="ml-1 opacity-80">{counts[f.key]}</span> : null}
+          </button>
+        ))}
+      </div>
+      {emailsLoading && (filter === "all" || filter === "email") ? (
+        <p className="mb-2 text-xs text-muted-foreground">Carregando e-mails…</p>
+      ) : null}
+      {visible.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {filter === "email" && !emailsLoading
+            ? "Nenhum e-mail vinculado a este registro. As conversas com os contatos dele aparecem aqui quando a caixa Gmail está conectada no Perfil."
+            : "Nada por aqui ainda."}
+        </p>
+      ) : (
+        <ol className="flex flex-col">
+          {visible.map((entry, i) => (
+            <RailItem
+              key={entry.key}
+              icon={"thread" in entry ? Mail : "meeting" in entry ? Video : (EVENT_ICONS[entry.item.kind] ?? Circle)}
+              last={i === visible.length - 1}
             >
-              {f.label}
-              {f.key !== "all" && counts[f.key] > 0 ? <span className="ml-1 opacity-80">{counts[f.key]}</span> : null}
-            </button>
+              <EntryContent entry={entry} threadActions={threadActions} />
+            </RailItem>
           ))}
-        </div>
-        {emailsLoading && (filter === "all" || filter === "email") ? (
-          <p className="mb-2 text-xs text-muted-foreground">Carregando e-mails…</p>
-        ) : null}
-        {visible.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {filter === "email" && !emailsLoading
-              ? "Nenhum e-mail vinculado a este registro. As conversas com os contatos dele aparecem aqui quando a caixa Gmail está conectada no Perfil."
-              : "Nada por aqui ainda."}
-          </p>
-        ) : (
-          <ol className="flex flex-col">
-            {visible.map((entry, i) => (
-              <RailItem
-                key={entry.key}
-                icon={"thread" in entry ? Mail : "meeting" in entry ? Video : (EVENT_ICONS[entry.item.kind] ?? Circle)}
-                last={i === visible.length - 1}
-              >
-                <EntryContent entry={entry} threadActions={threadActions} />
-              </RailItem>
-            ))}
-          </ol>
-        )}
-      </section>
-    </div>
+        </ol>
+      )}
+    </section>
   );
 }

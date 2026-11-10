@@ -16,16 +16,24 @@ type Props = { entity: RecordEntity; recordId: string; items: TimelineItem[]; pl
 /**
  * Histórico do card (componente servidor): eventos e anotações já carregados mais as conversas de e-mail e
  * as reuniões do Meet, que chegam depois (Suspense, em paralelo) para não segurar o resto da página.
+ * As atividades planejadas ficam fora do Suspense: dentro dele, a lista era montada de novo quando os e-mails
+ * chegavam, e a janela de "Concluir" aberta nesse meio-tempo sumia.
  */
-export function RecordHistory(props: Props) {
+export function RecordHistory({ planned, ...props }: Props) {
   return (
-    <Suspense fallback={<Timeline items={props.items} planned={props.planned} emailsLoading />}>
-      <RecordHistoryContent {...props} />
-    </Suspense>
+    <div className="flex flex-col gap-4">
+      <section aria-label="Planejado">
+        <h3 className="mb-1 font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">Planejado</h3>
+        {planned ?? <p className="text-sm text-muted-foreground">Nenhuma atividade planejada.</p>}
+      </section>
+      <Suspense fallback={<Timeline items={props.items} emailsLoading />}>
+        <RecordHistoryContent {...props} />
+      </Suspense>
+    </div>
   );
 }
 
-async function RecordHistoryContent({ entity, recordId, items, planned }: Props) {
+async function RecordHistoryContent({ entity, recordId, items }: Omit<Props, "planned">) {
   // Se a parte de e-mail falhar, o histórico segue sem as conversas; as reuniões falham em silêncio dentro da consulta.
   // Os e-mails importados do Pipedrive vêm junto e também falham sem derrubar o resto.
   const [gmail, imported, compose, meetings] = await Promise.all([
@@ -67,5 +75,5 @@ async function RecordHistoryContent({ entity, recordId, items, planned }: Props)
     }
   }
 
-  return <Timeline items={items} planned={planned} threads={threads} meetings={meetings} threadActions={threadActions} />;
+  return <Timeline items={items} threads={threads} meetings={meetings} threadActions={threadActions} />;
 }

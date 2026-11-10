@@ -1,5 +1,5 @@
-// Falha se o cadastro aberto estiver ligado no projeto Supabase.
-import { assertSignupDisabled } from "@/lib/auth/settings-check";
+// Falha se o cadastro aberto estiver ligado ou se o login por e-mail estiver desligado no projeto Supabase.
+import { assertEmailLoginEnabled, assertSignupDisabled } from "@/lib/auth/settings-check";
 import { loadEnv } from "./load-env";
 
 loadEnv();
@@ -12,7 +12,8 @@ async function main() {
     process.exit(1);
   }
   await assertSignupDisabled(url, key);
-  console.log("Cadastro aberto desligado.");
+  await assertEmailLoginEnabled(url, key);
+  console.log("Cadastro aberto desligado e login por e-mail ligado.");
 }
 
 main().catch((err) => {

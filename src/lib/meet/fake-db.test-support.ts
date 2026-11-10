@@ -1,6 +1,6 @@
 /**
- * Banco em memória dos testes do assistente de reuniões (rodada do cron e ações do vendedor). Só os testes
- * importam este arquivo.
+ * Banco em memória dos testes do assistente de reuniões (rodada do cron e ações do vendedor) e do store da
+ * atualização do Pipedrive pelo CRM. Só os testes importam este arquivo.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -14,6 +14,7 @@ const UNIQUE: Record<string, string[]> = {
   meeting_notes: ["meeting_id"],
   meeting_suggestions: ["meeting_id", "kind"],
   notifications: ["meeting_id", "kind", "user_id"],
+  pipedrive_push_retry: ["entity", "record_id"],
 };
 
 /** Tabelas com o trigger `set_updated_at` (o banco grava `now()` em todo update). */
@@ -42,6 +43,8 @@ const DEFAULTS: Record<string, () => Row> = {
   meeting_notes: () => ({ pipedrive_note_id: null, written_at: null }),
   meeting_suggestions: () => ({ id: `s${++seq}`, status: "pending", decided_by: null, decided_at: null, last_error: null }),
   notifications: () => ({ id: ++seq, read_at: null }),
+  pipedrive_push_runs: () => ({ id: `r${++seq}`, status: "running", finished_at: null, counters: {}, errors: [] }),
+  pipedrive_push_retry: () => ({ attempts: 1, last_error: null }),
 };
 
 /** Colunas que `calendar_mark_synced` grava; as demais chaves de `p_fields` são ignoradas, como no banco. */
@@ -110,7 +113,28 @@ function checkCompletion(row: Row): void {
  * falso não tem gatilhos, então a marca de sessão (`oxyn.calendar_inbound`) não tem efeito aqui; quem testa confere
  * pelo `log` que a gravação passou pela função.
  */
-const RPCS: Record<string, (tables: Tables, args: Row) => unknown> = {
+const RPCS: Record<string, (tables: Tables, args: Row, now: string) => unknown> = {
+  // Atualização do Pipedrive pelo CRM (`pipedrive_push_link`/`_unlink`) sobre `external_ids`, com a regra da
+  // migration: upsert pela chave (source, entity, external_id, company_id).
+  pipedrive_push_link(tables, a, now) {
+    const ext = (tables.external_ids ??= []);
+    const record = (tables[String(a.p_entity)] ?? []).find((r) => r.id === a.p_record);
+    const values = { record_id: a.p_record, job_id: null, record_updated_at: record?.updated_at ?? null, imported_at: now };
+    const found = ext.find(
+      (r) =>
+        r.source === "pipedrive" && r.entity === a.p_entity && r.external_id === a.p_external_id && r.company_id === a.p_company,
+    );
+    if (found) Object.assign(found, values);
+    else ext.push({ source: "pipedrive", entity: a.p_entity, external_id: a.p_external_id, company_id: a.p_company, ...values });
+    return null;
+  },
+  pipedrive_push_unlink(tables, a) {
+    const ext = (tables.external_ids ??= []);
+    for (const r of ext.filter((r) => r.source === "pipedrive" && r.entity === a.p_entity && r.record_id === a.p_record)) {
+      ext.splice(ext.indexOf(r), 1);
+    }
+    return null;
+  },
   // Volta do envio à Agenda: só as colunas da Agenda; chave ausente mantém o valor, chave com null grava null.
   calendar_mark_synced: (tables, args) => {
     const row = (tables.activities ?? []).find((r) => r.id === args.p_activity);
@@ -174,10 +198,50 @@ function cmp(a: unknown, b: unknown): number {
 }
 const unquote = (s: string) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1) : s);
 
+/** Divide a expressão do `.or` nas vírgulas de fora de parênteses e de aspas. */
+function splitTop(expr: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let cur = "";
+  for (const ch of expr) {
+    if (ch === '"') quoted = !quoted;
+    else if (!quoted && ch === "(") depth++;
+    else if (!quoted && ch === ")") depth--;
+    if (ch === "," && !quoted && depth === 0) {
+      out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** Um termo do `.or` do PostgREST: `col.op.valor` (is, eq, lt, lte, gt, gte) ou `and(...)`/`or(...)` aninhados. */
+function orTerm(term: string): (r: Row) => boolean {
+  const nested = /^(and|or)\((.*)\)$/.exec(term);
+  if (nested) {
+    const parts = splitTop(nested[2]).map(orTerm);
+    return nested[1] === "and" ? (r) => parts.every((f) => f(r)) : (r) => parts.some((f) => f(r));
+  }
+  const [col, o, ...rest] = term.split(".");
+  const v = unquote(rest.join("."));
+  return (r: Row) => {
+    if (o === "is") return (r[col] ?? null) === null;
+    if (o === "lt") return r[col] != null && cmp(r[col], v) < 0;
+    if (o === "lte") return r[col] != null && cmp(r[col], v) <= 0;
+    if (o === "gt") return r[col] != null && cmp(r[col], v) > 0;
+    if (o === "gte") return r[col] != null && cmp(r[col], v) >= 0;
+    return r[col] === v;
+  };
+}
+
+
 /**
  * Banco falso no padrão do `run.test.ts` do Gmail, mas com estado: as tabelas são listas de linhas e o
  * construtor de consultas entende o vocabulário que a rodada usa (filtros, ordem, insert, upsert com
- * `onConflict`/`ignoreDuplicates`, update, delete e o `.or` do lease). Chave única violada devolve 23505.
+ * `onConflict`/`ignoreDuplicates`, update, delete e o `.or`, inclusive com `and(...)` aninhado). Chave única
+ * violada devolve 23505. `.rpc` só conhece as funções de `RPCS`.
  * Com `clock`, imita o trigger `set_updated_at` de `meetings` (insert e update gravam a hora do relógio).
  * `.rpc` executa as funções de `RPCS` (função desconhecida devolve o erro PGRST202) e entra no `log` como
  * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa.
@@ -226,16 +290,12 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
         filters.push((r) => (o === "is" ? (r[c] ?? null) !== v : true)), chain
       );
       chain.in = (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), chain);
+      chain.gt = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) > 0), chain);
       chain.lt = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) < 0), chain);
       chain.lte = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) <= 0), chain);
       chain.gte = (c: string, v: unknown) => (filters.push((r) => r[c] != null && cmp(r[c], v) >= 0), chain);
       chain.or = (expr: string) => {
-        const parts = expr.split(",").map((p) => {
-          const [col, o, ...rest] = p.split(".");
-          const v = unquote(rest.join("."));
-          return (r: Row) =>
-            o === "is" ? (r[col] ?? null) === null : o === "lt" ? r[col] != null && cmp(r[col], v) < 0 : r[col] === v;
-        });
+        const parts = splitTop(expr).map(orTerm);
         filters.push((r) => parts.some((f) => f(r)));
         return chain;
       };
@@ -317,7 +377,7 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
       const fn = RPCS[name];
       if (!fn) return Promise.resolve({ data: null, error: { code: "PGRST202", message: `função ${name} não existe` } });
       try {
-        return Promise.resolve({ data: fn(tables, args), error: null });
+        return Promise.resolve({ data: fn(tables, args, (clock?.() ?? new Date()).toISOString()) ?? null, error: null });
       } catch (e) {
         return Promise.reject(e);
       }

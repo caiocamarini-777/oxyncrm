@@ -205,7 +205,9 @@ anonymous_users = 30
 # Number of sessions that can be refreshed in a 5 minute interval per IP address.
 token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
-sign_in_sign_ups = 30
+# Só vale no Supabase local (dev e CI): os e2e fazem dezenas de logins seguidos do mesmo IP. Os projetos
+# hospedados têm o próprio limite no painel.
+sign_in_sign_ups = 1000
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
 token_verifications = 30
 # Number of Web3 logins that can be made in a 5 minute interval per IP address.
@@ -218,8 +220,9 @@ web3 = 30
 # secret = ""
 
 [auth.email]
-# Allow/disallow new user signups via email to your project.
-enable_signup = false
+# No Supabase CLI esta opção liga ou desliga o provedor Email inteiro (GOTRUE_EXTERNAL_EMAIL_ENABLED), inclusive o
+# login com senha. O cadastro aberto fica fechado por `[auth] enable_signup = false`, conferido por `pnpm check:auth`.
+enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true

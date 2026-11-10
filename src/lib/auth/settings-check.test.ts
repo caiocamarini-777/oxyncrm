@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertSignupDisabled, SIGNUP_ENABLED_MESSAGE } from "./settings-check";
+import {
+  assertEmailLoginEnabled,
+  assertSignupDisabled,
+  EMAIL_LOGIN_DISABLED_MESSAGE,
+  SIGNUP_ENABLED_MESSAGE,
+} from "./settings-check";
 
 function mockFetch(body: unknown, ok = true, status = 200) {
   const fn = vi.fn().mockResolvedValue({ ok, status, json: async () => body });
@@ -32,5 +37,31 @@ describe("assertSignupDisabled", () => {
   it("falha quando a leitura falha", async () => {
     mockFetch({}, false, 500);
     await expect(assertSignupDisabled("https://x.supabase.co", "anon")).rejects.toThrow("HTTP 500");
+  });
+});
+
+describe("assertEmailLoginEnabled", () => {
+  it("passa quando o login por e-mail está ligado", async () => {
+    const fn = mockFetch({ disable_signup: true, external: { email: true } });
+    await expect(assertEmailLoginEnabled("https://x.supabase.co", "anon")).resolves.toBeUndefined();
+    expect(fn).toHaveBeenCalledWith("https://x.supabase.co/auth/v1/settings", {
+      headers: { apikey: "anon" },
+    });
+  });
+  it("falha quando o login por e-mail está desligado", async () => {
+    mockFetch({ disable_signup: true, external: { email: false } });
+    await expect(assertEmailLoginEnabled("https://x.supabase.co", "anon")).rejects.toThrow(
+      EMAIL_LOGIN_DISABLED_MESSAGE,
+    );
+  });
+  it("falha quando o campo está ausente", async () => {
+    mockFetch({ disable_signup: true });
+    await expect(assertEmailLoginEnabled("https://x.supabase.co", "anon")).rejects.toThrow(
+      EMAIL_LOGIN_DISABLED_MESSAGE,
+    );
+  });
+  it("falha quando a leitura falha", async () => {
+    mockFetch({}, false, 500);
+    await expect(assertEmailLoginEnabled("https://x.supabase.co", "anon")).rejects.toThrow("HTTP 500");
   });
 });

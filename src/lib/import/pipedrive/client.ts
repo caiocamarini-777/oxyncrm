@@ -44,6 +44,7 @@ type Envelope = {
   success?: boolean;
   data?: unknown;
   error?: string;
+  error_info?: string;
   additional_data?: {
     next_start?: number;
     pagination?: { more_items_in_collection?: boolean; next_start?: number };
@@ -63,16 +64,6 @@ export const DOWNLOAD_TOTAL_MS = 300_000;
 /** Máximo de redirecionamentos seguidos no download (sem o token). */
 const MAX_REDIRECTS = 3;
 
-type FetchMode = {
-  accept: string;
-  /** Teto de cada tentativa. */
-  timeoutMs: number;
-  /** Teto da chamada inteira, somando tentativas e esperas. */
-  totalMs: number;
-  /** Trata redirecionamentos à mão, sem repassar o token ao destino. */
-  manualRedirect?: boolean;
-};
-
 const JSON_MODE: FetchMode = { accept: "application/json", timeoutMs: REQUEST_TIMEOUT_MS, totalMs: REQUEST_TOTAL_MS };
 const DOWNLOAD_MODE: FetchMode = {
   accept: "*/*",
@@ -80,6 +71,29 @@ const DOWNLOAD_MODE: FetchMode = {
   totalMs: DOWNLOAD_TOTAL_MS,
   manualRedirect: true,
 };
+
+type FetchMode = {
+  accept: string;
+  /** Teto de cada tentativa. */
+  timeoutMs: number;
+  /** Teto da chamada inteira, somando tentativas e esperas. */
+  totalMs: number;
+  /** Método HTTP (GET quando ausente). */
+  method?: string;
+  /** Corpo já serializado em JSON; manda `content-type: application/json` junto. */
+  body?: string;
+  /**
+   * Escrita não idempotente (POST): só repete no 429 (o pedido foi rejeitado, não processado). 5xx, timeout e falha
+   * de rede são ambíguos (o Pipedrive pode ter criado o registro) e lançam na hora, sem nova chamada.
+   */
+  retryOnly429?: boolean;
+  /** Escritas: inclui na mensagem do erro o `error`/`error_info` do envelope da resposta (nunca headers nem token). */
+  errorDetail?: boolean;
+  /** Trata redirecionamentos à mão, sem repassar o token ao destino. */
+  manualRedirect?: boolean;
+};
+
+const ERROR_DETAIL_MAX = 300;
 
 /** Retry-After em segundos ou em data HTTP; ms de espera (0 se ausente/inválido). */
 export function retryAfterMs(res: Response, now = Date.now()): number {
@@ -96,6 +110,20 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   const doFetch = opts.fetchImpl ?? fetch;
   const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = opts.nowImpl ?? Date.now;
+
+  /** Mensagem de erro do envelope (`error` e `error_info`), sem o token, em uma linha e com até 300 caracteres. */
+  async function errorDetail(res: Response): Promise<string> {
+    try {
+      const env = JSON.parse(await res.text()) as Envelope;
+      const text = [env?.error, env?.error_info]
+        .filter((p): p is string => typeof p === "string" && p.trim() !== "")
+        .join(" - ");
+      const clean = (opts.token ? text.split(opts.token).join("[token]") : text).replace(/\s+/g, " ").trim();
+      return clean.slice(0, ERROR_DETAIL_MAX);
+    } catch {
+      return "";
+    }
+  }
 
   /**
    * Segue à mão o redirecionamento de um download (até MAX_REDIRECTS saltos), SEM o header do token: o destino é
@@ -137,8 +165,9 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
 
   /**
    * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de `mode.totalMs` somando
-   * tentativas e esperas. Nunca inclui headers em erros. `read` extrai o corpo de uma resposta 2xx (JSON ou bytes);
-   * se ele falhar, vira PipedriveError sem nova tentativa.
+   * tentativas e esperas (o POST repete só no 429: ver `retryOnly429`). Nunca inclui headers em erros.
+   * `mode.method` e `mode.body` (JSON) servem às escritas, e `mode.manualRedirect` ao download; `read` extrai o
+   * resultado de uma resposta 2xx (JSON ou bytes) e, se falhar, vira PipedriveError sem nova tentativa.
    */
   async function fetchWithRetry<T>(path: string, mode: FetchMode, read: (res: Response) => Promise<T>): Promise<T> {
     const url = `${base}${path}`;
@@ -147,7 +176,13 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       let res: Response | null = null;
       try {
         res = await doFetch(url, {
-          headers: { "x-api-token": opts.token, accept: mode.accept },
+          method: mode.method ?? "GET",
+          headers: {
+            "x-api-token": opts.token,
+            accept: mode.accept,
+            ...(mode.body !== undefined ? { "content-type": "application/json" } : {}),
+          },
+          ...(mode.body !== undefined ? { body: mode.body } : {}),
           ...(mode.manualRedirect ? { redirect: "manual" as const } : {}),
           signal: AbortSignal.timeout(Math.max(1, Math.min(mode.timeoutMs, deadline - now()))),
         });
@@ -161,7 +196,9 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       if (res && mode.manualRedirect && res.status >= 300 && res.status < 400) {
         res = await followRedirects(res, url, path, mode, deadline);
       }
-      const retryable = res === null || res.status === 429 || res.status >= 500;
+      const retryable = mode.retryOnly429
+        ? res !== null && res.status === 429
+        : res === null || res.status === 429 || res.status >= 500;
       if (res && res.ok) {
         try {
           return await read(res);
@@ -169,16 +206,23 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
           throw new PipedriveError(`Resposta inválida do Pipedrive em ${path.split("?")[0]}`, res.status);
         }
       }
-      // corpo não lido é descartado antes de repetir ou falhar (libera a conexão)
-      if (res) await res.body?.cancel().catch(() => {});
       const wait = attempt < BACKOFF_MS.length
         ? Math.min(MAX_WAIT_MS, Math.max(BACKOFF_MS[attempt], res ? retryAfterMs(res) : 0))
         : 0;
       // sem tempo para esperar e tentar de novo dentro do teto: desiste agora
-      if (!retryable || attempt >= BACKOFF_MS.length || now() + wait >= deadline) {
+      const giveUp = !retryable || attempt >= BACKOFF_MS.length || now() + wait >= deadline;
+      // ao desistir de uma escrita lê a mensagem do Pipedrive; senão o corpo é descartado (libera a conexão)
+      let detail = "";
+      if (res) {
+        if (giveUp && mode.errorDetail) detail = await errorDetail(res);
+        else await res.body?.cancel().catch(() => {});
+      }
+      if (giveUp) {
         const where = path.split("?")[0];
         throw new PipedriveError(
-          res ? `Pipedrive respondeu ${res.status} em ${where}` : `Falha de rede ao chamar o Pipedrive em ${where}`,
+          res
+            ? `Pipedrive respondeu ${res.status} em ${where}${detail ? `: ${detail}` : ""}`
+            : `Falha de rede ao chamar o Pipedrive em ${where}`,
           res?.status,
         );
       }
@@ -190,6 +234,18 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
     return fetchWithRetry(path, JSON_MODE, async (res) => (await res.json()) as Envelope);
   }
 
+  /**
+   * Escrita em JSON (POST/PUT/PATCH) com as esperas e tetos da leitura; devolve o `data` do envelope. PUT e PATCH
+   * repetem como a leitura (idempotentes); o POST só repete no 429.
+   */
+  async function write(method: "POST" | "PUT" | "PATCH", path: string, body: unknown): Promise<unknown> {
+    const mode: FetchMode = {
+      ...JSON_MODE, method, body: JSON.stringify(body), errorDetail: true, ...(method === "POST" ? { retryOnly429: true } : {}),
+    };
+    const envelope = await fetchWithRetry(path, mode, async (res) => (await res.json()) as Envelope);
+    return envelope.data;
+  }
+
   async function list<T = PdItem>(path: string): Promise<T[]> {
     const sep = path.includes("?") ? "&" : "?";
     const body = await request(`${path}${sep}limit=500`);
@@ -197,6 +253,23 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   }
 
   return {
+    post: (path: string, body: unknown): Promise<unknown> => write("POST", path, body),
+    put: (path: string, body: unknown): Promise<unknown> => write("PUT", path, body),
+    patch: (path: string, body: unknown): Promise<unknown> => write("PATCH", path, body),
+    /**
+     * DELETE com as mesmas tentativas; 404 e 410 não são erro (o registro já foi apagado). O corpo da resposta é
+     * ignorado.
+     */
+    async del(path: string): Promise<void> {
+      try {
+        await fetchWithRetry(path, { ...JSON_MODE, method: "DELETE", errorDetail: true }, async (res) => {
+          await res.body?.cancel().catch(() => {});
+        });
+      } catch (e) {
+        if (e instanceof PipedriveError && (e.status === 404 || e.status === 410)) return;
+        throw e;
+      }
+    },
     /** GET genérico (caminho com a query). `nextStart` vem da paginação do Pipedrive, ou `null` se não há mais itens. */
     async get(path: string): Promise<{ data: unknown; nextStart: number | null }> {
       const body = await request(path);

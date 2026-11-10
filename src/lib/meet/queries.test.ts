@@ -2,8 +2,28 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+/** Cliente do usuário falso: grava a cadeia da consulta e devolve `result`. */
+const server = vi.hoisted(() => ({ result: { data: null as unknown, error: null as unknown }, calls: [] as unknown[][] }));
+vi.mock("@/lib/supabase/server", () => ({
+  createServerClient: async () => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "in", "not"]) {
+      chain[m] = (...args: unknown[]) => (server.calls.push([m, ...args]), chain);
+    }
+    chain.then = (resolve: (v: unknown) => void) => resolve(server.result);
+    return { from: (table: string) => (server.calls.push(["from", table]), chain) };
+  },
+}));
+
 import type { TimelineItem } from "@/lib/timeline/queries";
-import { hideMeetingNotes, meetingTab, toEndedMeeting, toMeetingListRow, toRecordMeeting } from "./queries";
+import {
+  getMeetingCrmNoteIds,
+  hideMeetingNotes,
+  meetingTab,
+  toEndedMeeting,
+  toMeetingListRow,
+  toRecordMeeting,
+} from "./queries";
 
 const note = (id: string, externalId?: string): TimelineItem => ({
   kind: "note",
@@ -37,8 +57,50 @@ describe("hideMeetingNotes", () => {
   it("conjunto vazio devolve tudo, e a lista de entrada não é alterada", () => {
     const items = [note("n1", "101"), event("created")];
     expect(hideMeetingNotes(items, new Set())).toEqual(items);
-    hideMeetingNotes(items, new Set(["101"]));
+    expect(hideMeetingNotes(items, new Set(), new Set())).toEqual(items);
+    hideMeetingNotes(items, new Set(["101"]), new Set(["n1"]));
     expect(items).toHaveLength(2);
+  });
+
+  it("remove a anotação gravada pelo assistente no CRM pelo id da nota (getMeetingCrmNoteIds)", () => {
+    const items = [note("n1"), note("n2"), event("created"), note("n3", "101")];
+    const out = hideMeetingNotes(items, new Set(), new Set(["n2"]));
+    expect(out.map((i) => i.note?.id ?? i.kind)).toEqual(["n1", "created", "n3"]);
+  });
+
+  it("junta os dois conjuntos: a cópia importada do Pipedrive e a nota do CRM saem juntas", () => {
+    const items = [note("n1", "101"), note("n2"), note("n3")];
+    const out = hideMeetingNotes(items, new Set(["101"]), new Set(["n3"]));
+    expect(out.map((i) => i.note?.id)).toEqual(["n2"]);
+  });
+
+  it("id do CRM só esconde anotação: evento sem nota fica", () => {
+    const weird: TimelineItem = { ...event("note_added"), externalId: "n1" };
+    expect(hideMeetingNotes([weird, note("n1")], new Set(), new Set(["n1"]))).toEqual([weird]);
+  });
+});
+
+describe("getMeetingCrmNoteIds", () => {
+  it("lê os crm_note_id das reuniões que o card do registro mostra", async () => {
+    server.calls = [];
+    server.result = { data: [{ crm_note_id: "n1" }, { crm_note_id: "n2" }, { crm_note_id: null }], error: null };
+    expect(await getMeetingCrmNoteIds("deals", "d1")).toEqual(new Set(["n1", "n2"]));
+    expect(server.calls).toEqual([
+      ["from", "meeting_notes"],
+      ["select", "crm_note_id, meetings!inner(entity, record_id, status)"],
+      ["eq", "meetings.entity", "deals"],
+      ["eq", "meetings.record_id", "d1"],
+      ["in", "meetings.status", ["done", "processing"]],
+      ["not", "crm_note_id", "is", null],
+    ]);
+  });
+
+  it("falha em silêncio (ex.: coluna ainda não criada): conjunto vazio, nada é escondido", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    server.result = { data: null, error: { code: "42703", message: "column meeting_notes.crm_note_id does not exist" } };
+    expect(await getMeetingCrmNoteIds("deals", "d1")).toEqual(new Set());
+    expect(log).toHaveBeenCalled();
+    log.mockRestore();
   });
 });
 

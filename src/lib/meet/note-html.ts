@@ -1,6 +1,6 @@
 /**
  * HTML da anotação gravada no Pipedrive (que aceita um subconjunto de HTML nas notas):
- * seções em negrito, listas `<ul><li>` e rodapé em itálico. Todo texto vem do Claude, então passa por escape.
+ * seções em negrito, listas `<ul><li>` e rodapé em itálico. Todo texto vem do Claude ou do Gemini, então passa por escape.
  */
 import { formatShortDate, formatTime } from "@/lib/activities/time";
 import type { MeetingNotes } from "./notes";
@@ -22,7 +22,13 @@ const list = (items: string[]) => (items.length ? `<ul>${items.map((i) => `<li>$
 const section = (title: string, body: string) => (body ? `<b>${title}</b>${body}` : "");
 
 export function renderNoteHtml(n: MeetingNotes, meta: NoteMeta): string {
-  const summary = n.summary.trim() ? `<p>${escapeHtml(n.summary.trim())}</p>` : "";
+  // Parágrafos separados por linha em branco; quebra simples vira <br> (o resumo do Gemini vem em várias linhas).
+  const summary = n.summary
+    .trim()
+    .split(/\n{2,}/)
+    .filter((p) => p.trim())
+    .map((p) => `<p>${escapeHtml(p.trim()).replace(/\n/g, "<br>")}</p>`)
+    .join("");
   const qualification = n.qualification.map((q) => `<b>${escapeHtml(q.question)}:</b> ${escapeHtml(q.answer)}`);
   const steps = n.next_steps.map((s) => {
     const owner = s.owner.trim();

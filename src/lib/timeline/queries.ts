@@ -1,6 +1,11 @@
 import "server-only";
 import { getCurrentProfile } from "@/lib/auth/session";
-import { getMeetingNotePipedriveIds, hideMeetingNotes, importedNoteExternalIds } from "@/lib/meet/queries";
+import {
+  getMeetingCrmNoteIds,
+  getMeetingNotePipedriveIds,
+  hideMeetingNotes,
+  importedNoteExternalIds,
+} from "@/lib/meet/queries";
 import { createServerClient } from "@/lib/supabase/server";
 import type { RecordEntity } from "@/lib/records/types";
 import { activityTimelineItem, describeEvent, sortByAtDesc } from "./describe";
@@ -35,13 +40,13 @@ function fail(what: string, error: { message: string; code?: string }): never {
 /**
  * Histórico do registro, mais recente primeiro: eventos, anotações e atividades concluídas. Anotações e
  * atividades vêm das próprias tabelas (as importadas do Pipedrive não têm evento). Os e-mails entram como
- * conversas no RecordHistory. A anotação que o assistente de reuniões gravou no Pipedrive e voltou pela
- * importação fica de fora, porque o bloco da reunião já a mostra.
+ * conversas no RecordHistory. A anotação que o assistente de reuniões gravou (no Pipedrive, de volta pela
+ * importação, ou direto no CRM) fica de fora, porque o bloco da reunião já a mostra.
  */
 export async function getTimeline(entity: RecordEntity, recordId: string): Promise<TimelineItem[]> {
   const supabase = await createServerClient();
   const profile = await getCurrentProfile();
-  const [events, notes, done, meetingNoteIds] = await Promise.all([
+  const [events, notes, done, meetingNoteIds, meetingCrmNoteIds] = await Promise.all([
     supabase
       .from("timeline_events")
       .select("id, kind, actor_id, data, created_at")
@@ -65,6 +70,7 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
       .order("completed_at", { ascending: false, nullsFirst: false })
       .limit(300),
     getMeetingNotePipedriveIds(entity, recordId),
+    getMeetingCrmNoteIds(entity, recordId),
   ]);
   if (events.error) fail("eventos", events.error);
   if (notes.error) fail("anotações", notes.error);
@@ -160,5 +166,5 @@ export async function getTimeline(entity: RecordEntity, recordId: string): Promi
     const t = Array.isArray(a.type) ? a.type[0] : a.type;
     items.push(activityTimelineItem({ ...a, typeName: t?.name ?? null, ownerName: a.owner_id ? (names[a.owner_id] ?? null) : null }));
   }
-  return hideMeetingNotes(sortByAtDesc(items), meetingNoteIds);
+  return hideMeetingNotes(sortByAtDesc(items), meetingNoteIds, meetingCrmNoteIds);
 }

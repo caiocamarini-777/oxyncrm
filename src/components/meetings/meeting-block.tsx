@@ -84,7 +84,9 @@ function NotesView({ notes }: { notes: RecordMeetingNotes }) {
 
 /**
  * Uma sugestão do assistente. Pendente: Confirmar, Editar (formulário ali mesmo) e Descartar. Com falha: o erro
- * e Confirmar de novo ou Descartar. Confirmada ou descartada: só a situação. Sem permissão de edição, só leitura.
+ * e Confirmar de novo, Editar (ex.: tipo ou etapa que não existe mais) ou Descartar. Confirmada ou descartada: só
+ * a situação. Sem permissão de edição, só leitura. O destino (Pipedrive ou CRM) segue `MEETING_SINK`, no servidor,
+ * e o erro guardado já diz de onde veio.
  */
 function SuggestionRow({ suggestion, canEdit }: { suggestion: RecordMeetingSuggestion; canEdit: boolean }) {
   const router = useRouter();
@@ -107,7 +109,7 @@ function SuggestionRow({ suggestion, canEdit }: { suggestion: RecordMeetingSugge
       } else {
         toast.error(res.error);
       }
-      // Também no erro: o servidor pode ter mudado a sugestão (falha ao gravar no Pipedrive vira "failed").
+      // Também no erro: o servidor pode ter mudado a sugestão (falha ao gravar vira "failed").
       startTransition(() => router.refresh());
     } catch {
       toast.error("Não foi possível concluir agora. Tente novamente.");
@@ -123,7 +125,7 @@ function SuggestionRow({ suggestion, canEdit }: { suggestion: RecordMeetingSugge
       return;
     }
     setFormError(null);
-    void run(() => confirmSuggestion(id, valid.payload), "Sugestão confirmada e gravada no Pipedrive.");
+    void run(() => confirmSuggestion(id, valid.payload), "Sugestão confirmada e gravada.");
   }
 
   function cancelEdit() {
@@ -141,7 +143,7 @@ function SuggestionRow({ suggestion, canEdit }: { suggestion: RecordMeetingSugge
 
       {status === "confirmed" ? (
         <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-          <Check className="size-3.5" aria-hidden /> Confirmada e gravada no Pipedrive.
+          <Check className="size-3.5" aria-hidden /> Confirmada e gravada.
         </p>
       ) : null}
       {status === "dismissed" ? (
@@ -154,7 +156,7 @@ function SuggestionRow({ suggestion, canEdit }: { suggestion: RecordMeetingSugge
         <p role="alert" className="mt-1 flex items-start gap-1 text-xs text-destructive">
           <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
           <span className="break-words">
-            Não foi possível gravar no Pipedrive{suggestion.lastError ? `: ${suggestion.lastError}` : "."}
+            Não foi possível gravar{suggestion.lastError ? `: ${suggestion.lastError}` : "."}
           </span>
         </p>
       ) : null}
@@ -208,15 +210,13 @@ function SuggestionRow({ suggestion, canEdit }: { suggestion: RecordMeetingSugge
             type="button"
             size="sm"
             disabled={busy}
-            onClick={() => void run(() => confirmSuggestion(id), "Sugestão confirmada e gravada no Pipedrive.")}
+            onClick={() => void run(() => confirmSuggestion(id), "Sugestão confirmada e gravada.")}
           >
             Confirmar
           </Button>
-          {status === "pending" ? (
-            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setEditing(true)}>
-              Editar
-            </Button>
-          ) : null}
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setEditing(true)}>
+            Editar
+          </Button>
           <Button
             type="button"
             variant="ghost"

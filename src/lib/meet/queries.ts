@@ -185,6 +185,34 @@ export async function getMeetingNotePipedriveIds(entity: RecordEntity, recordId:
 }
 
 /**
+ * Ids das anotações do CRM gravadas pelo assistente (modo `MEETING_SINK=crm`) nas reuniões mostradas no card.
+ * Falha em silêncio (por exemplo, coluna `crm_note_id` ainda não criada): sem eles, nada é escondido.
+ */
+export async function getMeetingCrmNoteIds(entity: RecordEntity, recordId: string): Promise<Set<string>> {
+  try {
+    const supabase = await createServerClient();
+    const { data, error } = await supabase
+      .from("meeting_notes")
+      .select("crm_note_id, meetings!inner(entity, record_id, status)")
+      .eq("meetings.entity", entity)
+      .eq("meetings.record_id", recordId)
+      .in("meetings.status", [...VISIBLE_STATUSES])
+      .not("crm_note_id", "is", null);
+    if (error) {
+      console.error("[reunioes] anotações do CRM:", error.code, error.message);
+      return new Set();
+    }
+    const ids = ((data ?? []) as { crm_note_id: string | null }[])
+      .map((r) => r.crm_note_id)
+      .filter((id): id is string => typeof id === "string" && id !== "");
+    return new Set(ids);
+  } catch (e) {
+    console.error("[reunioes] anotações do CRM:", e);
+    return new Set();
+  }
+}
+
+/**
  * Entre os ids de anotação do Pipedrive dados, quais já foram importados como anotação do CRM:
  * `notes.id` -> id no Pipedrive. `external_ids` só é legível pelo admin geral, por isso o cliente administrativo;
  * a consulta é limitada aos ids das reuniões do próprio card e só devolve ids. Falha em silêncio.
@@ -211,12 +239,23 @@ export async function importedNoteExternalIds(pipedriveIds: Set<string>): Promis
 }
 
 /**
- * Esconde do histórico as anotações importadas do Pipedrive que o assistente gravou: o bloco da reunião já
- * mostra o mesmo conteúdo. Só anotações com `externalId` no conjunto saem; o resto fica.
+ * Esconde do histórico as anotações que o assistente gravou, porque o bloco da reunião já mostra o mesmo conteúdo:
+ * as importadas do Pipedrive (`externalId` em `meetingNotePipedriveIds`) e as gravadas direto no CRM (`note.id`
+ * em `meetingCrmNoteIds`). O resto fica.
  */
-export function hideMeetingNotes(items: TimelineItem[], meetingNotePipedriveIds: Set<string>): TimelineItem[] {
-  if (meetingNotePipedriveIds.size === 0) return items;
-  return items.filter((i) => !(i.note && i.externalId !== undefined && meetingNotePipedriveIds.has(i.externalId)));
+export function hideMeetingNotes(
+  items: TimelineItem[],
+  meetingNotePipedriveIds: Set<string>,
+  meetingCrmNoteIds: Set<string> = new Set(),
+): TimelineItem[] {
+  if (meetingNotePipedriveIds.size === 0 && meetingCrmNoteIds.size === 0) return items;
+  return items.filter(
+    (i) =>
+      !(
+        i.note &&
+        ((i.externalId !== undefined && meetingNotePipedriveIds.has(i.externalId)) || meetingCrmNoteIds.has(i.note.id))
+      ),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------------------------

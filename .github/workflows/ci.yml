@@ -47,9 +47,9 @@ jobs:
       - run: pnpm build
       - name: Playwright
         run: pnpm exec playwright install --with-deps chromium
-      # O reset roda com --no-seed: os e2e precisam do admin@oxyn.test e das empresas oxyn e volt.
+      # O Supabase local sobe sem dados (não há supabase/seed.sql): os e2e precisam do admin@oxyn.test e das
+      # empresas oxyn e volt.
       - name: Seed dos e2e
-        if: env.SUPABASE_DB_URL != ''
         run: pnpm db:seed
       - name: E2E
         run: pnpm test:e2e

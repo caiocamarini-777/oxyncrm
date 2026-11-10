@@ -32,7 +32,8 @@ let alfaId = "";
 let firstJob = "";
 
 test.beforeAll(async () => {
-  test.setTimeout(300_000);
+  // cabe uma segunda subida do next dev temporário (ver startTempNext)
+  test.setTimeout(420_000);
   const a = admin();
   adminId = await createTestUser({ email: adminEmail, password, fullName: `Admin Importação ${stamp}`, superAdmin: true });
   sellerId = await createTestUser({ email: sellerEmail, password, fullName: `Vendedor Importação ${stamp}` });

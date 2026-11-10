@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
@@ -34,14 +34,17 @@ function prepareCopy(root: string, dir: string) {
     stdio: "inherit",
   });
   if (rsync.status !== 0) throw new Error("rsync falhou ao copiar o projeto");
-  // node_modules: clone (APFS) só quando falta ou o lockfile mudou
+  // node_modules: só quando falta ou o lockfile mudou; clone (APFS) no macOS, cópia comum no Linux (sem cp -c)
   const lock = readFileSync(path.join(root, "pnpm-lock.yaml"), "utf8");
   const stampFile = path.join(dir, ".node_modules.lock");
   if (!existsSync(path.join(dir, "node_modules")) || !existsSync(stampFile) || readFileSync(stampFile, "utf8") !== lock) {
-    spawnSync("rm", ["-rf", path.join(dir, "node_modules")]);
-    const cp = spawnSync("cp", ["-cR", path.join(root, "node_modules"), path.join(dir, "node_modules")], { stdio: "inherit" });
-    if (cp.status !== 0) {
-      const plain = spawnSync("cp", ["-R", path.join(root, "node_modules"), path.join(dir, "node_modules")], { stdio: "inherit" });
+    const src = path.join(root, "node_modules");
+    const dst = path.join(dir, "node_modules");
+    spawnSync("rm", ["-rf", dst]);
+    const cloned = process.platform === "darwin" && spawnSync("cp", ["-cR", src, dst], { stdio: "inherit" }).status === 0;
+    if (!cloned) {
+      spawnSync("rm", ["-rf", dst]);
+      const plain = spawnSync("cp", ["-R", src, dst], { stdio: "inherit" });
       if (plain.status !== 0) throw new Error("não foi possível copiar node_modules");
     }
     writeFileSync(stampFile, lock);
@@ -70,16 +73,22 @@ function portInUse(port: number): Promise<boolean> {
   return Promise.all([probe("127.0.0.1"), probe("::1")]).then((r) => r.some(Boolean));
 }
 
-/** Espera a linha "Ready" do próprio processo e depois uma resposta HTTP dele. */
+/**
+ * Espera a linha "Ready" do próprio processo e depois uma resposta HTTP dele. Três 5xx seguidos já compilados contam
+ * como erro de compilação (o Turbopack guarda o erro e não sai dele sozinho), sem esperar o prazo inteiro.
+ */
 async function waitUp(url: string, child: ChildProcess, isReady: () => boolean, timeoutMs: number) {
   const t0 = Date.now();
+  let errors = 0;
   while (Date.now() - t0 < timeoutMs) {
     if (child.exitCode !== null) throw new Error(`next dev terminou com código ${child.exitCode}`);
     if (isReady()) {
       try {
         const res = await fetch(`${url}/entrar`, { signal: AbortSignal.timeout(60_000) });
         if (res.status < 500) return;
-      } catch {
+        if (++errors >= 3) throw new Error(`next dev respondeu ${res.status} em /entrar ${errors} vezes seguidas`);
+      } catch (e) {
+        if (errors >= 3) throw e;
         // compilando
       }
     }
@@ -95,6 +104,20 @@ export async function startTempNext(opts: { name: string; port: number; env: Rec
   }
   const dir = path.join(process.env.E2E_TMP_DIR || path.join(root, ".e2e-tmp"), `oxyn-e2e-${opts.name}`);
   prepareCopy(root, dir);
+  try {
+    return await launch(dir, opts);
+  } catch (e) {
+    // A compilação baixa as fontes do Google (next/font) e o Turbopack às vezes falha nisso por causa da rede
+    // ("next/font/google queries have exactly one entry"), guardando o erro no cache. Uma segunda subida, sem o
+    // cache de compilação, baixa de novo.
+    console.warn(`next dev temporário não subiu; tentando de novo sem o cache.\n${(e as Error).message.slice(0, 300)}`);
+    rmSync(path.join(dir, ".next"), { recursive: true, force: true });
+    for (let i = 0; i < 20 && (await portInUse(opts.port)); i++) await new Promise((r) => setTimeout(r, 500));
+    return await launch(dir, opts);
+  }
+}
+
+async function launch(dir: string, opts: { port: number; env: Record<string, string> }): Promise<TempNext> {
   const child = spawn(process.execPath, [path.join(dir, "node_modules/next/dist/bin/next"), "dev", "--port", String(opts.port)], {
     cwd: dir,
     // grupo próprio: o stop encerra o next dev e os processos filhos dele, e só eles

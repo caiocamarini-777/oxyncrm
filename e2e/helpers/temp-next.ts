@@ -104,16 +104,17 @@ export async function startTempNext(opts: { name: string; port: number; env: Rec
   }
   const dir = path.join(process.env.E2E_TMP_DIR || path.join(root, ".e2e-tmp"), `oxyn-e2e-${opts.name}`);
   prepareCopy(root, dir);
+  // CSS do Google Fonts fixo, como no servidor principal (ver e2e/fixtures/google-fonts.cjs)
+  const env = { ...opts.env, NEXT_FONT_GOOGLE_MOCKED_RESPONSES: path.join(root, "e2e/fixtures/google-fonts.cjs") };
   try {
-    return await launch(dir, opts);
+    return await launch(dir, { port: opts.port, env });
   } catch (e) {
-    // A compilação baixa as fontes do Google (next/font) e o Turbopack às vezes falha nisso por causa da rede
-    // ("next/font/google queries have exactly one entry"), guardando o erro no cache. Uma segunda subida, sem o
-    // cache de compilação, baixa de novo.
+    // A compilação ainda baixa os arquivos das fontes do Google (next/font), e o Turbopack guarda no cache um erro
+    // de rede nisso. Uma segunda subida, sem o cache de compilação, baixa de novo.
     console.warn(`next dev temporário não subiu; tentando de novo sem o cache.\n${(e as Error).message.slice(0, 300)}`);
     rmSync(path.join(dir, ".next"), { recursive: true, force: true });
     for (let i = 0; i < 20 && (await portInUse(opts.port)); i++) await new Promise((r) => setTimeout(r, 500));
-    return await launch(dir, opts);
+    return await launch(dir, { port: opts.port, env });
   }
 }
 

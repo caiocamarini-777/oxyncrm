@@ -18,7 +18,8 @@ export async function GET(request: Request) {
   }
   // Sem o Claude, o OAuth do Google ou (no modo Pipedrive) o token do Pipedrive, não há o que fazer.
   const needsPipedrive = meetingSinkMode() === "pipedrive";
-  if (!process.env.ANTHROPIC_API_KEY || (needsPipedrive && !process.env.PIPEDRIVE_API_TOKEN) || !gmailConfig()) {
+  // Sem ANTHROPIC_API_KEY o assistente roda no modo Gemini (as anotações do Gemini viram as notas).
+  if ((needsPipedrive && !process.env.PIPEDRIVE_API_TOKEN) || !gmailConfig()) {
     return Response.json({ skipped: "not_configured" });
   }
 

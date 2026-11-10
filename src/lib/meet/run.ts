@@ -13,6 +13,7 @@ import {
 } from "./google";
 import { normalizeEmail, pickRecord, splitAttendees } from "./match";
 import { loadCandidates, loadInternalDomains } from "./match-loader";
+import { GEMINI_NOTES_MODEL, NO_GEMINI_NOTES, type NotesEngine, notesEngineFromEnv, notesFromGemini } from "./gemini-notes";
 import { renderNoteHtml } from "./note-html";
 import {
   generateNotes,
@@ -73,6 +74,14 @@ export const PROCESSING_STALE_MS = 10 * 60_000;
 export const LEASE_MS = 300_000;
 
 export const NO_TRANSCRIPT = "reunião sem transcrição";
+
+/** Erro que não melhora tentando de novo: a reunião vai para `failed` sem gastar as outras tentativas. */
+export class PermanentMeetingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentMeetingError";
+  }
+}
 /** Prazo esgotado sem transcrição e sem anotações do Gemini. */
 export const NO_MEETING_TEXT = "reunião sem transcrição nem anotações do Gemini";
 export const RECORD_DELETED = "registro excluído";
@@ -90,6 +99,8 @@ export type MeetDeps = {
   db: SupabaseClient;
   meetFor(accountId: string): MeetClient;
   notes: typeof generateNotes;
+  /** Quem escreve as notas: o Claude (com `ANTHROPIC_API_KEY`) ou as próprias anotações do Gemini. Padrão: Claude. */
+  notesEngine?: NotesEngine;
   sink: MeetingSink;
   now(): Date;
   /**
@@ -232,6 +243,7 @@ export function defaultMeetDeps(db: SupabaseClient): MeetDeps {
     db,
     meetFor: meetClientForAccount,
     notes: generateNotes,
+    notesEngine: notesEngineFromEnv(),
     sink: token ? pipedriveSink({ token }) : noPipedriveSink,
     now: () => new Date(),
     ...(token ? { pipedriveNames: once(() => loadPipedriveNames(token)) } : {}),
@@ -946,6 +958,24 @@ async function generateAndStore(
   transcript: { text: string; source: TranscriptSource },
 ): Promise<MeetingNotes> {
   const { db } = deps;
+  // Modo Gemini (sem chave da Anthropic): as anotações do Gemini viram as notas, sem o Claude. Reunião só com
+  // transcrição não tem o que resumir: falha na hora, com a orientação, e "Tentar de novo" vale depois da chave.
+  if ((deps.notesEngine ?? "claude") === "gemini") {
+    if (transcript.source !== "gemini_notes") throw new PermanentMeetingError(NO_GEMINI_NOTES);
+    const fromGemini = notesFromGemini(transcript.text);
+    const saved = await db.from("meeting_notes").insert({
+      meeting_id: m.id,
+      summary: fromGemini.summary,
+      pains: fromGemini.pains,
+      objections: fromGemini.objections,
+      qualification: fromGemini.qualification,
+      next_steps: fromGemini.next_steps,
+      model: GEMINI_NOTES_MODEL,
+      raw: fromGemini,
+    });
+    check(saved.error, "guardar as notas");
+    return fromGemini;
+  }
   const company = await db.from("companies").select("settings").eq("id", m.company_id).maybeSingle();
   check(company.error, "ler a configuração da empresa");
   const { questions } = readMeetingSettings((company.data as { settings?: unknown } | null)?.settings);
@@ -1292,7 +1322,8 @@ async function runProcess(deps: MeetDeps, meetingId: string): Promise<MeetingSta
     return await advance(deps, m);
   } catch (e) {
     const msg = errorMessage(e).slice(0, 500);
-    const attempts = (m.attempts ?? 0) + 1;
+    // Erro que não melhora tentando de novo (ex.: modo Gemini sem anotações do Gemini): `failed` na hora.
+    const attempts = e instanceof PermanentMeetingError ? MAX_ATTEMPTS : (m.attempts ?? 0) + 1;
     const status: MeetingStatus = attempts >= MAX_ATTEMPTS ? "failed" : "processing";
     console.error("meet: falha ao processar a reunião", m.id, msg);
     // Condicional: se outra chamada já concluiu a reunião (ou ela saiu de `processing`), o erro desta não

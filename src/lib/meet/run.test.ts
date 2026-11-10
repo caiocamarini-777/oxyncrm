@@ -228,6 +228,8 @@ type Setup = {
   notes?: (input: NotesInput) => Promise<MeetingNotes>;
   /** Destino da anotação; padrão `pipedrive` (sem ler `MEETING_SINK` do ambiente). */
   sinkMode?: MeetingSinkMode;
+  /** Quem escreve as notas; padrão `claude` (sem ler `ANTHROPIC_API_KEY` do ambiente). */
+  notesEngine?: "claude" | "gemini";
 };
 
 function setup(s: Setup = {}) {
@@ -245,6 +247,7 @@ function setup(s: Setup = {}) {
     now: () => now,
     pipedriveNames,
     sinkMode: s.sinkMode ?? "pipedrive",
+    notesEngine: s.notesEngine ?? "claude",
   };
   return {
     db,
@@ -647,6 +650,56 @@ describe("runMeetSync: transcrição", () => {
     expect(MAX_TRANSCRIPT_CHARS).toBe(1_048_576);
     expect((t.tables.meeting_transcripts[0].text as string).length).toBe(1_048_576);
     expect(t.notes.mock.calls[0][0].transcript.length).toBe(1_048_576);
+  });
+});
+
+describe("modo Gemini (sem chave da Anthropic)", () => {
+  const N1 = `${R1}/smartNotes/n1`;
+  const DOC = "Resumo\nCliente quer automatizar a cobrança.\n\nPróximas etapas sugeridas\n* [Caio] Enviar a proposta.\n* Agendar retorno.";
+  const geminiMeet = () =>
+    meetData({
+      transcripts: {},
+      smartNotes: { [R1]: [{ name: N1, state: "FILE_GENERATED", docsDestination: { document: "doc1" } }] },
+      docs: { doc1: DOC },
+    });
+
+  it("as anotações do Gemini viram as notas sem chamar o Claude, e não há sugestões", async () => {
+    const t = setup({ notesEngine: "gemini", meet: { acc1: geminiMeet() } });
+    await t.run();
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.pipedriveNames).not.toHaveBeenCalled();
+    expect(t.tables.meeting_notes[0]).toMatchObject({
+      model: "gemini-notes",
+      summary: "Resumo\nCliente quer automatizar a cobrança.",
+      next_steps: [
+        { what: "Enviar a proposta.", owner: "Caio", due: null },
+        { what: "Agendar retorno.", owner: "", due: null },
+      ],
+      qualification: [],
+    });
+    expect(t.tables.meeting_suggestions).toHaveLength(0);
+    expect(t.sink.writeNote).toHaveBeenCalledTimes(1);
+    const html = t.sink.writeNote.mock.calls[0][1] as string;
+    expect(html).toContain("<p>Resumo<br>Cliente quer automatizar a cobrança.</p>");
+    expect(html).toContain("Enviar a proposta. (Caio)");
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("reunião só com transcrição: falha na hora com a orientação, sem chamar o Claude nem gastar tentativas", async () => {
+    const t = setup({ notesEngine: "gemini" });
+    await t.run();
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed" });
+    expect(String(t.tables.meetings[0].last_error)).toContain("Reunião sem anotações do Gemini");
+    expect(t.tables.meeting_notes).toHaveLength(0);
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+  });
+
+  it("com a chave (Claude) continua igual: o Claude escreve as notas", async () => {
+    const t = setup({ notesEngine: "claude", meet: { acc1: geminiMeet() } });
+    await t.run();
+    expect(t.notes).toHaveBeenCalledTimes(1);
+    expect(t.tables.meeting_notes[0]).toMatchObject({ summary: NOTES.summary });
   });
 });
 

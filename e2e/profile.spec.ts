@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,6 +22,17 @@ test.afterAll(async () => {
 
 test.describe.configure({ mode: "serial" });
 
+/**
+ * Escolhe o arquivo da foto até a resposta aparecer. Logo depois do goto o React pode ainda não ter hidratado
+ * o campo, e aí o change se perde (no CI, com o next dev, acontecia de vez em quando). Repetir é inofensivo.
+ */
+async function pickAvatar(page: Page, file: string, expected: string) {
+  await expect(async () => {
+    await page.getByTestId("avatar-input").setInputFiles(file);
+    await expect(page.getByText(expected)).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 test("altera o nome e ele aparece no menu", async ({ page }) => {
   await login(page, email, password);
   await expect(page.getByRole("button", { name: "Menu do usuário" })).toBeVisible();
@@ -37,8 +48,7 @@ test("troca a foto", async ({ page }) => {
   await login(page, email, password);
   await expect(page.getByRole("button", { name: "Menu do usuário" })).toBeVisible();
   await page.goto("/perfil");
-  await page.getByTestId("avatar-input").setInputFiles("e2e/fixtures/avatar.png");
-  await expect(page.getByText("Foto atualizada.")).toBeVisible();
+  await pickAvatar(page, "e2e/fixtures/avatar.png", "Foto atualizada.");
   await expect(page.getByRole("button", { name: "Menu do usuário" }).locator("img")).toHaveAttribute(
     "src",
     new RegExp(`/storage/v1/object/public/avatars/${userId}/`),
@@ -52,8 +62,7 @@ test("arquivo grande é recusado", async ({ page }) => {
   await login(page, email, password);
   await expect(page.getByRole("button", { name: "Menu do usuário" })).toBeVisible();
   await page.goto("/perfil");
-  await page.getByTestId("avatar-input").setInputFiles(big);
-  await expect(page.getByText("Envie uma imagem PNG, JPG ou WebP de até 2 MB.")).toBeVisible();
+  await pickAvatar(page, big, "Envie uma imagem PNG, JPG ou WebP de até 2 MB.");
 });
 
 test("troca a senha", async ({ page }) => {

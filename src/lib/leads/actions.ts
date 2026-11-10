@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth/session";
+import { primaryEmail } from "@/lib/calendar/mapping";
 import { translateDbError, type ActionResult } from "@/lib/db-errors";
 import { createOrganization } from "@/lib/organizations/actions";
 import { createPerson } from "@/lib/persons/actions";
@@ -224,17 +225,20 @@ export async function archiveLead(id: string): Promise<ActionResult> {
   );
 }
 
-/** Busca pessoas da empresa por nome (o RLS limita ao que o usuário lê). Máximo de 20. */
+/**
+ * Busca pessoas da empresa por nome (o RLS limita ao que o usuário lê). Máximo de 20. `hasEmail` diz se a pessoa tem
+ * e-mail (o formulário de atividade avisa que a reunião convida o cliente pela Agenda).
+ */
 export async function searchPersonsByName(
   companyId: string,
   term: string,
-): Promise<ActionResult<{ id: string; name: string }[]>> {
+): Promise<ActionResult<{ id: string; name: string; hasEmail: boolean }[]>> {
   if (!uuid.safeParse(companyId).success) return { ok: false, error: "Dados inválidos." };
   const t = safeTerm(term);
   const supabase = await createServerClient();
   let q = supabase
     .from("persons")
-    .select("id, full_name")
+    .select("id, full_name, emails")
     .eq("company_id", companyId)
     .is("deleted_at", null)
     .order("full_name")
@@ -242,5 +246,5 @@ export async function searchPersonsByName(
   if (t) q = q.ilike("full_name", `%${t}%`);
   const { data, error } = await q;
   if (error) return { ok: false, error: translateDbError(error) };
-  return { ok: true, data: (data ?? []).map((p) => ({ id: p.id, name: p.full_name })) };
+  return { ok: true, data: (data ?? []).map((p) => ({ id: p.id, name: p.full_name, hasEmail: primaryEmail(p.emails) !== null })) };
 }

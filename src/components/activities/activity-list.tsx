@@ -2,17 +2,20 @@
 
 import { Check } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useMemo, useState, useTransition } from "react";
 import { DataTable, type RecordColumn } from "@/components/records/data-table";
+import { Button } from "@/components/ui/button";
 import type { ActivityRow } from "@/lib/activities/queries";
 import { formatDateTime, formatDue } from "@/lib/activities/time";
 import { TAB_PARAM, type ActivityListFilters } from "@/lib/activities/view";
 import { cn } from "cn";
 import { ActivityChip, TypeIcon } from "./activity-chip";
+import { CalendarStatus } from "./calendar-status";
 import { CompleteHost } from "./complete-host";
-import { primaryLink } from "./helpers";
-import type { PageCtx } from "./page-context";
+import { isUnlinked, primaryLink } from "./helpers";
+import { completeDataFor, type PageCtx } from "./page-context";
+import { EditDialog } from "./planned-list";
 
 const TABS = [
   { tab: "overdue", label: "Atrasadas" },
@@ -83,7 +86,12 @@ export function ActivityList({
   filtered: boolean;
 }) {
   const [completing, setCompleting] = useState<ActivityRow | null>(null);
+  // Atividade sem vínculo (veio da Agenda do Google): não aparece em nenhum registro, então vincula-se por aqui.
+  const [linking, setLinking] = useState<ActivityRow | null>(null);
+  const router = useRouter();
+  const [, startTransition] = useTransition();
   const now = new Date(ctx.nowIso);
+  const linkingCompany = linking ? ctx.companies.find((c) => c.id === linking.companyId) : undefined;
 
   const columns = useMemo<RecordColumn<ActivityRow>[]>(
     () => [
@@ -121,20 +129,35 @@ export function ActivityList({
         id: "subject",
         header: "Assunto",
         sortKey: "subject",
-        cell: (a) => <span className={cn("font-medium", a.done && "text-muted-foreground line-through")}>{a.subject}</span>,
+        cell: (a) => (
+          <div className="flex flex-col gap-1">
+            <span className={cn("font-medium", a.done && "text-muted-foreground line-through")}>{a.subject}</span>
+            <CalendarStatus activity={a} canRetry={ctx.companies.find((c) => c.id === a.companyId)?.canEdit ?? false} />
+          </div>
+        ),
       },
       {
         id: "link",
         header: "Vínculo",
         cell: (a) => {
           const l = primaryLink(a);
-          return l ? (
-            <Link href={l.href} className="text-primary hover:underline">
-              {l.label}
-            </Link>
-          ) : (
-            <span className="text-muted-foreground">Sem vínculo visível</span>
-          );
+          if (l) {
+            return (
+              <Link href={l.href} className="text-primary hover:underline">
+                {l.label}
+              </Link>
+            );
+          }
+          const unlinked = isUnlinked(a);
+          const canEdit = ctx.companies.find((c) => c.id === a.companyId)?.canEdit ?? false;
+          if (unlinked && canEdit) {
+            return (
+              <Button type="button" variant="outline" size="xs" onClick={() => setLinking(a)}>
+                Vincular
+              </Button>
+            );
+          }
+          return <span className="text-muted-foreground">{unlinked ? "Sem vínculo" : "Sem vínculo visível"}</span>;
         },
       },
       { id: "channel", header: "Canal", cell: (a) => a.channel.name },
@@ -181,6 +204,15 @@ export function ActivityList({
         />
       )}
       <CompleteHost activity={completing} ctx={ctx} onClose={() => setCompleting(null)} />
+      {linking && linkingCompany ? (
+        <EditDialog
+          key={linking.id}
+          activity={linking}
+          data={completeDataFor(ctx, linkingCompany)}
+          onClose={() => setLinking(null)}
+          onSaved={() => startTransition(() => router.refresh())}
+        />
+      ) : null}
     </div>
   );
 }

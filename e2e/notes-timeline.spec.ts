@@ -35,7 +35,7 @@ const permissions = (gestor: boolean) => ({
 });
 
 async function newPage(browser: Browser, email: string): Promise<Page> {
-  const ctx = await browser.newContext({ baseURL: "http://localhost:3000" });
+  const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const page = await ctx.newPage();
   await login(page, email, password);
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
@@ -128,7 +128,7 @@ test("trocar responsável registra o evento", async ({ browser }) => {
   await gestor.context().close();
 });
 
-test("texto com <script> é exibido como texto", async ({ browser }) => {
+test("texto com <script> não vira HTML nem executa", async ({ browser }) => {
   const gestor = await newPage(browser, emails.gestor);
   await gestor.goto(orgPath);
   let dialogs = 0;
@@ -140,7 +140,9 @@ test("texto com <script> é exibido como texto", async ({ browser }) => {
   await gestor.getByRole("textbox", { name: "Anotação", exact: true }).fill(payload);
   await gestor.getByRole("button", { name: "Salvar anotação" }).click();
   const note = gestor.getByTestId("timeline-note").first();
-  await expect(note).toContainText(payload);
+  // anotação com tags (como as importadas do Pipedrive) é exibida pelo noteText: só o texto, sem as tags
+  await expect(note).toContainText("window.__xss=1 javascript:alert(1)");
+  await expect(note).not.toContainText("<script>");
   await expect(note.locator("script, img")).toHaveCount(0);
   await expect(note.getByRole("link")).toHaveCount(0);
   expect(await gestor.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();

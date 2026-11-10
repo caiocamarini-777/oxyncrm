@@ -109,6 +109,7 @@ export function toMessageView(p: ParsedMessage, accountEmail: string): ThreadMes
     snippet: decodeSnippet(p.snippet),
     bodyHtml: p.html,
     bodyText: p.text,
+    rfcMessageId: p.rfcMessageId,
     attachments: p.attachments.map((a) => ({ filename: a.filename || "(sem nome)" })),
     direction: directionOf(p.from.email, accountEmail),
   };

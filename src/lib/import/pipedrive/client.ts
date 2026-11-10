@@ -58,6 +58,19 @@ const REQUEST_TIMEOUT_MS = 30_000;
  * concessão de 120 s do job.
  */
 export const REQUEST_TOTAL_MS = 90_000;
+/** Download de arquivo: tentativa e teto próprios (arquivos de até 25 MB demoram mais que uma página JSON). */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+export const DOWNLOAD_TOTAL_MS = 300_000;
+/** Máximo de redirecionamentos seguidos no download (sem o token). */
+const MAX_REDIRECTS = 3;
+
+const JSON_MODE: FetchMode = { accept: "application/json", timeoutMs: REQUEST_TIMEOUT_MS, totalMs: REQUEST_TOTAL_MS };
+const DOWNLOAD_MODE: FetchMode = {
+  accept: "*/*",
+  timeoutMs: DOWNLOAD_TIMEOUT_MS,
+  totalMs: DOWNLOAD_TOTAL_MS,
+  manualRedirect: true,
+};
 
 type FetchMode = {
   accept: string;
@@ -76,11 +89,11 @@ type FetchMode = {
   retryOnly429?: boolean;
   /** Escritas: inclui na mensagem do erro o `error`/`error_info` do envelope da resposta (nunca headers nem token). */
   errorDetail?: boolean;
+  /** Trata redirecionamentos à mão, sem repassar o token ao destino. */
+  manualRedirect?: boolean;
 };
 
 const ERROR_DETAIL_MAX = 300;
-
-const JSON_MODE: FetchMode = { accept: "application/json", timeoutMs: REQUEST_TIMEOUT_MS, totalMs: REQUEST_TOTAL_MS };
 
 /** Retry-After em segundos ou em data HTTP; ms de espera (0 se ausente/inválido). */
 export function retryAfterMs(res: Response, now = Date.now()): number {
@@ -113,10 +126,48 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
   }
 
   /**
+   * Segue à mão o redirecionamento de um download (até MAX_REDIRECTS saltos), SEM o header do token: o destino é
+   * outro host (ex.: URL assinada de armazenamento). Devolve a resposta 2xx final; qualquer outra coisa vira
+   * PipedriveError só com o caminho, sem token nem URL de destino.
+   */
+  async function followRedirects(first: Response, fromUrl: string, path: string, mode: FetchMode, deadline: number) {
+    const where = path.split("?")[0];
+    let cur = first;
+    let curUrl = fromUrl;
+    for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+      const location = cur.headers.get("location");
+      await cur.body?.cancel().catch(() => {});
+      if (!location) throw new PipedriveError(`Redirecionamento sem destino ao baixar ${where}`, cur.status);
+      let next: Response;
+      try {
+        curUrl = new URL(location, curUrl).toString();
+        next = await doFetch(curUrl, {
+          headers: { accept: mode.accept },
+          redirect: "manual",
+          signal: AbortSignal.timeout(Math.max(1, Math.min(mode.timeoutMs, deadline - now()))),
+        });
+      } catch {
+        throw new PipedriveError(`Falha de rede ao baixar o arquivo em ${where}`);
+      }
+      if (next.status >= 300 && next.status < 400) {
+        cur = next;
+        continue;
+      }
+      if (!next.ok) {
+        await next.body?.cancel().catch(() => {});
+        throw new PipedriveError(`Armazenamento do arquivo respondeu ${next.status} ao baixar ${where}`, next.status);
+      }
+      return next;
+    }
+    await cur.body?.cancel().catch(() => {});
+    throw new PipedriveError(`Redirecionamentos demais ao baixar ${where}`, cur.status);
+  }
+
+  /**
    * Até 5 novas tentativas (1s, 2s, 4s, 8s, 16s) em 429, 5xx e falha de rede, dentro de `mode.totalMs` somando
    * tentativas e esperas (o POST repete só no 429: ver `retryOnly429`). Nunca inclui headers em erros.
-   * `mode.method` e `mode.body` (JSON) servem às escritas; `read` extrai o resultado de uma resposta 2xx e, se
-   * falhar, vira PipedriveError sem nova tentativa.
+   * `mode.method` e `mode.body` (JSON) servem às escritas, e `mode.manualRedirect` ao download; `read` extrai o
+   * resultado de uma resposta 2xx (JSON ou bytes) e, se falhar, vira PipedriveError sem nova tentativa.
    */
   async function fetchWithRetry<T>(path: string, mode: FetchMode, read: (res: Response) => Promise<T>): Promise<T> {
     const url = `${base}${path}`;
@@ -132,6 +183,7 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
             ...(mode.body !== undefined ? { "content-type": "application/json" } : {}),
           },
           ...(mode.body !== undefined ? { body: mode.body } : {}),
+          ...(mode.manualRedirect ? { redirect: "manual" as const } : {}),
           signal: AbortSignal.timeout(Math.max(1, Math.min(mode.timeoutMs, deadline - now()))),
         });
       } catch {
@@ -140,6 +192,9 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
       if (res && res.status === 401) {
         await res.body?.cancel().catch(() => {});
         throw new PipedriveAuthError();
+      }
+      if (res && mode.manualRedirect && res.status >= 300 && res.status < 400) {
+        res = await followRedirects(res, url, path, mode, deadline);
       }
       const retryable = mode.retryOnly429
         ? res !== null && res.status === 429
@@ -214,6 +269,23 @@ export function createPipedriveClient(opts: PipedriveClientOptions) {
         if (e instanceof PipedriveError && (e.status === 404 || e.status === 410)) return;
         throw e;
       }
+    },
+    /** GET genérico (caminho com a query). `nextStart` vem da paginação do Pipedrive, ou `null` se não há mais itens. */
+    async get(path: string): Promise<{ data: unknown; nextStart: number | null }> {
+      const body = await request(path);
+      const pg = body.additional_data?.pagination;
+      const nextStart = pg?.more_items_in_collection && typeof pg.next_start === "number" ? pg.next_start : null;
+      return { data: body.data, nextStart };
+    },
+    /**
+     * Baixa um arquivo (bytes) com as mesmas tentativas e esperas das demais chamadas, mas com tentativa de 120 s e
+     * teto de DOWNLOAD_TOTAL_MS. Redirecionamentos são seguidos sem o token (ver followRedirects).
+     */
+    download(path: string): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+      return fetchWithRetry(path, DOWNLOAD_MODE, async (res) => ({
+        bytes: new Uint8Array(await res.arrayBuffer()),
+        contentType: res.headers.get("content-type"),
+      }));
     },
     async me(): Promise<PdItem> {
       const body = await request("/v1/users/me");

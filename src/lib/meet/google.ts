@@ -1,12 +1,7 @@
 import "server-only";
 import { loadAccountToken } from "@/lib/gmail/accounts";
-import {
-  GmailApiError,
-  GmailAuthError,
-  GmailNetworkError,
-  GmailRateLimitError,
-  type TokenRequest,
-} from "@/lib/gmail/client";
+import { GmailNetworkError, type TokenRequest } from "@/lib/gmail/client";
+import { buildUrl, googleRequest, googleSend, type GoogleQuery } from "@/lib/google/http";
 
 const MEET_BASE = "https://meet.googleapis.com/v2";
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3";
@@ -39,52 +34,9 @@ export type CalendarEvent = {
   conferenceData?: { conferenceId?: string };
 };
 
-type Query = Record<string, string | number | boolean | undefined>;
-
-type ApiErrorBody = { error?: { code?: number; message?: string; status?: string; errors?: { reason?: string }[] } };
-
-async function readJson<T>(res: Response): Promise<T | null> {
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** `fetch` que transforma falha de rede (o `fetch` lança `TypeError`) em `GmailNetworkError`, como no cliente do Gmail. */
-async function http(url: string, init: RequestInit): Promise<Response> {
-  try {
-    return await fetch(url, init);
-  } catch (e) {
-    if (e instanceof TypeError) throw new GmailNetworkError(e.message || undefined);
-    throw e;
-  }
-}
-
-function buildUrl(base: string, path: string, query?: Query): string {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(query ?? {})) {
-    if (v === undefined || v === "") continue;
-    p.set(k, String(v));
-  }
-  const qs = p.toString();
-  return `${base}${path}${qs ? `?${qs}` : ""}`;
-}
-
 /** Codifica cada segmento de um nome de recurso do Google (ex.: `conferenceRecords/abc/transcripts/x`). */
 function resourcePath(name: string): string {
   return `/${name.split("/").map(encodeURIComponent).join("/")}`;
-}
-
-function isRateLimit(status: number, body: ApiErrorBody | null): boolean {
-  if (status === 429) return true;
-  if (status !== 403) return false;
-  const reasons = body?.error?.errors?.map((e) => e.reason) ?? [];
-  return (
-    reasons.includes("rateLimitExceeded") ||
-    reasons.includes("userRateLimitExceeded") ||
-    body?.error?.status === "RESOURCE_EXHAUSTED"
-  );
 }
 
 /**
@@ -95,34 +47,19 @@ export class MeetClient {
   constructor(private readonly getAccessToken: (opts?: TokenRequest) => Promise<string>) {}
 
   /** GET com o token; renova uma vez após 401. Devolve a resposta 2xx ou lança o erro do Google. */
-  private async send(url: string): Promise<Response> {
-    let token = await this.getAccessToken();
-    for (let attempt = 0; ; attempt++) {
-      const res = await http(url, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) return res;
-      if (res.status === 401) {
-        if (attempt === 0) {
-          token = await this.getAccessToken({ forceRefresh: true, rejected: token });
-          continue;
-        }
-        throw new GmailAuthError("O Google recusou o token renovado");
-      }
-      const body = await readJson<ApiErrorBody>(res);
-      if (isRateLimit(res.status, body)) throw new GmailRateLimitError(body?.error?.message);
-      throw new GmailApiError(res.status, body?.error?.message ?? `O Google respondeu ${res.status}`);
-    }
+  private send(url: string): Promise<Response> {
+    return googleSend(this.getAccessToken, url);
   }
 
   private async request<T>(url: string): Promise<T> {
-    const res = await this.send(url);
-    // 2xx sem JSON legível (resposta cortada no meio): rede, não erro do recurso.
-    const body = await readJson<T>(res);
+    // 2xx sem JSON legível (resposta cortada no meio, ou 204 sem corpo): rede, não erro do recurso.
+    const body = await googleRequest<T>(this.getAccessToken, url);
     if (body === null) throw new GmailNetworkError("Resposta incompleta do Google");
     return body;
   }
 
   /** Percorre todas as páginas de uma listagem, juntando o campo `field` de cada uma. */
-  private async listAll<T>(base: string, path: string, field: string, query: Query): Promise<T[]> {
+  private async listAll<T>(base: string, path: string, field: string, query: GoogleQuery): Promise<T[]> {
     const out: T[] = [];
     let pageToken: string | undefined;
     do {

@@ -48,8 +48,15 @@ export function ActivityTab({ data }: { data: RecordActivityData }) {
       channels={activeChannels(data)}
       owners={data.owners}
       canReassign={data.canReassign}
-      initial={{ dueAt: defaultDue(data.nowIso), ownerId: data.currentUserId }}
+      initial={{
+        dueAt: defaultDue(data.nowIso),
+        ownerId: data.currentUserId,
+        // Na página da pessoa o vínculo é o próprio registro: o formulário só precisa saber se ela tem e-mail.
+        person: data.links.personId ? { id: data.links.personId, name: data.partyName, hasEmail: data.personHasEmail } : undefined,
+      }}
       parties={[...parties]}
+      calendarSync={data.calendarSync}
+      inviteFallback={data.personHasEmail}
       submitLabel="Salvar atividade"
       onSubmit={submit}
     />

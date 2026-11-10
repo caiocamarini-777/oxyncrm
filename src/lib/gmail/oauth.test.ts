@@ -15,10 +15,12 @@ describe("buildAuthUrl", () => {
     expect(url.searchParams.get("prompt")).toBe("consent");
     expect(url.searchParams.get("state")).toBe("st");
     expect(url.searchParams.get("scope")).toBe(
-      "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/meetings.space.readonly https://www.googleapis.com/auth/calendar.events.readonly https://www.googleapis.com/auth/drive.meet.readonly",
+      "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/meetings.space.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.meet.readonly",
     );
     expect(url.searchParams.get("scope")).toContain("meetings.space.readonly");
-    expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
+    // O escopo de leitura e gravação (a sincronização com a Agenda), e não o `readonly` antigo.
+    expect(url.searchParams.get("scope")).toContain("calendar.events");
+    expect(url.searchParams.get("scope")).not.toContain("calendar.events.readonly");
     expect(url.searchParams.get("scope")).toContain("drive.meet.readonly");
     expect(GMAIL_SCOPES).toHaveLength(7);
   });

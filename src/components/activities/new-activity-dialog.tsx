@@ -82,6 +82,7 @@ export function NewActivityDialog({ ctx }: { ctx: PageCtx }) {
             canReassign={company.canReassign}
             initial={{ dueAt: defaultDue(ctx.nowIso), ownerId: ctx.currentUserId }}
             parties={["person", "organization"]}
+            calendarSync={company.calendarSync}
             submitLabel="Salvar atividade"
             onCancel={() => setOpen(false)}
             onSubmit={submit}

@@ -11,8 +11,11 @@ import {
   formatAddress,
   hasRemoteImages,
   MIN_IFRAME_HEIGHT,
+  type RecordThread,
   type ThreadMessageView,
 } from "@/lib/gmail/thread-view";
+import { getPipedriveEmailBody } from "@/lib/pipedrive-mail/actions";
+import { recordFileHref } from "@/lib/pipedrive-mail/view";
 
 /**
  * HTML do e-mail em iframe sem scripts (sem `allow-scripts` e com CSP `default-src 'none'`).
@@ -78,7 +81,7 @@ function Recipients({ label, list }: { label: string; list: { email: string; nam
 type BodyState = { status: "loading" } | { status: "error"; error: string } | { status: "ready"; body: EmailMessageBody };
 
 /** Carrega o corpo ao montar (a mensagem só monta quando a conversa/mensagem está aberta). */
-function MessageBody({ message, subject }: { message: ThreadMessageView; subject: string }) {
+function MessageBody({ message, subject, source }: { message: ThreadMessageView; subject: string; source: RecordThread["source"] }) {
   const inline = message.bodyHtml !== undefined || message.bodyText !== undefined;
   const [state, setState] = useState<BodyState>(
     inline ? { status: "ready", body: { html: message.bodyHtml ?? null, text: message.bodyText ?? null } } : { status: "loading" },
@@ -87,7 +90,8 @@ function MessageBody({ message, subject }: { message: ThreadMessageView; subject
   useEffect(() => {
     if (inline) return; // caixa ao vivo: o corpo já veio com a mensagem
     let cancelled = false;
-    getEmailMessageBody(message.id)
+    // E-mail importado do Pipedrive: o corpo está em `pipedrive_emails`, não no Gmail.
+    (source === "pipedrive" ? getPipedriveEmailBody(message.id) : getEmailMessageBody(message.id))
       .then((res) => {
         if (cancelled) return;
         setState(res.ok ? { status: "ready", body: res.data } : { status: "error", error: res.error });
@@ -98,7 +102,7 @@ function MessageBody({ message, subject }: { message: ThreadMessageView; subject
     return () => {
       cancelled = true;
     };
-  }, [message.id, inline]);
+  }, [message.id, inline, source]);
 
   if (state.status === "loading") {
     return <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{message.snippet || "Carregando…"}</p>;
@@ -119,14 +123,34 @@ function MessageBody({ message, subject }: { message: ThreadMessageView; subject
   );
 }
 
-/** `defaultOpen`: a última mensagem da conversa abre sozinha; as outras abrem sob demanda. */
+/** Anexo importado do Pipedrive (`fileId`): link para a rota que confere o acesso e baixa por uma URL assinada. */
+function AttachmentLink({ fileId, filename }: { fileId: string; filename: string }) {
+  return (
+    <a
+      href={recordFileHref(fileId)}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Abrir anexo ${filename}`}
+      className="block rounded border bg-muted px-2 py-0.5 hover:bg-accent"
+    >
+      {filename}
+    </a>
+  );
+}
+
+/**
+ * `defaultOpen`: a última mensagem da conversa abre sozinha; as outras abrem sob demanda.
+ * `source`: de onde vem a conversa; a importada do Pipedrive busca o corpo e os anexos por outro caminho.
+ */
 export function MessageView({
   message,
   subject,
+  source = "gmail",
   defaultOpen = true,
 }: {
   message: ThreadMessageView;
   subject: string;
+  source?: RecordThread["source"];
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -143,7 +167,7 @@ export function MessageView({
         <Recipients label="Cc" list={message.cc} />
       </header>
       {open ? (
-        <MessageBody message={message} subject={subject} />
+        <MessageBody message={message} subject={subject} source={source} />
       ) : (
         <div className="flex items-center justify-between gap-2">
           <p className="truncate text-sm text-muted-foreground">{message.snippet}</p>
@@ -155,8 +179,8 @@ export function MessageView({
       {message.attachments.length > 0 && (
         <ul className="flex flex-wrap gap-1.5 text-xs" aria-label="Anexos">
           {message.attachments.map((a, i) => (
-            <li key={i} className="rounded border bg-muted px-2 py-0.5">
-              {a.filename}
+            <li key={i} className={a.fileId ? undefined : "rounded border bg-muted px-2 py-0.5"}>
+              {a.fileId ? <AttachmentLink fileId={a.fileId} filename={a.filename} /> : a.filename}
             </li>
           ))}
         </ul>

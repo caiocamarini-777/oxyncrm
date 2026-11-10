@@ -438,7 +438,7 @@ describe("vínculos", () => {
     expect(await store.pdIdOf("persons", NEW_PER)).toBeNull();
 
     await store.link("persons", "70", C1, NEW_PER);
-    expect(log.find((l) => l.table === "rpc:pipedrive_push_link")?.values).toEqual({
+    expect(log.find((l) => l.table === "pipedrive_push_link")?.values).toEqual({
       p_entity: "persons",
       p_external_id: "70",
       p_company: C1,

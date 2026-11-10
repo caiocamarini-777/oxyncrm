@@ -1,0 +1,30 @@
+name: Banco de testes
+
+# Mantém o banco do site de testes (projeto Supabase oxyncrm-testes) com as migrations da main.
+# Os previews da Vercel usam esse banco. Ele guarda dados de teste: nunca é recriado por aqui.
+on:
+  push:
+    branches: [main]
+    paths: ["supabase/migrations/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: banco-testes
+  cancel-in-progress: false
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_TEST_PROJECT_REF: cvqaaipjdirbbwfdgjox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Aplica as migrations no banco de testes
+        run: pnpm db:migrate-testes

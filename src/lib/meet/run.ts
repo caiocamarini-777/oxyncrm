@@ -132,9 +132,10 @@ type MeetingRow = {
   attempts: number | null;
   entity: LinkEntity | null;
   record_id: string | null;
+  calendar_event_id: string | null;
 };
 const MEETING_COLUMNS =
-  "id, company_id, account_id, owner_id, conference_record, title, started_at, ended_at, attendees, status, attempts, entity, record_id";
+  "id, company_id, account_id, owner_id, conference_record, calendar_event_id, title, started_at, ended_at, attendees, status, attempts, entity, record_id";
 
 type AccountRow = { id: string; user_id: string; company_id: string; scopes: string[] | null; meeting_cursor: string | null };
 
@@ -1050,6 +1051,37 @@ async function createSuggestions(
   check(error, "criar as sugestões");
 }
 
+/**
+ * Vínculo pelo evento da Agenda: a atividade aberta da empresa que carrega o mesmo `calendar_event_id` da reunião
+ * (criada no CRM, no Google ou trazida do Pipedrive). Registro na ordem negócio, lead, pessoa. Organização fica
+ * de fora, porque a reunião vinculada a ela não é gravada no Pipedrive; sem vínculo que sirva, devolve null e
+ * o casador por e-mail e horário decide. Havendo a mesma atividade em mais de uma Agenda (cada convidado tem a
+ * sua cópia do evento), vale a da caixa que trouxe a reunião.
+ */
+async function linkFromCalendarEvent(
+  db: SupabaseClient,
+  m: MeetingRow,
+): Promise<{ entity: "deals" | "leads" | "persons"; recordId: string; anchorActivityId: string } | null> {
+  if (!m.calendar_event_id) return null;
+  const { data, error } = await db
+    .from("activities")
+    .select("id, deal_id, lead_id, person_id, calendar_account_id")
+    .eq("company_id", m.company_id)
+    .eq("calendar_event_id", m.calendar_event_id)
+    .eq("done", false)
+    .is("deleted_at", null)
+    .order("id");
+  check(error, "ler a atividade do evento da reunião");
+  type EventActivity = { id: string; deal_id: string | null; lead_id: string | null; person_id: string | null; calendar_account_id: string | null };
+  const rows = (data ?? []) as EventActivity[];
+  for (const a of [...rows.filter((r) => r.calendar_account_id === m.account_id), ...rows]) {
+    if (a.deal_id) return { entity: "deals", recordId: a.deal_id, anchorActivityId: a.id };
+    if (a.lead_id) return { entity: "leads", recordId: a.lead_id, anchorActivityId: a.id };
+    if (a.person_id) return { entity: "persons", recordId: a.person_id, anchorActivityId: a.id };
+  }
+  return null;
+}
+
 /** Vínculo, notas e gravação. Lança em caso de erro (quem chama conta a tentativa). */
 async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   const { db } = deps;
@@ -1072,9 +1104,21 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
     transcript = { text: row.text, source: row.source === "gemini_notes" ? "gemini_notes" : "transcript" };
   }
 
-  // 1. Vínculo: o já gravado (casado antes ou escolhido pelo vendedor) ou o casador.
+  // 1. Vínculo: o já gravado (casado antes ou escolhido pelo vendedor), o da atividade do mesmo evento da Agenda
+  //    ou o casador.
   let link: { entity: LinkEntity; recordId: string } | null =
     m.entity && m.record_id ? { entity: m.entity, recordId: m.record_id } : null;
+  if (!link) {
+    const anchored = await linkFromCalendarEvent(db, m);
+    if (anchored) {
+      const { error } = await db
+        .from("meetings")
+        .update({ entity: anchored.entity, record_id: anchored.recordId, anchor_activity_id: anchored.anchorActivityId })
+        .eq("id", m.id);
+      check(error, "gravar o vínculo da reunião");
+      link = { entity: anchored.entity, recordId: anchored.recordId };
+    }
+  }
   if (!link) {
     const external = (m.attendees ?? []).filter((a) => a.email && !a.internal).map((a) => a.email as string);
     const candidates = await loadCandidates(db, m.company_id, external);

@@ -51,7 +51,7 @@ const permissions = (gestor: boolean) => ({
 });
 
 async function newPage(browser: Browser, email: string): Promise<Page> {
-  const ctx = await browser.newContext({ baseURL: "http://localhost:3000", acceptDownloads: true });
+  const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL, acceptDownloads: true });
   const page = await ctx.newPage();
   await login(page, email, password);
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
@@ -143,7 +143,7 @@ test("cria organização, aparece na lista e abre o detalhe", async ({ browser }
   await expect(page.getByLabel("Domínio")).toHaveValue(`volt${stamp}.com.br`);
   await expect(page.getByRole("tab", { name: "Anotação" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Atividade" })).toHaveAttribute("aria-selected", "false");
-  await expect(page.getByRole("tab", { name: "E-mail" })).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByRole("tab", { name: "E-mail" })).toHaveAttribute("aria-selected", "false");
   await page.context().close();
 });
 

@@ -47,6 +47,147 @@ const DEFAULTS: Record<string, () => Row> = {
   pipedrive_push_retry: () => ({ attempts: 1, last_error: null }),
 };
 
+/** Colunas que `calendar_mark_synced` grava; as demais chaves de `p_fields` são ignoradas, como no banco. */
+const CALENDAR_FIELDS = [
+  "calendar_account_id",
+  "calendar_event_id",
+  "calendar_etag",
+  "calendar_state",
+  "calendar_error",
+  "calendar_attempts",
+  "meet_url",
+  "calendar_invited_email",
+  "calendar_generation",
+];
+
+/** Colunas que `calendar_apply_inbound` grava (horário, título, conclusão, lixeira e vínculo com o evento). */
+const INBOUND_FIELDS = [
+  "subject",
+  "due_at",
+  "duration_minutes",
+  "deleted_at",
+  "done",
+  "completed_at",
+  "meeting_outcome",
+  "calendar_account_id",
+  "calendar_event_id",
+  "calendar_etag",
+  "calendar_state",
+  "meet_url",
+  "calendar_invited_email",
+];
+
+/** Colunas que `calendar_insert_inbound` aceita; as demais ficam com o padrão da tabela. */
+const INSERT_INBOUND_FIELDS = [
+  "company_id",
+  "owner_id",
+  "type_id",
+  "channel_id",
+  "subject",
+  "description",
+  "due_at",
+  "duration_minutes",
+  "lead_id",
+  "deal_id",
+  "person_id",
+  "organization_id",
+  "calendar_account_id",
+  "calendar_event_id",
+  "calendar_etag",
+  "calendar_state",
+  "calendar_error",
+  "calendar_attempts",
+  "meet_url",
+  "calendar_is_organizer",
+];
+
+/** Check `done = (completed_at is not null)` da tabela `activities`. */
+function checkCompletion(row: Row): void {
+  if ((row.done === true) !== (row.completed_at != null)) {
+    throw new Error("violação do check activities: done e completed_at precisam andar juntos");
+  }
+}
+
+/**
+ * Funções do banco (`db.rpc`) que os testes usam: recebem as tabelas e os argumentos e devolvem o `data`. O banco
+ * falso não tem gatilhos, então a marca de sessão (`oxyn.calendar_inbound`) não tem efeito aqui; quem testa confere
+ * pelo `log` que a gravação passou pela função.
+ */
+const RPCS: Record<string, (tables: Tables, args: Row, now: string) => unknown> = {
+  // Atualização do Pipedrive pelo CRM (`pipedrive_push_link`/`_unlink`) sobre `external_ids`, com a regra da
+  // migration: upsert pela chave (source, entity, external_id, company_id).
+  pipedrive_push_link(tables, a, now) {
+    const ext = (tables.external_ids ??= []);
+    const record = (tables[String(a.p_entity)] ?? []).find((r) => r.id === a.p_record);
+    const values = { record_id: a.p_record, job_id: null, record_updated_at: record?.updated_at ?? null, imported_at: now };
+    const found = ext.find(
+      (r) =>
+        r.source === "pipedrive" && r.entity === a.p_entity && r.external_id === a.p_external_id && r.company_id === a.p_company,
+    );
+    if (found) Object.assign(found, values);
+    else ext.push({ source: "pipedrive", entity: a.p_entity, external_id: a.p_external_id, company_id: a.p_company, ...values });
+    return null;
+  },
+  pipedrive_push_unlink(tables, a) {
+    const ext = (tables.external_ids ??= []);
+    for (const r of ext.filter((r) => r.source === "pipedrive" && r.entity === a.p_entity && r.record_id === a.p_record)) {
+      ext.splice(ext.indexOf(r), 1);
+    }
+    return null;
+  },
+  // Volta do envio à Agenda: só as colunas da Agenda; chave ausente mantém o valor, chave com null grava null.
+  calendar_mark_synced: (tables, args) => {
+    const row = (tables.activities ?? []).find((r) => r.id === args.p_activity);
+    const fields = (args.p_fields ?? {}) as Row;
+    if (row) for (const k of CALENDAR_FIELDS) if (k in fields) row[k] = structuredClone(fields[k]);
+    return null;
+  },
+  // Entrada da Agenda numa atividade que existe: mesma regra de chave ausente / null; confere o check de conclusão.
+  calendar_apply_inbound: (tables, args) => {
+    const row = (tables.activities ?? []).find((r) => r.id === args.p_activity);
+    const patch = (args.p_patch ?? {}) as Row;
+    if (!row) return null;
+    const next = { ...row };
+    for (const k of INBOUND_FIELDS) if (k in patch) next[k] = structuredClone(patch[k]);
+    checkCompletion(next);
+    Object.assign(row, next);
+    return null;
+  },
+  // Evento novo da Agenda: insere com os padrões da tabela e devolve o id.
+  calendar_insert_inbound: (tables, args) => {
+    const input = (args.p_row ?? {}) as Row;
+    const row: Row = {
+      id: `ga${++seq}`,
+      source: "google_calendar",
+      created_by: input.owner_id ?? null,
+      description: null,
+      duration_minutes: 30,
+      done: false,
+      completed_at: null,
+      meeting_outcome: null,
+      deleted_at: null,
+      lead_id: null,
+      deal_id: null,
+      person_id: null,
+      organization_id: null,
+      calendar_account_id: null,
+      calendar_event_id: null,
+      calendar_etag: null,
+      calendar_state: "none",
+      calendar_error: null,
+      calendar_attempts: 0,
+      meet_url: null,
+      calendar_local_changed_at: null,
+      calendar_invited_email: null,
+      calendar_generation: 0,
+      calendar_is_organizer: null,
+    };
+    for (const k of INSERT_INBOUND_FIELDS) if (k in input && input[k] != null) row[k] = structuredClone(input[k]);
+    (tables.activities ??= []).push(row);
+    return row.id;
+  },
+};
+
 const time = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
 function cmp(a: unknown, b: unknown): number {
   if (typeof a === "number" && typeof b === "number") return a - b;
@@ -95,29 +236,6 @@ function orTerm(term: string): (r: Row) => boolean {
   };
 }
 
-/**
- * Funções do banco usadas pela atualização do Pipedrive (`pipedrive_push_link`/`_unlink`), sobre `external_ids`,
- * com a mesma regra da migration: upsert pela chave (source, entity, external_id, company_id).
- */
-const RPCS: Record<string, (tables: Tables, args: Row, now: string) => void> = {
-  pipedrive_push_link(tables, a, now) {
-    const ext = (tables.external_ids ??= []);
-    const record = (tables[String(a.p_entity)] ?? []).find((r) => r.id === a.p_record);
-    const values = { record_id: a.p_record, job_id: null, record_updated_at: record?.updated_at ?? null, imported_at: now };
-    const found = ext.find(
-      (r) =>
-        r.source === "pipedrive" && r.entity === a.p_entity && r.external_id === a.p_external_id && r.company_id === a.p_company,
-    );
-    if (found) Object.assign(found, values);
-    else ext.push({ source: "pipedrive", entity: a.p_entity, external_id: a.p_external_id, company_id: a.p_company, ...values });
-  },
-  pipedrive_push_unlink(tables, a) {
-    const ext = (tables.external_ids ??= []);
-    for (const r of ext.filter((r) => r.source === "pipedrive" && r.entity === a.p_entity && r.record_id === a.p_record)) {
-      ext.splice(ext.indexOf(r), 1);
-    }
-  },
-};
 
 /**
  * Banco falso no padrão do `run.test.ts` do Gmail, mas com estado: as tabelas são listas de linhas e o
@@ -125,6 +243,8 @@ const RPCS: Record<string, (tables: Tables, args: Row, now: string) => void> = {
  * `onConflict`/`ignoreDuplicates`, update, delete e o `.or`, inclusive com `and(...)` aninhado). Chave única
  * violada devolve 23505. `.rpc` só conhece as funções de `RPCS`.
  * Com `clock`, imita o trigger `set_updated_at` de `meetings` (insert e update gravam a hora do relógio).
+ * `.rpc` executa as funções de `RPCS` (função desconhecida devolve o erro PGRST202) e entra no `log` como
+ * `{ table: <função>, op: "rpc", values: <argumentos> }`. Função que lança (check violado) rejeita a promessa.
  */
 export function fakeDb(tables: Tables, clock?: () => Date) {
   const log: { table: string; op: string; values?: unknown }[] = [];
@@ -253,11 +373,14 @@ export function fakeDb(tables: Tables, clock?: () => Date) {
       return chain;
     },
     rpc(name: string, args: Row = {}) {
-      log.push({ table: `rpc:${name}`, op: "rpc", values: args });
+      log.push({ table: name, op: "rpc", values: args });
       const fn = RPCS[name];
-      if (!fn) return Promise.resolve({ data: null, error: { code: "42883", message: `função ${name} não existe` } });
-      fn(tables, args, (clock?.() ?? new Date()).toISOString());
-      return Promise.resolve({ data: null, error: null });
+      if (!fn) return Promise.resolve({ data: null, error: { code: "PGRST202", message: `função ${name} não existe` } });
+      try {
+        return Promise.resolve({ data: fn(tables, args, (clock?.() ?? new Date()).toISOString()) ?? null, error: null });
+      } catch (e) {
+        return Promise.reject(e);
+      }
     },
   } as unknown as SupabaseClient;
   return { db, tables, log };

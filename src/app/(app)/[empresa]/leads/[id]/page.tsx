@@ -8,6 +8,7 @@ import { RecordLayout } from "@/components/records/record-layout";
 import { RecordEmail } from "@/components/email/record-email";
 import { RecordTabs } from "@/components/records/record-tabs";
 import { RecordHistory } from "@/components/records/record-history";
+import { RecordFiles } from "@/components/records/record-files";
 import { ActivityTab } from "@/components/activities/activity-tab";
 import { PlannedList } from "@/components/activities/planned-list";
 import { loadRecordActivity } from "@/lib/activities/record-context";
@@ -91,6 +92,7 @@ export default async function LeadPage({ params }: { params: Promise<{ empresa: 
         <div className="flex flex-col gap-4">
           <LeadLinks lead={lead} />
           <LeadEditPanel lead={lead} defs={defs} owners={owners} sources={sources} canEdit={permissions.edit} />
+          <RecordFiles entity="leads" recordId={lead.id} />
         </div>
       }
       main={

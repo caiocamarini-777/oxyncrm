@@ -1800,4 +1800,18 @@ describe("defaultMeetDeps", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("modo CRM dispensa PIPEDRIVE_API_TOKEN (o Pipedrive, se chamado por engano, falha com o motivo)", async () => {
+    try {
+      vi.stubEnv("PIPEDRIVE_API_TOKEN", "");
+      vi.stubEnv("MEETING_SINK", "crm");
+      const deps = defaultMeetDeps(fakeDb({}).db);
+      expect(deps.sinkMode).toBe("crm");
+      await expect(deps.sink.writeNote({} as never, "<p>x</p>", null)).rejects.toThrow("PIPEDRIVE_API_TOKEN não configurado.");
+      vi.stubEnv("MEETING_SINK", "pipedrive");
+      expect(() => defaultMeetDeps(fakeDb({}).db)).toThrow("PIPEDRIVE_API_TOKEN não configurado.");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

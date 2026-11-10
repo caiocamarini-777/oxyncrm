@@ -179,6 +179,8 @@ function once<T>(fn: () => Promise<T>): () => Promise<T> {
 
 // ---- dependências padrão ---------------------------------------------------------------------------------------
 
+const NO_PIPEDRIVE_TOKEN = "PIPEDRIVE_API_TOKEN não configurado.";
+
 /** Resultados de reunião e tipos de atividade, lidos na hora do Pipedrive. */
 export async function loadPipedriveNames(token: string): Promise<PipedriveNames> {
   const client = createPipedriveClient({ token });
@@ -201,26 +203,39 @@ function namesLoader(deps: MeetDeps): () => Promise<PipedriveNames> {
   if (deps.pipedriveNames) return deps.pipedriveNames;
   return async () => {
     const token = process.env.PIPEDRIVE_API_TOKEN;
-    if (!token) throw new Error("PIPEDRIVE_API_TOKEN não configurado.");
+    if (!token) throw new Error(NO_PIPEDRIVE_TOKEN);
     return loadPipedriveNames(token);
   };
 }
 
+/** Modo CRM sem o token: o Pipedrive não é usado, e uma chamada por engano falha com o motivo. */
+const noPipedrive = async (): Promise<never> => {
+  throw new Error(NO_PIPEDRIVE_TOKEN);
+};
+const noPipedriveSink: MeetingSink = {
+  writeNote: noPipedrive,
+  completeMeeting: noPipedrive,
+  createActivity: noPipedrive,
+  moveStage: noPipedrive,
+};
+
 /**
- * Dependências de produção (cron e ações do vendedor). Pede `PIPEDRIVE_API_TOKEN`; o Claude lê `ANTHROPIC_API_KEY`
- * e o destino da anotação vem de `MEETING_SINK`.
+ * Dependências de produção (cron e ações do vendedor). O destino da anotação vem de `MEETING_SINK`; o modo
+ * Pipedrive pede `PIPEDRIVE_API_TOKEN`, e o modo CRM segue sem ele (depois de cancelar o Pipedrive). O Claude lê
+ * `ANTHROPIC_API_KEY`.
  */
 export function defaultMeetDeps(db: SupabaseClient): MeetDeps {
+  const sinkMode = meetingSinkMode();
   const token = process.env.PIPEDRIVE_API_TOKEN;
-  if (!token) throw new Error("PIPEDRIVE_API_TOKEN não configurado.");
+  if (!token && sinkMode === "pipedrive") throw new Error(NO_PIPEDRIVE_TOKEN);
   return {
     db,
     meetFor: meetClientForAccount,
     notes: generateNotes,
-    sink: pipedriveSink({ token }),
+    sink: token ? pipedriveSink({ token }) : noPipedriveSink,
     now: () => new Date(),
-    pipedriveNames: once(() => loadPipedriveNames(token)),
-    sinkMode: meetingSinkMode(),
+    ...(token ? { pipedriveNames: once(() => loadPipedriveNames(token)) } : {}),
+    sinkMode,
   };
 }
 

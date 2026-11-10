@@ -14,6 +14,9 @@ export async function dragCard(
   target: () => Locator,
   opts: { where?: "center" | "top"; announce?: string | RegExp; during?: () => Promise<void> } = {},
 ) {
+  // Quadro hidratado: a região ao vivo do dnd-kit só é criada no cliente, depois de montar. Antes disso o
+  // ponteiro não tem ouvinte e o arraste nunca começa (acontecia no CI com o `next dev` ainda compilando).
+  await expect(liveRegion(page).first()).toBeAttached();
   await source.scrollIntoViewIfNeeded();
   const s = await source.boundingBox();
   if (!s) throw new Error("card sem caixa");

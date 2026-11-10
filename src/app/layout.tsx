@@ -1,14 +1,17 @@
 import type { Metadata } from "next";
-import { Inter, Montserrat } from "next/font/google";
+import localFont from "next/font/local";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
-const montserrat = Montserrat({
+// Fontes guardadas no projeto (Inter e Montserrat variáveis, subconjunto latino, do Fontsource; licença OFL em
+// ./fonts). Com next/font/google cada compilação baixava as fontes, e o Turbopack às vezes falhava nisso
+// ("next/font/google queries have exactly one entry"), derrubando o next dev do CI.
+const inter = localFont({ src: "./fonts/inter-latin-wght-normal.woff2", weight: "100 900", variable: "--font-inter" });
+const montserrat = localFont({
+  src: "./fonts/montserrat-latin-wght-normal.woff2",
+  weight: "100 900",
   variable: "--font-montserrat",
-  subsets: ["latin"],
-  weight: ["600", "700"],
 });
 
 export const metadata: Metadata = {

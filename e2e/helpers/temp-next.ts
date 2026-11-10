@@ -107,9 +107,9 @@ export async function startTempNext(opts: { name: string; port: number; env: Rec
   try {
     return await launch(dir, opts);
   } catch (e) {
-    // A compilação baixa as fontes do Google (next/font) e o Turbopack às vezes falha nisso por causa da rede
-    // ("next/font/google queries have exactly one entry"), guardando o erro no cache. Uma segunda subida, sem o
-    // cache de compilação, baixa de novo.
+    // A falha que motivou isto (o Turbopack baixando as fontes do Google: "next/font/google queries have exactly
+    // one entry") sumiu com as fontes locais em src/app/fonts. A segunda subida, sem o cache de compilação, fica
+    // como rede de segurança para outra falha de compilação guardada no cache.
     console.warn(`next dev temporário não subiu; tentando de novo sem o cache.\n${(e as Error).message.slice(0, 300)}`);
     rmSync(path.join(dir, ".next"), { recursive: true, force: true });
     for (let i = 0; i < 20 && (await portInUse(opts.port)); i++) await new Promise((r) => setTimeout(r, 500));

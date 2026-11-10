@@ -95,15 +95,28 @@ describe("settings e liga/desliga", () => {
     expect(await setup({ pipedrive_push_settings: [] }).store.settings()).toEqual({ enabled: false, cursor: null });
   });
 
-  it("ligar grava enabled_at e o cursor no momento em que foi ligado", async () => {
-    const { store, tables } = setup();
+  it("ligar grava enabled_at agora e o cursor no fim da última importação concluída", async () => {
+    const { store, tables } = setup({
+      import_jobs: [
+        importJob({ id: "job-antigo", mirror: false, finished_at: "2026-11-07T10:00:00.000Z" }),
+        importJob({ id: "job-ultimo", mirror: true, finished_at: "2026-11-09T09:30:00.000Z" }),
+        importJob({ id: "job-rodando", status: "running", finished_at: null }),
+        importJob({ id: "job-outra-fonte", source: "csv", finished_at: "2026-11-09T11:00:00.000Z" }),
+      ],
+    });
     await store.setEnabled(true, NOW);
     expect(tables.pipedrive_push_settings[0]).toEqual({
       id: 1,
       enabled: true,
       enabled_at: NOW.toISOString(),
-      cursor: NOW.toISOString(),
+      cursor: "2026-11-09T09:30:00.000Z",
     });
+  });
+
+  it("ligar sem nenhuma importação concluída: o cursor é o momento em que foi ligado", async () => {
+    const { store, tables } = setup({ import_jobs: [importJob({ status: "failed" })] });
+    await store.setEnabled(true, NOW);
+    expect(tables.pipedrive_push_settings[0]).toMatchObject({ enabled_at: NOW.toISOString(), cursor: NOW.toISOString() });
   });
 
   it("ligar de novo a rotina já ligada não mexe no cursor", async () => {

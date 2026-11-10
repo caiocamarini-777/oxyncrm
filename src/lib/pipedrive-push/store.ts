@@ -45,7 +45,11 @@ export interface PushStore {
     r: { status: "done" | "failed"; cursorTo: string; counters: unknown; errors: unknown },
   ): Promise<void>;
   saveCursor(cursor: string): Promise<void>;
-  /** Ligar grava `enabled_at` e o cursor = `now` (se já estava ligada, nada muda). Desligar mantém o cursor. */
+  /**
+   * Ligar grava `enabled_at` = `now` e o cursor no fim da última importação do Pipedrive concluída (sem nenhuma,
+   * `now`): o que mudou no CRM entre a última sincronização e a ligação também vai. Se já estava ligada, nada muda.
+   * Desligar mantém o cursor.
+   */
   setEnabled(enabled: boolean, now: Date): Promise<void>;
 }
 
@@ -66,7 +70,7 @@ const MAX_ERROR_CHARS = 1000;
 const SETTINGS_ID = 1;
 
 /** Colunas que apontam para outro registro, por tabela (as anotações apontam por `entity` + `record_id`). */
-const REFS: Record<PushEntity, [string, PushEntity][]> = {
+export const PUSH_REFS: Record<PushEntity, [string, PushEntity][]> = {
   organizations: [],
   persons: [["organization_id", "organizations"]],
   leads: [
@@ -115,7 +119,7 @@ type ImportMaps = {
   cursor?: { cache?: { pipelines?: StageMap } | null } | null;
 };
 
-const isPushEntity = (v: unknown): v is PushEntity => typeof v === "string" && (PUSH_ORDER as string[]).includes(v);
+export const isPushEntity = (v: unknown): v is PushEntity => typeof v === "string" && (PUSH_ORDER as string[]).includes(v);
 
 function norm(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
@@ -164,7 +168,7 @@ export function supabasePushStore(db: SupabaseClient, client: PushMetaClient): P
     };
     for (const r of rows) {
       add(entity, r.id);
-      for (const [column, target] of REFS[entity]) add(target, r[column]);
+      for (const [column, target] of PUSH_REFS[entity]) add(target, r[column]);
       if (entity === "notes" && isPushEntity(r.entity)) add(r.entity, r.record_id);
     }
     for (const [e, ids] of want) await loadLinks(e, [...ids]);
@@ -449,8 +453,11 @@ export function supabasePushStore(db: SupabaseClient, client: PushMetaClient): P
     async setEnabled(enabled, now) {
       if (!enabled) return updateSettings({ enabled: false });
       const at = now.toISOString();
+      // o Pipedrive está igual ao CRM até a última sincronização: o que mudou depois dela ainda precisa ir
+      const last = await lastImport<{ finished_at: string }>("finished_at");
+      const cursor = last?.finished_at ?? at;
       // só a passagem de desligada para ligada move o cursor: ligar de novo não pula as mudanças ainda não enviadas
-      await updateSettings({ enabled: true, enabled_at: at, cursor: at }, true);
+      await updateSettings({ enabled: true, enabled_at: at, cursor }, true);
     },
   };
 }

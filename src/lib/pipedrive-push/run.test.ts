@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PipedriveAuthError, PipedriveError } from "@/lib/import/pipedrive/client";
 import type { PushCtx, PushEntity } from "./mapping";
-import { MAX_ATTEMPTS, runPipedrivePush } from "./run";
+import { CURSOR_OVERLAP_MS, MAX_ATTEMPTS, runPipedrivePush } from "./run";
 import { PUSH_ORDER, type PushStore } from "./store";
 
 vi.mock("server-only", () => ({}));
@@ -16,6 +16,8 @@ const CURSOR = "2026-11-09T12:00:00.000Z";
 const START = Date.parse("2026-11-09T14:00:00.000Z");
 const HOUR = 3600_000;
 const at = (hhmm: string) => `2026-11-09T${hhmm}:00.000Z`;
+/** Cursor de uma rodada concluída que começou em START: o início menos a sobreposição de 2 min. */
+const START_CURSOR = new Date(START - CURSOR_OVERLAP_MS).toISOString();
 
 type Row = Record<string, unknown> & { id: string; company_id: string; updated_at: string; deleted_at: string | null };
 type Call = { method: "post" | "put" | "patch" | "del"; path: string; body?: Record<string, unknown> };
@@ -403,7 +405,7 @@ describe("rodada da atualização do Pipedrive: a rodada", () => {
       { entity: "deals", id: "d1", reason: expect.stringMatching(/etapa etapa-nova sem correspondente/) },
     ]);
     expect(r.counters.organizations).toEqual({ created: 1, updated: 0, deleted: 0, errors: 1 });
-    expect(w.settings.cursor).toBe(new Date(START).toISOString());
+    expect(w.settings.cursor).toBe(START_CURSOR);
   });
 
   it("id que sumiu do Pipedrive (404 na atualização): post, unlink do antigo e link do novo", async () => {
@@ -414,27 +416,39 @@ describe("rodada da atualização do Pipedrive: a rodada", () => {
     });
     const r = await w.run();
     expect(paths(w.calls)).toEqual(["put /v1/organizations/555", "post /v1/organizations"]);
-    expect(w.events).toEqual(["unlink organizations o1", "link organizations o1 100", `cursor ${new Date(START).toISOString()}`]);
+    expect(w.events).toEqual(["unlink organizations o1", "link organizations o1 100", `cursor ${START_CURSOR}`]);
     expect(r.counters.organizations).toEqual({ created: 1, updated: 0, deleted: 0, errors: 0 });
   });
 });
 
 describe("rodada da atualização do Pipedrive: cursor e relatório", () => {
-  it("dentro do tempo: o cursor vira o início da rodada; startRun e finishRun são chamados", async () => {
+  it("dentro do tempo: o cursor vira o início da rodada menos 2 min; startRun e finishRun são chamados", async () => {
     const w = world({ rows: { organizations: [org("o1")] }, tickMs: 5 * 60_000 });
     const r = await w.run();
-    const startIso = new Date(START).toISOString();
+    expect(CURSOR_OVERLAP_MS).toBe(2 * 60_000);
+    expect(START_CURSOR).toBe("2026-11-09T13:58:00.000Z");
     expect(r.status).toBe("done");
     expect(r.reason).toBeUndefined();
-    expect(w.settings.cursor).toBe(startIso);
+    expect(w.settings.cursor).toBe(START_CURSOR);
     expect(w.runs).toHaveLength(1);
     expect(w.runs[0].cursorFrom).toBe(CURSOR);
     expect(w.runs[0].finished).toEqual({
       status: "done",
-      cursorTo: startIso,
+      cursorTo: START_CURSOR,
       counters: r.counters,
       errors: [],
     });
+  });
+
+  it("a sobreposição relê o que mudou logo antes do cursor: o registro já vinculado só leva outro put", async () => {
+    const w = world({ rows: { organizations: [org("o1", { updated_at: at("13:59") })] } });
+    await w.run();
+    expect(paths(w.calls)).toEqual(["post /v1/organizations"]);
+    w.setClock("2026-11-09T15:00:00.000Z");
+    w.calls.length = 0;
+    await w.run();
+    expect(paths(w.calls)).toEqual(["put /v1/organizations/100"]);
+    expect(w.settings.cursor).toBe("2026-11-09T14:58:00.000Z");
   });
 
   it("tempo esgotado: o cursor vira o updated_at do último concluído antes de tudo o que ficou de fora", async () => {
@@ -450,17 +464,23 @@ describe("rodada da atualização do Pipedrive: cursor e relatório", () => {
     expect(r.status).toBe("done");
     expect(r.reason).toMatch(/tempo/);
     expect(paths(w.calls)).toEqual(["post /v1/organizations", "post /v1/organizations"]);
-    // p1 (13:05) ficou de fora: o cursor não pode passar dele, então volta para o1 (13:00), e não o2 (13:10)
-    expect(w.settings.cursor).toBe(at("13:00"));
-    expect(w.runs[0].finished).toMatchObject({ status: "done", cursorTo: at("13:00") });
+    // p1 (13:05) ficou de fora: o cursor não pode passar dele, então volta para o1 (13:00), e não o2 (13:10),
+    // menos a sobreposição de 2 min
+    expect(w.settings.cursor).toBe(at("12:58"));
+    expect(w.runs[0].finished).toMatchObject({ status: "done", cursorTo: at("12:58") });
 
-    // a rodada seguinte retoma: o2 só é atualizado (mesmo id), as pessoas são criadas
+    // a rodada seguinte retoma: as organizações só são atualizadas (mesmo id), as pessoas são criadas
     w.setClock("2026-11-09T15:00:00.000Z");
     w.calls.length = 0;
     const r2 = await w.run();
     expect(r2.status).toBe("done");
-    expect(paths(w.calls)).toEqual(["put /v1/organizations/101", "post /v1/persons", "post /v1/persons"]);
-    expect(w.settings.cursor).toBe("2026-11-09T15:00:00.000Z");
+    expect(paths(w.calls)).toEqual([
+      "put /v1/organizations/100",
+      "put /v1/organizations/101",
+      "post /v1/persons",
+      "post /v1/persons",
+    ]);
+    expect(w.settings.cursor).toBe("2026-11-09T14:58:00.000Z");
   });
 
   it("tempo esgotado com o último concluído abaixo do que ficou: o cursor é o updated_at dele", async () => {
@@ -474,7 +494,21 @@ describe("rodada da atualização do Pipedrive: cursor e relatório", () => {
     const r = await w.run(25 * 60_000);
     expect(paths(w.calls)).toEqual(["post /v1/organizations", "post /v1/organizations", "post /v1/persons"]);
     expect(r.reason).toMatch(/tempo/);
-    expect(w.settings.cursor).toBe(at("13:10"));
+    expect(w.settings.cursor).toBe(at("13:08"));
+  });
+
+  it("tempo esgotado logo depois do cursor: a sobreposição não leva o cursor para antes do de entrada", async () => {
+    const w = world({
+      rows: {
+        organizations: [org("o1", { updated_at: "2026-11-09T12:01:00.000Z" })],
+        persons: [person("p1", "o1", { updated_at: at("12:30") })],
+      },
+      tickMs: 10 * 60_000,
+    });
+    const r = await w.run(5 * 60_000);
+    expect(paths(w.calls)).toEqual(["post /v1/organizations"]);
+    expect(r.reason).toMatch(/tempo/);
+    expect(w.settings.cursor).toBe(CURSOR);
   });
 
   it("tempo esgotado antes das mudanças: o cursor fica onde estava", async () => {
@@ -506,6 +540,97 @@ describe("rodada da atualização do Pipedrive: cursor e relatório", () => {
     expect(w.settings.cursor).toBe(CURSOR);
     expect(w.retry.size).toBe(0);
     expect(w.runs[0].finished).toMatchObject({ status: "failed", cursorTo: CURSOR });
+  });
+});
+
+describe("rodada da atualização do Pipedrive: relacionados sob demanda", () => {
+  it("negócio cuja pessoa foi criada no CRM antes do cursor (nunca enviada): post e link da pessoa, depois post do negócio", async () => {
+    const w = world({
+      rows: { persons: [person("p1", null, { updated_at: at("11:00") })], deals: [deal("d1", "p1")] },
+    });
+    const r = await w.run();
+    expect(paths(w.calls)).toEqual(["post /v1/persons", "post /v1/deals"]);
+    expect(w.calls[1].body).toMatchObject({ person_id: 100 });
+    expect(w.events.filter((e) => e.startsWith("link"))).toEqual(["link persons p1 100", "link deals d1 101"]);
+    expect(r.counters.persons.created).toBe(1);
+    expect(r.counters.deals.created).toBe(1);
+    expect(w.retry.size).toBe(0);
+    expect(r.errors).toEqual([]);
+  });
+
+  it("dois níveis: negócio → pessoa → organização", async () => {
+    const w = world({
+      rows: {
+        organizations: [org("o1", { updated_at: at("11:00") })],
+        persons: [person("p1", "o1", { updated_at: at("11:00") })],
+        deals: [deal("d1", "p1")],
+      },
+    });
+    const r = await w.run();
+    expect(paths(w.calls)).toEqual(["post /v1/organizations", "post /v1/persons", "post /v1/deals"]);
+    expect(w.calls[1].body).toMatchObject({ org_id: 100 });
+    expect(w.calls[2].body).toMatchObject({ person_id: 101 });
+    expect(r.counters.organizations.created).toBe(1);
+    expect(w.retry.size).toBe(0);
+  });
+
+  it("além de dois níveis: tudo espera na fila e a rodada seguinte resolve pela ordem da fila", async () => {
+    const w = world({
+      rows: {
+        organizations: [org("o1", { updated_at: at("11:00") })],
+        persons: [person("p1", "o1", { updated_at: at("11:00") })],
+        deals: [deal("d1", "p1", { updated_at: at("11:00") })],
+        activities: [activity("a1", "d1")],
+      },
+    });
+    const r = await w.run();
+    // atividade → negócio → pessoa: a organização da pessoa seria o terceiro nível
+    expect(w.calls).toEqual([]);
+    expect([...w.retry.values()].map((x) => [x.entity, x.record_id, x.attempts])).toEqual([
+      ["persons", "p1", 1],
+      ["deals", "d1", 1],
+      ["activities", "a1", 1],
+    ]);
+    expect(r.errors).toEqual([]);
+
+    w.setClock("2026-11-09T15:00:00.000Z");
+    await w.run();
+    expect(paths(w.calls)).toEqual([
+      "post /v1/organizations",
+      "post /v1/persons",
+      "post /v1/deals",
+      "post /v1/activities",
+    ]);
+    expect(w.retry.size).toBe(0);
+  });
+
+  it("relacionado que falha: entra na fila com o próprio erro, e o dependente espera sem contar como erro", async () => {
+    const w = world({
+      rows: { persons: [person("p1", null, { updated_at: at("11:00") })], deals: [deal("d1", "p1")] },
+      fail: (c) => (c.path === "/v1/persons" ? new PipedriveError("Pipedrive respondeu 500 em /v1/persons", 500) : null),
+    });
+    const r = await w.run();
+    expect(paths(w.calls)).toEqual(["post /v1/persons"]);
+    expect([...w.retry.values()].map((x) => [x.entity, x.record_id, x.attempts])).toEqual([
+      ["persons", "p1", 1],
+      ["deals", "d1", 1],
+    ]);
+    expect(r.errors).toEqual([{ entity: "persons", id: "p1", reason: expect.stringMatching(/500/) }]);
+    expect(r.counters.deals.errors).toBe(0);
+    expect(w.retry.get("deals:d1")?.last_error).toMatch(/pessoa ainda sem id no Pipedrive.*persons p1: .*500/);
+  });
+
+  it("relacionado na lixeira: o dependente vai para a fila com o motivo, sem chamar o Pipedrive", async () => {
+    const w = world({
+      rows: {
+        persons: [person("p1", null, { updated_at: at("11:00"), deleted_at: at("11:00") })],
+        deals: [deal("d1", "p1")],
+      },
+    });
+    const r = await w.run();
+    expect(w.calls).toEqual([]);
+    expect(w.retry.get("deals:d1")?.last_error).toMatch(/persons p1: na lixeira/);
+    expect(r.errors).toEqual([]);
   });
 });
 

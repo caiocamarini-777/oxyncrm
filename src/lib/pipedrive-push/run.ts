@@ -10,16 +10,22 @@
  * 3. **Mudanças** desde o cursor, na ordem organizações → anotações. Sem id no Pipedrive: POST e vínculo. Com id: PUT
  *    (lead: PATCH). Id que não existe mais lá (404/410 na atualização) é criado de novo e religado.
  *
+ * **Relacionado sem id no Pipedrive.** Antes de desistir do registro, a rodada cria sob demanda os relacionados que
+ * ainda não estão lá (ex.: a pessoa do negócio criada no CRM antes do cursor e que não mudou depois), até dois níveis
+ * (negócio → pessoa → organização), e tenta o registro mais uma vez.
+ *
  * As exclusões vêm antes das mudanças porque `deleted` não devolve o `deleted_at`: se o tempo acabar no meio das
  * mudanças, as exclusões já foram todas feitas e o cursor pode andar pelo `updated_at` das mudanças (ver
  * `safeCursor`). Os dois conjuntos não se cruzam (mudança é só fora da lixeira).
  *
  * **Falhas.** A falha de um registro não para a rodada: ele vai para a fila de retry e, na quinta falha, sai da fila e
- * fica só no relatório. Registro relacionado ainda sem id no Pipedrive (ex.: a pessoa do negócio falhou) também manda
- * o registro para a fila, sem contar como erro: a fila anda na ordem das dependências, então ele é tentado depois do
- * relacionado. Token inválido (`PipedriveAuthError`) ou falha do banco param a rodada (`failed`) sem mexer no cursor.
+ * fica só no relatório. O relacionado criado sob demanda que falha também entra na fila, com o próprio erro. Registro
+ * que continua sem o relacionado (ex.: a pessoa do negócio falhou) vai para a fila sem contar como erro: a fila anda na
+ * ordem das dependências, então ele é tentado depois do relacionado. Token inválido (`PipedriveAuthError`) ou falha do
+ * banco param a rodada (`failed`) sem mexer no cursor.
  *
- * **Cursor.** Rodada concluída dentro do tempo: o início da rodada. Tempo esgotado: ver `safeCursor`.
+ * **Cursor.** Rodada concluída dentro do tempo: o início da rodada menos `CURSOR_OVERLAP_MS`. Tempo esgotado: ver
+ * `safeCursor`, também menos a sobreposição. O cursor nunca fica antes do cursor de entrada.
  */
 import { PipedriveAuthError, PipedriveError, type PipedriveClient } from "@/lib/import/pipedrive/client";
 import {
@@ -33,7 +39,7 @@ import {
   type PushEntity,
   type PushPayload,
 } from "./mapping";
-import { PUSH_ORDER, type PushStore } from "./store";
+import { isPushEntity, PUSH_ORDER, PUSH_REFS, type PushStore } from "./store";
 
 export type PushCounters = { created: number; updated: number; deleted: number; errors: number };
 
@@ -62,6 +68,14 @@ const PAGE = 500;
 const GONE = new Set([404, 410]);
 /** Mensagem de `pdRef` (mapping.ts) quando o registro relacionado ainda não foi criado no Pipedrive. */
 const WAITING_DEPENDENCY = /ainda sem id no Pipedrive/;
+/** Níveis de relacionados criados sob demanda a partir do registro enviado (negócio → pessoa → organização). */
+export const MAX_DEPENDENCY_DEPTH = 2;
+/**
+ * A próxima rodada relê o que mudou nos últimos 2 minutos antes do cursor: cobre a diferença entre o relógio da
+ * rodada e o do banco e a transação que gravou `updated_at` antes do início da rodada mas só terminou depois da
+ * leitura. Reenviar um registro já vinculado é só um PUT de novo.
+ */
+export const CURSOR_OVERLAP_MS = 2 * 60_000;
 
 const PATHS: Record<PushEntity, string> = {
   organizations: "/v1/organizations",
@@ -126,7 +140,8 @@ type Pending = { entity: PushEntity; row: Row; at: string };
  * ainda fica abaixo de todos os que ficaram de fora: o maior `updated_at` concluído menor que o menor deles. Como a
  * rodada anda por entidade, esse é o ponto seguro mais baixo, e pode ficar antes do último registro enviado (ex.: as
  * organizações foram todas, mas uma pessoa de antes delas ficou de fora); o que se repetir na próxima rodada só é
- * atualizado de novo, no mesmo id. Sem nenhum registro assim, o cursor fica onde estava.
+ * atualizado de novo, no mesmo id. Sem nenhum registro assim, o cursor fica onde estava. Quem chama ainda tira a
+ * sobreposição (`withOverlap`).
  */
 function safeCursor(done: Pending[], left: Pending[], from: string): string {
   const floor = Math.min(...left.map((p) => micros(p.at)));
@@ -137,6 +152,27 @@ function safeCursor(done: Pending[], left: Pending[], from: string): string {
     if (key < floor && (!best || key > best.key)) best = { at: p.at, key };
   }
   return best?.at ?? from;
+}
+
+/** `ts` menos a sobreposição, sem ficar antes de `from` (o cursor não volta). */
+function withOverlap(ts: string, from: string): string {
+  const back = Date.parse(ts) - CURSOR_OVERLAP_MS;
+  if (Number.isNaN(back)) return from;
+  const iso = new Date(back).toISOString();
+  return micros(iso) > micros(from) ? iso : from;
+}
+
+/** Registros a que a linha aponta (entidade e id no CRM). */
+function refsOf(entity: PushEntity, row: Row): [PushEntity, string][] {
+  const out: [PushEntity, string][] = [];
+  for (const [column, target] of PUSH_REFS[entity]) {
+    const id = row[column];
+    if (typeof id === "string" && id) out.push([target, id]);
+  }
+  if (entity === "notes" && isPushEntity(row.entity) && typeof row.record_id === "string" && row.record_id) {
+    out.push([row.entity, row.record_id]);
+  }
+  return out;
 }
 
 const emptyCounters = (): Record<PushEntity, PushCounters> =>
@@ -172,6 +208,8 @@ export async function runPipedrivePush(deps: PushDeps, opts: { budgetMs: number 
     const ctx = await store.buildContext();
 
     const key = (entity: PushEntity, id: string) => `${entity}:${id}`;
+    const companyOf = (row: Row, fallback: string) =>
+      typeof row.company_id === "string" && row.company_id ? row.company_id : fallback;
     /** Falhas anteriores de cada registro da fila de retry. */
     const attempts = new Map<string, number>();
     /** Registros já tratados nesta rodada (um registro da fila que também mudou vai uma vez só). */
@@ -184,10 +222,22 @@ export async function runPipedrivePush(deps: PushDeps, opts: { budgetMs: number 
       if (report.errors.length < MAX_REPORT_ERRORS) report.errors.push({ entity, id, reason });
     }
 
-    /** Envia a linha: POST e vínculo sem id no Pipedrive; PUT (lead: PATCH) com id. */
-    async function send(entity: PushEntity, row: Row, companyId: string): Promise<Outcome> {
-      const payload = CONVERT[entity](row, ctx);
-      if ("error" in payload) return { failed: payload.error, waiting: WAITING_DEPENDENCY.test(payload.error) };
+    /**
+     * Envia a linha: POST e vínculo sem id no Pipedrive; PUT (lead: PATCH) com id. Relacionado sem id no Pipedrive:
+     * cria os que faltam sob demanda (`level` é a distância até o registro que a rodada está enviando) e converte de
+     * novo, uma vez.
+     */
+    async function send(entity: PushEntity, row: Row, companyId: string, level = 0): Promise<Outcome> {
+      let payload = CONVERT[entity](row, ctx);
+      let problems: string[] = [];
+      if ("error" in payload && WAITING_DEPENDENCY.test(payload.error) && level < MAX_DEPENDENCY_DEPTH) {
+        problems = await createDependencies(entity, row, level + 1);
+        payload = CONVERT[entity](row, ctx);
+      }
+      if ("error" in payload) {
+        const reason = problems.length ? `${payload.error} (${problems.join("; ")})` : payload.error;
+        return { failed: reason, waiting: WAITING_DEPENDENCY.test(payload.error) };
+      }
       const id = String(row.id);
       const pdId = await store.pdIdOf(entity, id);
       if (pdId) {
@@ -203,12 +253,48 @@ export async function runPipedrivePush(deps: PushDeps, opts: { budgetMs: number 
           log(`${entity} ${id}: o id ${pdId} não existe mais no Pipedrive; criando de novo`);
         }
       }
-      const newId = createdId(await pd(() => client.post(payload.path, payload.body)));
+      const { path, body } = payload;
+      const newId = createdId(await pd(() => client.post(path, body)));
       if (!newId) return { failed: "o Pipedrive não devolveu o id do registro criado" };
       // `link` não apaga o vínculo antigo: só o novo pode ficar
       if (pdId) await store.unlink(entity, id);
       await store.link(entity, newId, companyId, id);
       return { done: "created" };
+    }
+
+    /**
+     * Cria no Pipedrive os relacionados da linha que ainda não têm id lá. Relacionado já tratado nesta rodada
+     * (inclusive o que falhou) não é tentado de novo. Devolve o motivo de cada um que não deu.
+     */
+    async function createDependencies(entity: PushEntity, row: Row, level: number): Promise<string[]> {
+      const problems: string[] = [];
+      for (const [target, refId] of refsOf(entity, row)) {
+        // carrega o vínculo, se houver (o contexto só conhece os já carregados)
+        if (await store.pdIdOf(target, refId)) continue;
+        const k = key(target, refId);
+        if (handled.has(k)) {
+          problems.push(`${target} ${refId} falhou nesta rodada`);
+          continue;
+        }
+        handled.add(k);
+        const problem = await createDependency(target, refId, level);
+        if (problem) problems.push(`${target} ${refId}: ${problem}`);
+      }
+      return problems;
+    }
+
+    /**
+     * Cria um relacionado sob demanda, com a mesma contagem e fila de um registro da rodada: se falhar, entra na fila
+     * de retry com o próprio erro e vai antes do dependente nas próximas rodadas. Devolve o motivo se não deu.
+     */
+    async function createDependency(entity: PushEntity, id: string, level: number): Promise<string | null> {
+      const row = await store.loadOne(entity, id);
+      if (!row) return "na lixeira ou apagado no CRM";
+      const companyId = companyOf(row, "");
+      const outcome = await settle(entity, id, companyId, () => send(entity, row, companyId, level));
+      if ("failed" in outcome) return outcome.failed;
+      log(`${entity} ${id}: criado no Pipedrive sob demanda, para um registro que aponta para ele`);
+      return null;
     }
 
     /** Apaga no Pipedrive o registro que foi para a lixeira, se ele tem vínculo. */
@@ -221,7 +307,12 @@ export async function runPipedrivePush(deps: PushDeps, opts: { budgetMs: number 
     }
 
     /** Conta o resultado e cuida da fila: sai dela no sucesso; na falha, entra (ou sai de vez na última tentativa). */
-    async function settle(entity: PushEntity, id: string, companyId: string, work: () => Promise<Outcome>) {
+    async function settle(
+      entity: PushEntity,
+      id: string,
+      companyId: string,
+      work: () => Promise<Outcome>,
+    ): Promise<Outcome> {
       const k = key(entity, id);
       handled.add(k);
       const before = attempts.get(k) ?? 0;
@@ -236,22 +327,20 @@ export async function runPipedrivePush(deps: PushDeps, opts: { budgetMs: number 
         if (outcome.done) report.counters[entity][outcome.done]++;
         if (before > 0) await store.clearRetry(entity, id);
         attempts.delete(k);
-        return;
+        return outcome;
       }
       if (before + 1 >= MAX_ATTEMPTS) {
         if (before > 0) await store.clearRetry(entity, id);
         attempts.delete(k);
         addError(entity, id, `${outcome.failed} (desistiu depois de ${MAX_ATTEMPTS} tentativas)`);
-        return;
+        return outcome;
       }
       await store.queueRetry(entity, id, companyId, outcome.failed);
       attempts.set(k, before + 1);
       if (outcome.waiting) log(`${entity} ${id}: ${outcome.failed}; fica na fila para depois do relacionado`);
       else addError(entity, id, outcome.failed);
+      return outcome;
     }
-
-    const companyOf = (row: Row, fallback: string) =>
-      typeof row.company_id === "string" && row.company_id ? row.company_id : fallback;
 
     // 1. fila de retry
     const queue = await store.retryQueue();
@@ -309,7 +398,9 @@ export async function runPipedrivePush(deps: PushDeps, opts: { budgetMs: number 
         if (outOfTime()) break;
         await settle(entity, id, companyOf(row, ""), () => send(entity, row, companyOf(row, "")));
       }
-      cursorTo = timedOut ? safeCursor(pending.slice(0, i), pending.slice(i), cursorFrom) : startedAt.toISOString();
+      cursorTo = timedOut
+        ? withOverlap(safeCursor(pending.slice(0, i), pending.slice(i), cursorFrom), cursorFrom)
+        : withOverlap(startedAt.toISOString(), cursorFrom);
     }
 
     if (timedOut) report.reason = "tempo esgotado: o que faltou fica para a próxima rodada";

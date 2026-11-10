@@ -45,6 +45,13 @@ jobs:
       - name: Playwright
         if: env.SUPABASE_DB_URL != ''
         run: pnpm exec playwright install --with-deps chromium
+      # O reset roda com --no-seed: os e2e precisam do admin@oxyn.test e das empresas oxyn e volt.
+      - name: Seed dos e2e
+        if: env.SUPABASE_DB_URL != ''
+        run: pnpm db:seed
       - name: E2E
         if: env.SUPABASE_DB_URL != ''
         run: pnpm test:e2e
+        env:
+          # valor fixo só do CI: o next dev dos e2e envia e-mail para o arquivo .e2e-outbox
+          CRON_SECRET: segredo-dos-e2e

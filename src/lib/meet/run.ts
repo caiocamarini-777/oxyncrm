@@ -4,6 +4,7 @@ import { GmailApiError } from "@/lib/gmail/client";
 import { hasMeetScopes } from "@/lib/gmail/connect";
 import { createPipedriveClient } from "@/lib/import/pipedrive/client";
 import { noteText } from "@/lib/timeline/describe";
+import { loadCrmNames, writeCrmNote } from "./crm-sink";
 import {
   type CalendarEvent,
   type MeetClient,
@@ -12,6 +13,7 @@ import {
 } from "./google";
 import { normalizeEmail, pickRecord, splitAttendees } from "./match";
 import { loadCandidates, loadInternalDomains } from "./match-loader";
+import { GEMINI_NOTES_MODEL, NO_GEMINI_NOTES, type NotesEngine, notesEngineFromEnv, notesFromGemini } from "./gemini-notes";
 import { renderNoteHtml } from "./note-html";
 import {
   generateNotes,
@@ -23,6 +25,7 @@ import {
 } from "./notes";
 import { readMeetingSettings } from "./settings";
 import { type MeetingSink, pipedriveSink, pipedriveUserFor, SinkError, type SinkTarget } from "./sink";
+import { MIRROR_ACTIVE_ERROR, meetingSinkMode, type MeetingSinkMode, mirrorActive } from "./sink-mode";
 
 /**
  * Rodada do assistente de reuniões (cron a cada 10 min). Regras na spec, seções "Capturar", "Vincular",
@@ -31,11 +34,13 @@ import { type MeetingSink, pipedriveSink, pipedriveUserFor, SinkError, type Sink
  * 1. descarta as reuniões sem vínculo há mais de 7 dias;
  * 2. para cada caixa ativa com os escopos do Meet, na empresa com o assistente ligado, e com o lease
  *    `meeting_lock_until`: lê as reuniões encerradas desde o cursor (no máximo as das últimas 24 h), espera a
- *    transcrição (até 2 h depois do fim) e processa (vínculo, notas com o Claude, anotação no Pipedrive e
- *    sugestões). Reunião que o Google não deixou ler e que o vendedor reabriu ("Tentar de novo") é relida antes;
- * 3. tenta de novo as reuniões em `processing` (Claude ou Pipedrive falharam), até 3 tentativas. Só pega a
+ *    transcrição (até 2 h depois do fim) e processa (vínculo, notas com o Claude, anotação no Pipedrive ou no
+ *    CRM, conforme `MEETING_SINK`, e sugestões). Reunião que o Google não deixou ler e que o vendedor reabriu
+ *    ("Tentar de novo") é relida antes;
+ * 3. tenta de novo as reuniões em `processing` (Claude ou a gravação falharam), até 3 tentativas. Só pega a
  *    reunião parada há mais de 10 min e a reivindica com um update condicional, porque as ações do vendedor
- *    (vincular, tentar de novo) também processam na própria requisição.
+ *    (vincular, tentar de novo) também processam na própria requisição. No modo CRM com o espelho do Pipedrive
+ *    ainda ativo, a reunião espera em `processing`, com o aviso e sem gastar tentativa.
  *
  * `processMeeting` é exportada para as ações do vendedor (vincular, tentar de novo), que reaproveitam as
  * notas já guardadas em `meeting_notes` em vez de chamar o Claude de novo.
@@ -69,6 +74,14 @@ export const PROCESSING_STALE_MS = 10 * 60_000;
 export const LEASE_MS = 300_000;
 
 export const NO_TRANSCRIPT = "reunião sem transcrição";
+
+/** Erro que não melhora tentando de novo: a reunião vai para `failed` sem gastar as outras tentativas. */
+export class PermanentMeetingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentMeetingError";
+  }
+}
 /** Prazo esgotado sem transcrição e sem anotações do Gemini. */
 export const NO_MEETING_TEXT = "reunião sem transcrição nem anotações do Gemini";
 export const RECORD_DELETED = "registro excluído";
@@ -86,13 +99,17 @@ export type MeetDeps = {
   db: SupabaseClient;
   meetFor(accountId: string): MeetClient;
   notes: typeof generateNotes;
+  /** Quem escreve as notas: o Claude (com `ANTHROPIC_API_KEY`) ou as próprias anotações do Gemini. Padrão: Claude. */
+  notesEngine?: NotesEngine;
   sink: MeetingSink;
   now(): Date;
   /**
-   * Nomes do Pipedrive para o pedido ao Claude. Opcional: sem ela, lê com `PIPEDRIVE_API_TOKEN`. A rodada
-   * guarda o resultado e só busca quando alguma reunião precisa gerar notas.
+   * Nomes do Pipedrive para o pedido ao Claude (só no modo Pipedrive). Opcional: sem ela, lê com
+   * `PIPEDRIVE_API_TOKEN`. A rodada guarda o resultado e só busca quando alguma reunião precisa gerar notas.
    */
   pipedriveNames?: () => Promise<PipedriveNames>;
+  /** Destino da anotação: Pipedrive ou CRM. Opcional: sem ele, lê `MEETING_SINK`. */
+  sinkMode?: MeetingSinkMode;
 };
 
 export type AccountRunResult = {
@@ -173,6 +190,8 @@ function once<T>(fn: () => Promise<T>): () => Promise<T> {
 
 // ---- dependências padrão ---------------------------------------------------------------------------------------
 
+const NO_PIPEDRIVE_TOKEN = "PIPEDRIVE_API_TOKEN não configurado.";
+
 /** Resultados de reunião e tipos de atividade, lidos na hora do Pipedrive. */
 export async function loadPipedriveNames(token: string): Promise<PipedriveNames> {
   const client = createPipedriveClient({ token });
@@ -195,24 +214,44 @@ function namesLoader(deps: MeetDeps): () => Promise<PipedriveNames> {
   if (deps.pipedriveNames) return deps.pipedriveNames;
   return async () => {
     const token = process.env.PIPEDRIVE_API_TOKEN;
-    if (!token) throw new Error("PIPEDRIVE_API_TOKEN não configurado.");
+    if (!token) throw new Error(NO_PIPEDRIVE_TOKEN);
     return loadPipedriveNames(token);
   };
 }
 
-/** Dependências de produção (cron e ações do vendedor). Pede `PIPEDRIVE_API_TOKEN`; o Claude lê `ANTHROPIC_API_KEY`. */
+/** Modo CRM sem o token: o Pipedrive não é usado, e uma chamada por engano falha com o motivo. */
+const noPipedrive = async (): Promise<never> => {
+  throw new Error(NO_PIPEDRIVE_TOKEN);
+};
+const noPipedriveSink: MeetingSink = {
+  writeNote: noPipedrive,
+  completeMeeting: noPipedrive,
+  createActivity: noPipedrive,
+  moveStage: noPipedrive,
+};
+
+/**
+ * Dependências de produção (cron e ações do vendedor). O destino da anotação vem de `MEETING_SINK`; o modo
+ * Pipedrive pede `PIPEDRIVE_API_TOKEN`, e o modo CRM segue sem ele (depois de cancelar o Pipedrive). O Claude lê
+ * `ANTHROPIC_API_KEY`.
+ */
 export function defaultMeetDeps(db: SupabaseClient): MeetDeps {
+  const sinkMode = meetingSinkMode();
   const token = process.env.PIPEDRIVE_API_TOKEN;
-  if (!token) throw new Error("PIPEDRIVE_API_TOKEN não configurado.");
+  if (!token && sinkMode === "pipedrive") throw new Error(NO_PIPEDRIVE_TOKEN);
   return {
     db,
     meetFor: meetClientForAccount,
     notes: generateNotes,
-    sink: pipedriveSink({ token }),
+    notesEngine: notesEngineFromEnv(),
+    sink: token ? pipedriveSink({ token }) : noPipedriveSink,
     now: () => new Date(),
-    pipedriveNames: once(() => loadPipedriveNames(token)),
+    ...(token ? { pipedriveNames: once(() => loadPipedriveNames(token)) } : {}),
+    sinkMode,
   };
 }
+
+const sinkModeOf = (deps: MeetDeps): MeetingSinkMode => deps.sinkMode ?? meetingSinkMode();
 
 // ---- rodada ----------------------------------------------------------------------------------------------------
 
@@ -805,7 +844,9 @@ type NotesRow = {
   qualification: MeetingNotes["qualification"];
   next_steps: MeetingNotes["next_steps"];
   raw: unknown;
-  pipedrive_note_id: number | null;
+  /** No modo Pipedrive, só `pipedrive_note_id` é lida; no modo CRM, as duas (a do Pipedrive também conta). */
+  pipedrive_note_id?: number | null;
+  crm_note_id?: string | null;
 };
 
 const KIND_LABEL: Record<LinkEntity, string> = {
@@ -906,7 +947,10 @@ function participantLabel(a: Attendee): string {
   return a.internal ? `${who} (interno)` : who;
 }
 
-/** Gera as notas com o Claude (da transcrição ou das anotações do Gemini) e guarda em `meeting_notes` (ainda sem `pipedrive_note_id`). */
+/**
+ * Gera as notas com o Claude (da transcrição ou das anotações do Gemini) e guarda em `meeting_notes` (ainda sem o
+ * id da anotação). Resultados de reunião e tipos de atividade vêm do Pipedrive ou, no modo CRM, dos cadastros do CRM.
+ */
 async function generateAndStore(
   deps: MeetDeps,
   m: MeetingRow,
@@ -914,10 +958,28 @@ async function generateAndStore(
   transcript: { text: string; source: TranscriptSource },
 ): Promise<MeetingNotes> {
   const { db } = deps;
+  // Modo Gemini (sem chave da Anthropic): as anotações do Gemini viram as notas, sem o Claude. Reunião só com
+  // transcrição não tem o que resumir: falha na hora, com a orientação, e "Tentar de novo" vale depois da chave.
+  if ((deps.notesEngine ?? "claude") === "gemini") {
+    if (transcript.source !== "gemini_notes") throw new PermanentMeetingError(NO_GEMINI_NOTES);
+    const fromGemini = notesFromGemini(transcript.text);
+    const saved = await db.from("meeting_notes").insert({
+      meeting_id: m.id,
+      summary: fromGemini.summary,
+      pains: fromGemini.pains,
+      objections: fromGemini.objections,
+      qualification: fromGemini.qualification,
+      next_steps: fromGemini.next_steps,
+      model: GEMINI_NOTES_MODEL,
+      raw: fromGemini,
+    });
+    check(saved.error, "guardar as notas");
+    return fromGemini;
+  }
   const company = await db.from("companies").select("settings").eq("id", m.company_id).maybeSingle();
   check(company.error, "ler a configuração da empresa");
   const { questions } = readMeetingSettings((company.data as { settings?: unknown } | null)?.settings);
-  const names = await namesLoader(deps)();
+  const names = sinkModeOf(deps) === "crm" ? await loadCrmNames(db, m.company_id) : await namesLoader(deps)();
 
   const input: NotesInput = {
     transcript: transcript.text,
@@ -1082,15 +1144,62 @@ async function linkFromCalendarEvent(
   return null;
 }
 
-/** Vínculo, notas e gravação. Lança em caso de erro (quem chama conta a tentativa). */
+/**
+ * Modo CRM: grava a anotação no registro vinculado (negócio, lead, pessoa ou organização) em nome do dono da
+ * reunião e guarda o id em `crm_note_id`, para a próxima tentativa não gravar de novo.
+ */
+async function writeNoteToCrm(
+  deps: MeetDeps,
+  m: MeetingRow,
+  link: { entity: LinkEntity; recordId: string },
+  notes: MeetingNotes,
+): Promise<void> {
+  const { db } = deps;
+  // A anotação já sai com o dono como autor: o rodapé não precisa citar o vendedor.
+  const html = renderNoteHtml(notes, {
+    startedAt: m.started_at ?? m.ended_at ?? deps.now().toISOString(),
+    ownerName: "",
+    mappedUser: true,
+  });
+  const noteId = await writeCrmNote(db, { companyId: m.company_id, entity: link.entity, recordId: link.recordId }, html, m.owner_id);
+  const saved = await db
+    .from("meeting_notes")
+    .update({ crm_note_id: noteId, written_at: deps.now().toISOString() })
+    .eq("meeting_id", m.id)
+    .is("crm_note_id", null);
+  if (saved.error) {
+    // Raro e grave: a próxima tentativa gravaria a anotação de novo no CRM.
+    console.error("meet: anotação gravada no CRM sem registrar o id", m.id, noteId, saved.error.message);
+    throw new Error(`A anotação ${noteId} foi gravada no CRM, mas o id não foi guardado: ${saved.error.message}`);
+  }
+}
+
+/**
+ * Vínculo, notas e gravação. Lança em caso de erro (quem chama conta a tentativa). No modo CRM com o espelho do
+ * Pipedrive ativo, não grava nada: deixa o aviso na reunião e devolve `processing` (sem lançar, então a tentativa
+ * não conta), e a próxima rodada tenta de novo.
+ */
 async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   const { db } = deps;
+  const mode = sinkModeOf(deps);
+
+  // Trava do espelho, antes de qualquer gravação: o Pipedrive apagaria o que fosse gravado no CRM.
+  if (mode === "crm" && (await mirrorActive(db, deps.now()))) {
+    const { error } = await db
+      .from("meetings")
+      .update({ last_error: MIRROR_ACTIVE_ERROR })
+      .eq("id", m.id)
+      .eq("status", "processing");
+    check(error, "gravar o aviso do modo espelho");
+    return "processing";
+  }
 
   // 0. Notas guardadas (tentativa anterior) ou a transcrição para gerar as novas. Sem nenhuma das duas não há
-  //    o que fazer, e o vínculo nem é procurado.
+  //    o que fazer, e o vínculo nem é procurado. Das colunas da anotação: no Pipedrive, só a dele; no CRM, as duas.
+  const noteColumns = mode === "crm" ? "crm_note_id, pipedrive_note_id" : "pipedrive_note_id";
   const stored = await db
     .from("meeting_notes")
-    .select("summary, pains, objections, qualification, next_steps, raw, pipedrive_note_id")
+    .select(`summary, pains, objections, qualification, next_steps, raw, ${noteColumns}`)
     .eq("meeting_id", m.id)
     .maybeSingle();
   check(stored.error, "ler as notas guardadas");
@@ -1137,7 +1246,7 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
   const ctx = link ? await loadRecord(db, link.entity, link.recordId) : null;
   const notes = notesRow ? notesFromRow(notesRow) : await generateAndStore(deps, m, ctx, transcript);
 
-  // 3. Destino: sem vínculo ou registro na lixeira ficam em "Sem vínculo", sem gravar no Pipedrive.
+  // 3. Destino: sem vínculo ou registro na lixeira ficam em "Sem vínculo", sem gravar a anotação.
   if (!link) {
     await markUnlinked(db, m, null);
     return "unlinked";
@@ -1146,10 +1255,15 @@ async function advance(deps: MeetDeps, m: MeetingRow): Promise<MeetingStatus> {
     await markUnlinked(db, m, RECORD_DELETED);
     return "unlinked";
   }
-  if (link.entity === "organizations") throw new Error("Reunião vinculada a organização não é gravada no Pipedrive.");
 
-  // 4. Anotação, uma vez só: o id do Pipedrive é guardado logo depois da gravação.
-  if (notesRow?.pipedrive_note_id == null) {
+  // 4. Anotação, uma vez só: o id da anotação (no CRM ou no Pipedrive) é guardado logo depois da gravação. No CRM,
+  //    a anotação já gravada no Pipedrive (reunião em andamento na virada) também conta: a sincronização a traz, e
+  //    gravar de novo deixaria duas cópias.
+  if (mode === "crm") {
+    if (notesRow?.crm_note_id == null && notesRow?.pipedrive_note_id == null) await writeNoteToCrm(deps, m, link, notes);
+  } else if (link.entity === "organizations") {
+    throw new Error("Reunião vinculada a organização não é gravada no Pipedrive.");
+  } else if (notesRow?.pipedrive_note_id == null) {
     const target = await sinkTarget(db, m, link.entity, link.recordId, ctx);
     const userId = await pipedriveUserFor(db, m.owner_id);
     const owner = await db.from("profiles").select("full_name").eq("id", m.owner_id).maybeSingle();
@@ -1208,7 +1322,8 @@ async function runProcess(deps: MeetDeps, meetingId: string): Promise<MeetingSta
     return await advance(deps, m);
   } catch (e) {
     const msg = errorMessage(e).slice(0, 500);
-    const attempts = (m.attempts ?? 0) + 1;
+    // Erro que não melhora tentando de novo (ex.: modo Gemini sem anotações do Gemini): `failed` na hora.
+    const attempts = e instanceof PermanentMeetingError ? MAX_ATTEMPTS : (m.attempts ?? 0) + 1;
     const status: MeetingStatus = attempts >= MAX_ATTEMPTS ? "failed" : "processing";
     console.error("meet: falha ao processar a reunião", m.id, msg);
     // Condicional: se outra chamada já concluiu a reunião (ou ela saiu de `processing`), o erro desta não
@@ -1224,8 +1339,9 @@ async function runProcess(deps: MeetDeps, meetingId: string): Promise<MeetingSta
 }
 
 /**
- * Vínculo (casador ou o já gravado), notas (as guardadas ou novas, do Claude), anotação no Pipedrive e
- * sugestões. Erro conta tentativa (`attempts`, `last_error`); na terceira, `failed`.
+ * Vínculo (casador ou o já gravado), notas (as guardadas ou novas, do Claude), anotação (no Pipedrive ou no CRM)
+ * e sugestões. Erro conta tentativa (`attempts`, `last_error`); na terceira, `failed`. A trava do espelho (modo
+ * CRM) não conta: a reunião fica em `processing` com o aviso.
  */
 export async function processMeeting(deps: MeetDeps, meetingId: string): Promise<void> {
   await runProcess(deps, meetingId);

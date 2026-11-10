@@ -1,7 +1,7 @@
 /**
- * Gravação do resultado da reunião. `MeetingSink` é a interface; hoje só existe a implementação que escreve
- * no Pipedrive via REST. Uma `crmSink` (gravar direto no CRM) entra no desligamento do Pipedrive: por ora só a
- * interface existe e `MEET_SINK` não é lida.
+ * Gravação do resultado da reunião no Pipedrive, via REST (modo `pipedrive`, o padrão de `MEETING_SINK`, até a
+ * virada). `MeetingSink` é a interface desta implementação. No modo `crm` (ver `sink-mode.ts`), as gravações vão
+ * direto para o CRM por `crm-sink.ts`, com os ids do CRM, e este módulo deixa de ser usado.
  * Sem tentativas aqui: escrever é efeito colateral (repetir duplicaria nota/atividade), então quem chama decide.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";

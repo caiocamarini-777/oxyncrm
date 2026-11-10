@@ -26,6 +26,7 @@ import { fakeDb, resetSeq, type Row, type Tables } from "./fake-db.test-support"
 import type { Candidate } from "./match";
 import type { MeetingNotes, NotesInput } from "./notes";
 import {
+  defaultMeetDeps,
   isPermanentGoogleError,
   MAX_TRANSCRIPT_CHARS,
   type MeetDeps,
@@ -34,6 +35,7 @@ import {
   runMeetSync,
 } from "./run";
 import { type MeetingSink, SinkError } from "./sink";
+import { MIRROR_ACTIVE_ERROR, type MeetingSinkMode } from "./sink-mode";
 
 // ---- Meet falso ----------------------------------------------------------------------------------------------
 
@@ -224,6 +226,10 @@ type Setup = {
   now?: Date;
   sink?: ReturnType<typeof fakeSink>;
   notes?: (input: NotesInput) => Promise<MeetingNotes>;
+  /** Destino da anotação; padrão `pipedrive` (sem ler `MEETING_SINK` do ambiente). */
+  sinkMode?: MeetingSinkMode;
+  /** Quem escreve as notas; padrão `claude` (sem ler `ANTHROPIC_API_KEY` do ambiente). */
+  notesEngine?: "claude" | "gemini";
 };
 
 function setup(s: Setup = {}) {
@@ -240,6 +246,8 @@ function setup(s: Setup = {}) {
     sink,
     now: () => now,
     pipedriveNames,
+    sinkMode: s.sinkMode ?? "pipedrive",
+    notesEngine: s.notesEngine ?? "claude",
   };
   return {
     db,
@@ -642,6 +650,56 @@ describe("runMeetSync: transcrição", () => {
     expect(MAX_TRANSCRIPT_CHARS).toBe(1_048_576);
     expect((t.tables.meeting_transcripts[0].text as string).length).toBe(1_048_576);
     expect(t.notes.mock.calls[0][0].transcript.length).toBe(1_048_576);
+  });
+});
+
+describe("modo Gemini (sem chave da Anthropic)", () => {
+  const N1 = `${R1}/smartNotes/n1`;
+  const DOC = "Resumo\nCliente quer automatizar a cobrança.\n\nPróximas etapas sugeridas\n* [Caio] Enviar a proposta.\n* Agendar retorno.";
+  const geminiMeet = () =>
+    meetData({
+      transcripts: {},
+      smartNotes: { [R1]: [{ name: N1, state: "FILE_GENERATED", docsDestination: { document: "doc1" } }] },
+      docs: { doc1: DOC },
+    });
+
+  it("as anotações do Gemini viram as notas sem chamar o Claude, e não há sugestões", async () => {
+    const t = setup({ notesEngine: "gemini", meet: { acc1: geminiMeet() } });
+    await t.run();
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.pipedriveNames).not.toHaveBeenCalled();
+    expect(t.tables.meeting_notes[0]).toMatchObject({
+      model: "gemini-notes",
+      summary: "Resumo\nCliente quer automatizar a cobrança.",
+      next_steps: [
+        { what: "Enviar a proposta.", owner: "Caio", due: null },
+        { what: "Agendar retorno.", owner: "", due: null },
+      ],
+      qualification: [],
+    });
+    expect(t.tables.meeting_suggestions).toHaveLength(0);
+    expect(t.sink.writeNote).toHaveBeenCalledTimes(1);
+    const html = t.sink.writeNote.mock.calls[0][1] as string;
+    expect(html).toContain("<p>Resumo<br>Cliente quer automatizar a cobrança.</p>");
+    expect(html).toContain("Enviar a proposta. (Caio)");
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done" });
+  });
+
+  it("reunião só com transcrição: falha na hora com a orientação, sem chamar o Claude nem gastar tentativas", async () => {
+    const t = setup({ notesEngine: "gemini" });
+    await t.run();
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "failed" });
+    expect(String(t.tables.meetings[0].last_error)).toContain("Reunião sem anotações do Gemini");
+    expect(t.tables.meeting_notes).toHaveLength(0);
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+  });
+
+  it("com a chave (Claude) continua igual: o Claude escreve as notas", async () => {
+    const t = setup({ notesEngine: "claude", meet: { acc1: geminiMeet() } });
+    await t.run();
+    expect(t.notes).toHaveBeenCalledTimes(1);
+    expect(t.tables.meeting_notes[0]).toMatchObject({ summary: NOTES.summary });
   });
 });
 
@@ -1598,5 +1656,213 @@ describe("runMeetSync: descarte", () => {
     ]);
     expect(t.tables.meeting_transcripts.map((r) => r.meeting_id)).toEqual(["new"]);
     expect(t.tables.meeting_notes.map((r) => r.meeting_id)).toEqual(["new"]);
+  });
+});
+
+// ---- modo CRM (MEETING_SINK=crm) -------------------------------------------------------------------------------
+
+/** Job de importação do Pipedrive concluído `hoursAgo` horas antes de NOW (espelho, salvo `mirror = false`). */
+const importJob = (hoursAgo: number, mirror = true): Row => ({
+  id: `job-${hoursAgo}`,
+  source: "pipedrive",
+  status: "done",
+  mirror,
+  finished_at: new Date(NOW.getTime() - hoursAgo * 3600_000).toISOString(),
+});
+
+/** Reunião m1 em `processing` (vinculada ao negócio d1, com transcrição) e os tipos de atividade da empresa. */
+function crmTables(over: Tables = {}): Tables {
+  return baseTables({
+    activity_types: [
+      { id: "ty2", company_id: "co", name: "Ligação", is_meeting: false, active: true, position: 2 },
+      { id: "ty1", company_id: "co", name: "Reunião", is_meeting: true, active: true, position: 1 },
+      { id: "ty3", company_id: "co", name: "Visita", is_meeting: false, active: false, position: 3 },
+      { id: "tyx", company_id: "outra", name: "De outra empresa", is_meeting: false, active: true, position: 0 },
+    ],
+    meetings: [processingMeeting()],
+    meeting_transcripts: [{ meeting_id: "m1", entries: [], text: "Cliente: oi" }],
+    ...over,
+  });
+}
+
+/** Anotações que o assistente gravou no CRM (as de base não têm autor). */
+const crmNotes = (t: ReturnType<typeof setup>) => t.tables.notes.filter((n) => n.created_by != null);
+
+describe("processMeeting: modo CRM", () => {
+  it("espelho ativo (último job espelho há 1 h): não grava nada, fica processing com o aviso e não gasta tentativa", async () => {
+    const t = setup({
+      sinkMode: "crm",
+      tables: crmTables({ import_jobs: [importJob(1)], meetings: [processingMeeting({ entity: null, record_id: null })] }),
+    });
+    t.log.length = 0;
+    await processMeeting(t.deps, "m1");
+
+    expect(t.tables.meetings[0]).toMatchObject({
+      status: "processing",
+      attempts: 1,
+      last_error: MIRROR_ACTIVE_ERROR,
+      entity: null,
+      record_id: null,
+    });
+    // A única escrita é o aviso na reunião: nem vínculo, nem notas do Claude, nem anotação.
+    expect(t.log.filter((l) => l.op !== "select")).toEqual([
+      { table: "meetings", op: "update", values: [{ last_error: MIRROR_ACTIVE_ERROR }] },
+    ]);
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.pipedriveNames).not.toHaveBeenCalled();
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+    expect(t.tables.meeting_notes).toHaveLength(0);
+    expect(crmNotes(t)).toHaveLength(0);
+    expect(t.tables.meeting_suggestions).toHaveLength(0);
+  });
+
+  it("rodadas com o espelho ativo não gastam tentativas; desligado o espelho, a próxima rodada grava sozinha", async () => {
+    const t = setup({ sinkMode: "crm", tables: crmTables({ import_jobs: [importJob(1)] }), meet: { acc1: meetData({ records: [] }) } });
+    // Mais rodadas que o limite de tentativas: nenhuma conta.
+    for (const min of [11, 22, 33, 44]) {
+      t.setNow(minutesAfter(NOW.toISOString(), min));
+      const out = await t.run();
+      expect(out[0]).toMatchObject({ processed: 0, failed: 0 });
+    }
+    expect(t.tables.meetings[0]).toMatchObject({ status: "processing", attempts: 1, last_error: MIRROR_ACTIVE_ERROR });
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+
+    // Espelho desligado: o último job concluído rodou sem espelho.
+    t.tables.import_jobs.push({ ...importJob(0, false), finished_at: minutesAfter(NOW.toISOString(), 45).toISOString() });
+    t.setNow(minutesAfter(NOW.toISOString(), 56));
+    const out = await t.run();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", last_error: null });
+    expect(crmNotes(t)).toHaveLength(1);
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+    expect(out[0]).toMatchObject({ processed: 1, failed: 0 });
+  });
+
+  it("sem espelho: grava a anotação no CRM em nome do dono, guarda crm_note_id e written_at e não usa o Pipedrive", async () => {
+    // Sem ids do Pipedrive: o caminho do CRM não depende deles.
+    const t = setup({ sinkMode: "crm", tables: crmTables({ import_jobs: [importJob(49)], external_ids: [], meetings: [], meeting_transcripts: [] }) });
+    const out = await t.run();
+
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", entity: "deals", record_id: "d1", attempts: 0, last_error: null });
+    const written = crmNotes(t);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ company_id: "co", entity: "deals", record_id: "d1", created_by: "u1" });
+    expect(written[0].body).toContain("Cliente quer automatizar a cobrança.");
+    expect(written[0].body).not.toContain("vendedor:"); // a autoria já é do dono: o rodapé não cita o vendedor
+    expect(t.tables.meeting_notes[0]).toMatchObject({
+      crm_note_id: written[0].id,
+      pipedrive_note_id: null,
+      written_at: NOW.toISOString(),
+    });
+    for (const fn of Object.values(t.sink)) expect(fn).not.toHaveBeenCalled();
+    expect(t.tables.meeting_suggestions.map((s) => s.kind)).toEqual(["meeting_outcome", "next_activity", "stage"]);
+    expect(out[0]).toEqual({ accountId: "acc1", created: 1, processed: 1, failed: 0 });
+  });
+
+  it("nomes para o Claude saem do CRM (resultados de reunião e tipos ativos da empresa); o Pipedrive não é lido", async () => {
+    const t = setup({ sinkMode: "crm", tables: crmTables({ meetings: [], meeting_transcripts: [] }) });
+    await t.run();
+    expect(t.notes).toHaveBeenCalledTimes(1);
+    expect(t.notes.mock.calls[0][0]).toMatchObject({
+      outcomes: ["Realizada", "No-show", "Remarcada", "Cancelada"],
+      activityTypes: ["Reunião", "Ligação"],
+      stages: ["Proposta", "Negociação"],
+    });
+    expect(t.pipedriveNames).not.toHaveBeenCalled();
+  });
+
+  it("organização: no modo CRM a anotação vai para o registro da organização; no modo Pipedrive continua recusada", async () => {
+    const orgTables = () =>
+      crmTables({
+        organizations: [{ id: "o1", company_id: "co", name: "Acme", deleted_at: null }],
+        meetings: [processingMeeting({ entity: "organizations", record_id: "o1", attempts: 0, last_error: null })],
+      });
+
+    const crm = setup({ sinkMode: "crm", tables: orgTables() });
+    await processMeeting(crm.deps, "m1");
+    expect(crm.tables.meetings[0]).toMatchObject({ status: "done", attempts: 0, last_error: null });
+    const written = crmNotes(crm);
+    expect(written).toEqual([expect.objectContaining({ entity: "organizations", record_id: "o1", created_by: "u1" })]);
+    expect(crm.tables.meeting_notes[0].crm_note_id).toBe(written[0].id);
+    expect(crm.notes.mock.calls[0][0].record).toMatchObject({ kind: "organização", name: "Acme" });
+    // Etapa só existe em negócio.
+    expect(crm.tables.meeting_suggestions.map((s) => s.kind)).toEqual(["meeting_outcome", "next_activity"]);
+
+    resetSeq();
+    const pd = setup({ tables: orgTables() });
+    await processMeeting(pd.deps, "m1");
+    expect(pd.tables.meetings[0]).toMatchObject({
+      status: "processing",
+      attempts: 1,
+      last_error: "Reunião vinculada a organização não é gravada no Pipedrive.",
+    });
+    expect(pd.sink.writeNote).not.toHaveBeenCalled();
+    expect(crmNotes(pd)).toHaveLength(0);
+  });
+
+  it("anotação já gravada no CRM (crm_note_id) não é gravada de novo; só faltam as sugestões", async () => {
+    const t = setup({
+      sinkMode: "crm",
+      tables: crmTables({ meeting_notes: [storedNotes({ crm_note_id: "nota-crm", written_at: "2026-11-05T14:55:00.000Z" })] }),
+    });
+    await processMeeting(t.deps, "m1");
+    expect(crmNotes(t)).toHaveLength(0);
+    expect(t.notes).not.toHaveBeenCalled();
+    expect(t.tables.meeting_notes[0]).toMatchObject({ crm_note_id: "nota-crm", written_at: "2026-11-05T14:55:00.000Z" });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", last_error: null });
+    expect(t.tables.meeting_suggestions).toHaveLength(3);
+  });
+
+  it("virada com a reunião em andamento: anotação já gravada no Pipedrive (pipedrive_note_id) conta; o CRM não grava outra", async () => {
+    const t = setup({
+      sinkMode: "crm",
+      tables: crmTables({ meeting_notes: [storedNotes({ pipedrive_note_id: 777, written_at: "2026-11-05T14:55:00.000Z" })] }),
+    });
+    await processMeeting(t.deps, "m1");
+    expect(crmNotes(t)).toHaveLength(0);
+    expect(t.tables.meeting_notes[0]).toMatchObject({ pipedrive_note_id: 777, written_at: "2026-11-05T14:55:00.000Z" });
+    expect(t.tables.meeting_notes[0].crm_note_id ?? null).toBeNull();
+    expect(t.sink.writeNote).not.toHaveBeenCalled();
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", last_error: null });
+    expect(t.tables.meeting_suggestions).toHaveLength(3);
+  });
+
+  it("modo Pipedrive ignora crm_note_id: a anotação do Pipedrive ainda é gravada e a trava do espelho não vale", async () => {
+    const t = setup({
+      tables: crmTables({ import_jobs: [importJob(1)], meeting_notes: [storedNotes({ crm_note_id: "nota-crm" })] }),
+    });
+    await processMeeting(t.deps, "m1");
+    expect(t.sink.writeNote).toHaveBeenCalledTimes(1);
+    expect(t.tables.meeting_notes[0]).toMatchObject({ pipedrive_note_id: 555, crm_note_id: "nota-crm" });
+    expect(t.tables.meetings[0]).toMatchObject({ status: "done", last_error: null });
+    expect(crmNotes(t)).toHaveLength(0);
+  });
+});
+
+describe("defaultMeetDeps", () => {
+  it("lê o destino da anotação de MEETING_SINK (ausente ou inválido: pipedrive)", () => {
+    try {
+      vi.stubEnv("PIPEDRIVE_API_TOKEN", "token");
+      vi.stubEnv("MEETING_SINK", "crm");
+      expect(defaultMeetDeps(fakeDb({}).db).sinkMode).toBe("crm");
+      vi.stubEnv("MEETING_SINK", "xyz");
+      expect(defaultMeetDeps(fakeDb({}).db).sinkMode).toBe("pipedrive");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("modo CRM dispensa PIPEDRIVE_API_TOKEN (o Pipedrive, se chamado por engano, falha com o motivo)", async () => {
+    try {
+      vi.stubEnv("PIPEDRIVE_API_TOKEN", "");
+      vi.stubEnv("MEETING_SINK", "crm");
+      const deps = defaultMeetDeps(fakeDb({}).db);
+      expect(deps.sinkMode).toBe("crm");
+      await expect(deps.sink.writeNote({} as never, "<p>x</p>", null)).rejects.toThrow("PIPEDRIVE_API_TOKEN não configurado.");
+      vi.stubEnv("MEETING_SINK", "pipedrive");
+      expect(() => defaultMeetDeps(fakeDb({}).db)).toThrow("PIPEDRIVE_API_TOKEN não configurado.");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

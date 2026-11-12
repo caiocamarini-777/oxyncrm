@@ -19,6 +19,16 @@ test("login com credenciais válidas leva para a área logada", async ({ page })
   await expect(page).not.toHaveURL(/entrar/);
 });
 
+test("com sessão ativa, /entrar leva direto para o CRM (e respeita o next)", async ({ page }) => {
+  await login(page, email, password);
+  await expect(page).not.toHaveURL(/entrar/);
+  await page.goto("/entrar");
+  await expect(page).not.toHaveURL(/entrar/);
+  await expect(page.getByLabel("Senha")).toHaveCount(0);
+  await page.goto("/entrar?next=%2Fperfil");
+  await expect(page).toHaveURL(/\/perfil$/);
+});
+
 test("senha errada mostra mensagem", async ({ page }) => {
   await login(page, email, "errada-errada");
   await expect(page.getByText("E-mail ou senha incorretos.")).toBeVisible();
